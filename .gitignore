@@ -1,0 +1,56 @@
+# Unity generated
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# Never ignore .meta files: Unity needs them for GUID stability
+!/[Aa]ssets/**/*.meta
+
+# IDE / editor
+.vs/
+.idea/
+.vscode/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+*.DotSettings.user
+
+# Build output
+*.apk
+*.aab
+*.unitypackage
+*.app
+*.exe
+*.zip
+
+# Local / OS
+.DS_Store
+Thumbs.db
+desktop.ini
+*.bak
+*.tmp
+*.log
+
+# Crash / profiler dumps
+crashlytics-build.properties
+sysinfo.txt
+*.stackdump
