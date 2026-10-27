@@ -59,6 +59,33 @@ static class EquipChecks
             out Vector2 drawnRight, out Vector2 drawnLeft);
         Check(drawnRight == new Vector2(0.4f, -0.1f) && drawnLeft == SwordMotion.CarryGrip,
             "drawing puts the right hand on the hilt and the left hand on the scabbard");
+        foreach (SwordAction action in Enum.GetValues(typeof(SwordAction)))
+        {
+            var rangeStrike = new SlashPlayer.Strike(22, 1.85f, 110, 0.36f, 5, action, 0.24f, 0.38f, 0, 0.10f);
+            for (int frame = 0; frame <= 40; frame++)
+            {
+                float time = frame / 40f;
+                rangeStrike.reach = 1.85f;
+                var reference = SwordMotion.Evaluate(rangeStrike, time);
+                foreach (float reach in new[] { 0.5f, 2.65f, 8f })
+                {
+                    rangeStrike.reach = reach;
+                    var physical = SwordMotion.Evaluate(rangeStrike, time);
+                    Check(Mathf.Abs(physical.bladeLength - 1.3f) < 0.00001f
+                        && Vector2.Distance(physical.tip, reference.tip) < 0.00001f
+                        && Vector2.Distance(physical.grip, reference.grip) < 0.00001f,
+                        "range tuning never stretches the physical sword or its arm motion");
+                }
+            }
+            rangeStrike.reach = 8;
+            float active = (SwordMotion.SwingStart(rangeStrike) + rangeStrike.windupRatio + rangeStrike.activeRatio) * 0.5f;
+            var light = SwordMotion.EvaluateAttack(rangeStrike, active);
+            var blade = SwordMotion.Evaluate(rangeStrike, active);
+            Check(Vector2.Distance(light.tip, blade.tip) > 3, "long attack range is represented beyond the physical blade by sword light");
+            Check(SwordMotion.SweptHit(rangeStrike, active - 0.01f, active + 0.01f,
+                Vector2.zero, Vector2.zero, Vector2.right, light.tip, 0.05f, out _),
+                "targets inside distant sword light remain hittable with a fixed-length physical blade");
+        }
         foreach (var strike in SwordMotion.Defaults())
         {
             var ready = SwordMotion.Evaluate(strike, 0);

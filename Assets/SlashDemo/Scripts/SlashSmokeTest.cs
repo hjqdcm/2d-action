@@ -118,11 +118,8 @@ namespace SlashDemo
             var arms = player.transform.Find("Weapon Arms");
             Check(arms.Find("Support sword fingers") == null,
                 "light attacks no longer create a sword finger gesture");
-            Check(Vector3.Dot(arms.Find("Support hand").position - player.transform.Find("Visual").position,
-                arena.View.Up) < 0.4f * arena.View.characterScale,
-                "first cut leaves the left hand hanging beside the body");
-            Check(Vector3.Distance(arms.Find("Support hand").position, arms.Find("Grip hand").position) > 0.18f,
-                "single handed cut keeps the support hand away from the sword grip");
+            Check(Vector3.Distance(arms.Find("Support hand").position, arms.Find("Grip hand").position) < 0.15f,
+                "first cut retains its two handed sword grip");
             var trailShader = Resources.Load<Shader>("SlashDemo/BladeTrailAdditive");
             Check(trailShader != null && !ShaderUtil.ShaderHasError(trailShader), "trail mesh shader imports without errors");
             var trailMesh = player.transform.Find("Blade Trail Mesh").GetComponent<MeshFilter>().sharedMesh;
@@ -160,9 +157,8 @@ namespace SlashDemo
             playerBody.linearVelocity = Vector2.zero;
             Check(player.RequestAttack(Vector2.right) && player.ComboIndex == 1, "second combo slash starts");
             yield return new WaitForSeconds(player.strikes[1].duration * 0.5f);
-            Check(Vector3.Dot(arms.Find("Support hand").position - player.transform.Find("Visual").position,
-                arena.View.Up) < 0.4f * arena.View.characterScale && Vector3.Distance(arms.Find("Support hand").position,
-                arms.Find("Grip hand").position) > 0.18f, "reverse cut keeps the left hand naturally lowered");
+            Check(Vector3.Distance(arms.Find("Support hand").position,
+                arms.Find("Grip hand").position) < 0.15f, "reverse cut retains its two handed sword grip");
             yield return new WaitForSeconds(player.strikes[1].duration * 0.5f + 0.04f);
             Check(dummy.Health == 102, "second slash deals 26 damage");
             var flank = arena.Enemies[2];
@@ -208,6 +204,10 @@ namespace SlashDemo
             yield return null;
             Check(arena.Player.Health == 100 && arena.Enemies.Count == 0, "restart resets health and clears enemies");
             yield return new WaitForSeconds(2.2f);
+            Check(arena.Wave == 0 && arena.Enemies.Count == 0, "manor courtyard waits for entry to training ground");
+            arena.Player.GetComponent<Rigidbody2D>().position = ManorEnvironment.TrainingCenter;
+            yield return new WaitForFixedUpdate();
+            yield return null;
             Check(arena.Wave == 1 && arena.Enemies.Count == 4, "first wave spawns four enemies");
             var enemies = new System.Collections.Generic.List<SlashEnemy>(arena.Enemies);
             foreach (var enemy in enemies) enemy.TakeHit(999, Vector2.right, 0);
@@ -257,6 +257,7 @@ namespace SlashDemo
             Check(arena.Player.moveSpeed == 8 && arena.Enemies[0].maxHealth == 300, "restart retains runtime tuning");
             arena.practiceMode = false;
             arena.Restart();
+            arena.Player.GetComponent<Rigidbody2D>().position = ManorEnvironment.TrainingCenter;
             yield return new WaitForSeconds(2.2f);
             Check(arena.Enemies[0].maxHealth == 112, "new enemies receive health multiplier on their wave baseline");
             float tunedSpeed = arena.Enemies[0].moveSpeed;

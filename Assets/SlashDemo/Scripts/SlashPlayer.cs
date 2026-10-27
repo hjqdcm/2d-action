@@ -3,6 +3,14 @@ using UnityEngine;
 
 namespace SlashDemo
 {
+    public enum CultivationRealm
+    {
+        QiRefining,
+        FoundationEstablishment,
+        GoldenCore,
+        NascentSoul
+    }
+
     [RequireComponent(typeof(Rigidbody2D), typeof(CircleCollider2D))]
     public sealed class SlashPlayer : MonoBehaviour
     {
@@ -73,6 +81,49 @@ namespace SlashDemo
         public bool HeavyReady => heavyState.Ready && equipment.Ready;
         public int TotalSwordWaves { get; private set; }
         public int Health { get; private set; }
+        public CultivationRealm Realm { get; private set; } = CultivationRealm.QiRefining;
+        public string RealmDisplayName => GetRealmName(Realm);
+        public TechniqueDefinition Technique => TechniqueCatalog.FlowingCloud;
+        public SlashTuningSettings.FlowingCloudSettings FlowingCloud { get; private set; } = new SlashTuningSettings.FlowingCloudSettings();
+        readonly FlowingCloudCombo techniqueCombo = new FlowingCloudCombo();
+        readonly FlowingCloudRebuildReward rebuildReward = new FlowingCloudRebuildReward();
+        public bool RebuildCooldownRewardPending => rebuildReward.Pending;
+        public int ComboStacks => techniqueCombo.Stacks;
+        public float ComboStackTimeLeft => techniqueCombo.StackTimeLeft(Time.time);
+        public float ComboDamageBonus => techniqueCombo.DamageMultiplier(Realm) - 1;
+        public float NormalAttackSpeedMultiplier => techniqueCombo.AttackSpeedMultiplier(Realm);
+        public void CollectBuffs(CombatBuffBar buffs)
+        {
+            buffs.Clear();
+            if (!IsAlive) return;
+            if (ComboStacks > 0 && ComboStackTimeLeft > 0)
+            {
+                string effects = "每层叠浪使普攻伤害提升" + (FlowingCloud.stackBonus * 100).ToString("0.#") + "%";
+                if (Realm >= CultivationRealm.FoundationEstablishment)
+                    effects += "、普攻攻速提升" + (FlowingCloud.attackSpeedPerStack * 100).ToString("0.#") + "%";
+                effects += "，叠满5层时，额外提升" + (FlowingCloudRules.FullStackDamageBonus * 100).ToString("0.#") + "%的普攻伤害";
+                buffs.AddOrUpdate(new CombatBuffView("flowing-cloud-stacks", "叠浪", ComboStacks,
+                    "SlashDemo/FlowingCloudBuffIcon", effects, ComboStackTimeLeft, FlowingCloudRules.StackDuration));
+            }
+            // Register future active buffs here; their screen positions belong only to BuffBarLayout.
+        }
+        float normalStrikeSpeed = 1;
+        public bool IsTechniqueActive { get; private set; }
+        public bool IsPursuit => IsAttacking && !IsTechniqueActive && ComboIndex == 3;
+        public float TechniqueCooldownLeft => techniqueCooldownLeft;
+        public bool TechniqueReady => IsAlive && techniqueCooldownLeft <= 0;
+        public int TotalTechniqueCasts { get; private set; }
+        public int TotalPursuits { get; private set; }
+        public int TechniqueConsumedStacks { get; private set; }
+        public int TotalTechniqueFinishers { get; private set; }
+        public bool IsTechniqueFinisher { get; private set; }
+        Strike skillFinisherStrike;
+        SlashTuningSettings.FlowingCloudSettings skillSettings;
+        bool skillRushFinished;
+        float skillWidth;
+        float techniqueCooldownLeft, skillRushRemaining, skillRushSpeed;
+        bool skillPressedQueued, whirlwindEmitted, queuedExplicit;
+        int queuedSegment = -1;
         public int ComboIndex { get; private set; } = -1;
         public bool IsAttacking { get; private set; }
         public bool IsDashing => dashRemaining > 0;
@@ -98,7 +149,7 @@ namespace SlashDemo
         Vector2 previousAttackOrigin;
         float renderedElevation = -1, renderedScale = -1;
         bool swingSoundPlayed;
-        struct TrailPoint { public Vector2 tip, inner; public float born, life, intensity, heat; public bool heavy; }
+        struct TrailPoint { public Vector2 tip, inner; public float born, life, intensity, heat; public bool heavy, closed; }
         readonly List<TrailPoint> trail = new List<TrailPoint>(48);
         readonly CombatInputBuffer inputBuffer = new CombatInputBuffer();
         Vector2 queuedAim;
@@ -112,6 +163,7 @@ namespace SlashDemo
         Color[] colors;
         readonly List<Collider2D> overlaps = new List<Collider2D>(24);
         readonly HashSet<SlashEnemy> hitThisSwing = new HashSet<SlashEnemy>();
+        readonly List<Collider2D> rushIgnoredColliders = new List<Collider2D>(24);
         Vector2 move, dashDirection, recoil, attackAim;
         float attackAge, lastAttackEnd = -10, dashRemaining, dashCooldownLeft, invulnerability, flash, ghostTimer;
         bool queued;
@@ -143,7 +195,7 @@ namespace SlashDemo
             {
                 inputBuffer.Clear(); queued = false; move = Vector2.zero;
                 if (IsCharging || !IsAlive) CancelHeavyAttack();
-                heavyPressedQueued = heavyReleaseQueued = false;
+                heavyPressedQueued = heavyReleaseQueued = skillPressedQueued = false;
                 return;
             }
             float dt = Time.deltaTime;
@@ -153,7 +205,7 @@ namespace SlashDemo
             {
                 queued = false; inputBuffer.Clear();
                 if (IsCharging) CancelHeavyAttack();
-                heavyPressedQueued = heavyReleaseQueued = false;
+                heavyPressedQueued = heavyReleaseQueued = skillPressedQueued = false;
             }
             if (!inputBlocked && DemoInput.MouseAvailable)
             {
@@ -166,7 +218,8 @@ namespace SlashDemo
             bool frozen = dt <= 0 || arena.Effects.Frozen;
             if (!inputBlocked)
             {
-                if (DemoInput.AttackPressed && !IsHeavyBusy) inputBuffer.Attack(Aim);
+                if (DemoInput.AttackPressed && !IsHeavyBusy) inputBuffer.Attack(Aim, Time.time);
+                if (DemoInput.SkillPressed) skillPressedQueued = true;
                 if (DemoInput.HeavyPressed) heavyPressedQueued = true;
                 if (DemoInput.HeavyReleased) heavyReleaseQueued = true;
                 if (DemoInput.DashPressed) inputBuffer.Dash(move.sqrMagnitude > 0 ? move : Aim);
@@ -177,8 +230,20 @@ namespace SlashDemo
             invulnerability = Mathf.Max(0, invulnerability - dt);
             flash = Mathf.Max(0, flash - dt);
             comboRecoveryLeft = Mathf.Max(0, comboRecoveryLeft - dt);
+            techniqueCooldownLeft = Mathf.Max(0, techniqueCooldownLeft - dt);
+            techniqueCombo.ExpireStacks(Time.time);
+            if (!IsAttacking && Time.time - lastAttackEnd > comboResetTime)
+            {
+                techniqueCombo.ResetSequence();
+                ComboIndex = -1;
+            }
             if (inputBuffer.HasDash && TryDash(inputBuffer.DashDirection))
                 inputBuffer.Clear(); // A dash cancels the attack, including pending attack input.
+            if (skillPressedQueued)
+            {
+                skillPressedQueued = false;
+                TryTechniqueSkill(Aim);
+            }
 
             equipment.Advance(dt, IsAttacking || IsHeavyBusy || IsComboRecovering, drawDuration, sheathDuration, sheathDelay);
 
@@ -198,17 +263,18 @@ namespace SlashDemo
                     if (!IsComboRecovering && !IsAttacking && queued)
                     {
                         queued = false;
-                        BeginAttack(queuedAim);
+                        BeginAttack(queuedAim, queuedSegment);
+                        queuedSegment = -1; queuedExplicit = false;
                         inputBuffer.ConsumeAttack();
                         acceptedBufferedAttack = true;
                     }
                     if (!IsComboRecovering && inputBuffer.HasAttack && (!IsAttacking || attackAge > CurrentStrike.duration * 0.4f))
                     {
-                        RequestAttack(inputBuffer.AttackDirection);
+                        RequestAttack(inputBuffer.AttackDirection, true, inputBuffer.AttackTime);
                         inputBuffer.ConsumeAttack();
                         acceptedBufferedAttack = true;
                     }
-                    if (!inputBlocked && !acceptedBufferedAttack && !inputBuffer.HasAttack && DemoInput.AttackHeld) RequestAttack(Aim);
+                    if (!inputBlocked && !acceptedBufferedAttack && !inputBuffer.HasAttack && DemoInput.AttackHeld) RequestAttack(Aim, false);
                     if (IsAttacking && equipment.Ready)
                     {
                         float previousAge = attackAge;
@@ -216,15 +282,39 @@ namespace SlashDemo
                         float start = CurrentStrike.duration * SwordMotion.SwingStart(CurrentStrike);
                         if (!swingSoundPlayed && attackAge >= start)
                         { arena.Effects.PlaySwing(CurrentStrike.action == SwordAction.WideCleave); swingSoundPlayed = true; }
-                        ResolveHits(previousAge, attackAge);
-                        RecordTrail(previousAge, attackAge);
+                        if (IsTechniqueActive && !IsTechniqueFinisher) UpdateTechniqueRush();
+                        else
+                        {
+                            ResolveHits(previousAge, attackAge);
+                            RecordTrail(previousAge, attackAge);
+                        }
                         previousAttackOrigin = body.position;
-                        if (attackAge >= CurrentStrike.duration)
+                        if (attackAge >= CurrentStrike.duration && (!IsTechniqueActive || skillRushFinished)
+                            && (!IsPursuit || !arena.Effects.HasWhirlwind(this)))
                         {
                             IsAttacking = false;
-                            lastAttackEnd = Time.time;
-                            if (ComboIndex == strikes.Length - 1) comboRecoveryLeft = ComboRecoveryDuration;
-                            else if (queued) { queued = false; BeginAttack(queuedAim); }
+                            if (IsTechniqueActive)
+                            {
+                                IsTechniqueActive = false;
+                                IsTechniqueFinisher = false;
+                                rebuildReward.Arm(Realm);
+                                skillRushRemaining = 0;
+                                lastAttackEnd = Time.time;
+                                ComboIndex = -1;
+                                body.linearVelocity = Vector2.zero;
+                            }
+                            else
+                            {
+                                techniqueCombo.FinishStrike(Time.time);
+                                lastAttackEnd = Time.time;
+                                if (ComboIndex >= 2) comboRecoveryLeft = ComboRecoveryDuration / normalStrikeSpeed;
+                                else if (queued)
+                                {
+                                    queued = false;
+                                    BeginAttack(queuedAim, queuedSegment);
+                                    queuedSegment = -1; queuedExplicit = false;
+                                }
+                            }
                         }
                     }
                 }
@@ -253,31 +343,58 @@ namespace SlashDemo
 
         Strike CurrentStrike => activeStrike ?? strikes[Mathf.Clamp(ComboIndex, 0, strikes.Length - 1)];
 
-        public bool RequestAttack(Vector2 direction)
+        public bool RequestAttack(Vector2 direction, bool explicitPress = true, float pressedAt = -1)
         {
-            if (!IsAlive || IsDashing || IsHeavyBusy || arena.Paused || strikes.Length == 0) return false;
+            if (!IsAlive || IsDashing || IsHeavyBusy || IsTechniqueActive || arena.Paused || arena.InputBlocked || strikes.Length == 0) return false;
+            if (pressedAt < 0) pressedAt = Time.time;
+            int next = techniqueCombo.NextSegment(ComboIndex,
+                !IsAttacking && pressedAt - lastAttackEnd > comboResetTime, Realm);
             if (IsComboRecovering)
             {
-                queued = true;
-                queuedAim = direction.sqrMagnitude > 0.001f ? direction.normalized : Aim;
+                QueueAttack(direction, next, explicitPress);
                 return false;
             }
             if (IsAttacking)
             {
                 if (attackAge > CurrentStrike.duration * 0.4f)
-                { queued = true; queuedAim = direction.sqrMagnitude > 0.001f ? direction.normalized : Aim; }
+                    QueueAttack(direction, next, explicitPress);
                 return false;
             }
-            BeginAttack(direction);
+            BeginAttack(direction, next);
             return true;
         }
 
-        void BeginAttack(Vector2 direction)
+        void QueueAttack(Vector2 direction, int next, bool explicitPress)
         {
-            ComboIndex = Time.time - lastAttackEnd > comboResetTime ? 0 : (ComboIndex + 1) % strikes.Length;
+            // Holding the button must not replace a deliberate fourth press.
+            if (queued && queuedExplicit && !explicitPress) return;
+            queued = true; queuedSegment = next; queuedExplicit = explicitPress;
+            queuedAim = direction.sqrMagnitude > 0.001f ? direction.normalized : Aim;
+        }
+
+        void BeginAttack(Vector2 direction, int segment)
+        {
+            techniqueCombo.ExpireStacks(Time.time);
+            if (Time.time - lastAttackEnd > comboResetTime && !IsAttacking) techniqueCombo.ResetSequence();
+            // A buffered fourth input may precede contact. Resolve its hit prerequisite at execution.
+            if (ComboIndex == 2 && Realm >= CultivationRealm.GoldenCore)
+                segment = techniqueCombo.NextSegment(2, Time.time - lastAttackEnd > comboResetTime, Realm);
+            else if (segment == 3) segment = 0;
+            ComboIndex = Mathf.Clamp(segment, 0, Realm >= CultivationRealm.GoldenCore ? 3 : 2);
             attackAim = direction.sqrMagnitude < 0.001f ? Aim : direction.normalized;
             attackAge = 0;
-            activeStrike = strikes[ComboIndex].Clone();
+            activeStrike = ComboIndex == 3
+                ? new Strike(FlowingCloud.pursuitDamage, FlowingCloud.pursuitReach, 210, FlowingCloud.pursuitDuration, FlowingCloud.pursuitKnockback,
+                    SwordAction.SpinCleave, 0.16f, 0.46f, 0, 0.12f)
+                : strikes[Mathf.Min(ComboIndex, strikes.Length - 1)].Clone();
+            activeStrike.damage = Mathf.RoundToInt(activeStrike.damage * techniqueCombo.DamageMultiplier(Realm));
+            // Snapshot existing layers at attack start; speed changes the whole normal swing and recovery.
+            // The fourth normal strike shares the modifier; Q's copied third strike does not.
+            normalStrikeSpeed = NormalAttackSpeedMultiplier;
+            activeStrike.duration /= normalStrikeSpeed;
+            techniqueCombo.BeginStrike();
+            whirlwindEmitted = false;
+            if (ComboIndex == 3) TotalPursuits++;
             previousAttackOrigin = body.position;
             // Apply the attack slowdown immediately, including between physics ticks.
             body.linearVelocity = move * moveSpeed * AttackMoveMultiplier + recoil;
@@ -290,8 +407,9 @@ namespace SlashDemo
 
         public bool TryDash(Vector2 direction)
         {
-            if (!IsAlive || IsDashing || dashCooldownLeft > 0 || arena.Paused) return false;
+            if (!IsAlive || IsDashing || dashCooldownLeft > 0 || arena.Paused || arena.InputBlocked) return false;
             CancelHeavyAttack();
+            InterruptCombo(dodging: true);
             dashDirection = direction.sqrMagnitude > 0.001f ? direction.normalized : Aim;
             dashRemaining = dashDuration;
             dashCooldownLeft = dashCooldown;
@@ -305,9 +423,136 @@ namespace SlashDemo
             return true;
         }
 
+        public bool TryTechniqueSkill(Vector2 direction)
+        {
+            if (!TechniqueReady || IsTechniqueActive || IsDashing || IsHeavyBusy || arena.Paused || arena.InputBlocked) return false;
+            rebuildReward.Clear();
+            arena.Effects.CancelWhirlwinds(this);
+            IgnoreRushEnemyCollisions();
+            TechniqueConsumedStacks = techniqueCombo.ConsumeStacks(Time.time);
+            skillSettings = FlowingCloud.Clone();
+            skillFinisherStrike = strikes[Mathf.Min(2, strikes.Length - 1)].Clone();
+            IsTechniqueFinisher = false;
+            skillWidth = skillSettings.ActiveWidth(TechniqueConsumedStacks);
+            skillRushFinished = false;
+            ComboIndex = -1;
+            lastAttackEnd = -10;
+            attackAim = direction.sqrMagnitude > 0.001f ? direction.normalized : Aim;
+            activeStrike = new Strike(skillSettings.ActiveDamage(Realm, TechniqueConsumedStacks), skillSettings.activeReach, 115,
+                Mathf.Max(skillSettings.activeDuration, skillSettings.rushDuration), skillSettings.activeKnockback,
+                SwordAction.Cleave, 0.10f, 0.50f, 0, 0.12f);
+            attackAge = 0; previousAttackOrigin = body.position;
+            swingSoundPlayed = false;
+            IsAttacking = IsTechniqueActive = true;
+            comboRecoveryLeft = 0;
+            skillRushRemaining = Mathf.Max(0.01f, skillSettings.rushDuration);
+            skillRushSpeed = skillSettings.RushDistance(TechniqueConsumedStacks) / skillRushRemaining;
+            techniqueCooldownLeft = FlowingCloud.activeCooldown;
+            recoil = Vector2.zero;
+            body.linearVelocity = Vector2.zero;
+            equipment.Advance(drawDuration, true, drawDuration, sheathDuration, sheathDelay);
+            queued = queuedExplicit = false; queuedSegment = -1;
+            inputBuffer.Clear(); hitThisSwing.Clear(); ClearTrail();
+            TotalTechniqueCasts++;
+            arena.Effects.Ghost(transform);
+            AnimateSword();
+            return true;
+        }
+
+        void UpdateTechniqueRush()
+        {
+            if (skillRushFinished) return;
+            Vector2 from = previousAttackOrigin, to = body.position;
+            // Sweep actual physics displacement, including the final step and movement at low frame rates.
+            float radius = skillWidth * 0.5f;
+            Physics2D.OverlapCircle((from + to) * 0.5f, Vector2.Distance(from, to) * 0.5f + radius + 0.7f,
+                ContactFilter2D.noFilter, overlaps);
+            foreach (var collider in overlaps)
+            {
+                var enemy = collider.GetComponent<SlashEnemy>();
+                if (enemy == null || !enemy.Alive || hitThisSwing.Contains(enemy)
+                    || SwordMotion.DistanceToBlade(enemy.transform.position, from, to, out _) > radius + enemy.Radius) continue;
+                hitThisSwing.Add(enemy);
+                enemy.TakeHit(activeStrike.damage, attackAim, activeStrike.knockback);
+            }
+            arena.Effects.DrawCloudRush(from, to, attackAim, skillWidth, trailHDRIntensity, skillSettings.rushTrailLifetime);
+            if ((to - from).sqrMagnitude > 0.001f)
+            {
+                ghostTimer -= Time.deltaTime;
+                if (ghostTimer <= 0) { arena.Effects.Ghost(transform); ghostTimer = 0.035f; }
+            }
+            if (skillRushRemaining > 0) return;
+            skillRushFinished = true;
+            body.linearVelocity = Vector2.zero;
+            RestoreRushEnemyCollisions();
+            if (TechniqueConsumedStacks < FlowingCloudRules.MaxStacks) return;
+            // Run the actual third normal strike, including its animation, sword trail and swept hit timing.
+            // Keep it inside Q so it cannot rebuild stacks or unlock a passive follow-up.
+            TotalTechniqueFinishers++;
+            IsTechniqueFinisher = true;
+            activeStrike = skillFinisherStrike;
+            attackAge = 0;
+            swingSoundPlayed = false;
+            hitThisSwing.Clear();
+            ClearTrail();
+        }
+
+        void IgnoreRushEnemyCollisions()
+        {
+            var playerCollider = GetComponent<CircleCollider2D>();
+            foreach (var enemy in arena.Enemies)
+            {
+                if (enemy == null || !enemy.Alive) continue;
+                foreach (var collider in enemy.GetComponentsInChildren<Collider2D>())
+                {
+                    if (Physics2D.GetIgnoreCollision(playerCollider, collider)) continue;
+                    Physics2D.IgnoreCollision(playerCollider, collider, true);
+                    rushIgnoredColliders.Add(collider);
+                }
+            }
+        }
+
+        void RestoreRushEnemyCollisions()
+        {
+            var playerCollider = GetComponent<CircleCollider2D>();
+            foreach (var collider in rushIgnoredColliders)
+                if (collider != null) Physics2D.IgnoreCollision(playerCollider, collider, false);
+            rushIgnoredColliders.Clear();
+        }
+
+        void InterruptCombo(bool dodging = false)
+        {
+            RestoreRushEnemyCollisions();
+            if (arena != null && arena.Effects != null) arena.Effects.CancelWhirlwinds(this);
+            if (dodging) techniqueCombo.ApplyDodge(Time.time);
+            else techniqueCombo.Clear();
+            ComboIndex = -1; lastAttackEnd = -10;
+            IsAttacking = IsTechniqueActive = false;
+            IsTechniqueFinisher = false;
+            skillRushRemaining = comboRecoveryLeft = 0;
+            queued = queuedExplicit = skillPressedQueued = false; queuedSegment = -1;
+            inputBuffer.Clear();
+            activeStrike = null;
+            ClearTrail();
+        }
+
+        public void ResetTechniqueCombo() => InterruptCombo();
+        public void ResetTechniqueCooldown() => techniqueCooldownLeft = 0;
+        public void FillTechniqueStacksForDebug()
+        {
+            InterruptCombo();
+            for (int i = 0; i < FlowingCloud.maxStacks; i++)
+            {
+                techniqueCombo.BeginStrike();
+                RegisterTechniqueHit(0);
+            }
+            techniqueCombo.ResetSequence();
+        }
+
         public bool RequestHeavyAttack()
         {
             if (!IsAlive || IsAttacking || IsComboRecovering || IsDashing || IsHeavyBusy || arena.Paused || arena.InputBlocked) return false;
+            InterruptCombo();
             chargedSettings = (heavyAttack ?? new SlashTuningSettings.HeavyAttackSettings()).Clone();
             chargedSettings.Validate(new SlashTuningSettings.HeavyAttackSettings());
             if (!heavyState.Begin(chargedSettings.chargeTime, chargedSettings.recoveryTime)) return false;
@@ -404,6 +649,18 @@ namespace SlashDemo
         void ResolveHits(float previousAge, float currentAge)
         {
             var strike = CurrentStrike;
+            if (strike.action == SwordAction.SpinCleave)
+            {
+                float emitAt = strike.duration * Mathf.Lerp(SwordMotion.SwingStart(strike),
+                    strike.windupRatio + strike.activeRatio, SwordMotion.WhirlwindEmissionPoint);
+                if (!whirlwindEmitted && currentAge >= emitAt)
+                {
+                    whirlwindEmitted = true;
+                    arena.Effects.LaunchWhirlwind(this, body.position, strike, currentAge - emitAt, OnWhirlwindHit);
+                    RecordWhirlwindSwordLight(strike);
+                }
+                return;
+            }
             float previous = previousAge / strike.duration, current = currentAge / strike.duration;
             if (current < SwordMotion.SwingStart(strike) || previous > strike.windupRatio + strike.activeRatio) return;
             var filter = ContactFilter2D.noFilter;
@@ -420,9 +677,44 @@ namespace SlashDemo
                 Vector2 side = new Vector2(-attackAim.y, attackAim.x);
                 Vector2 direction = attackAim + side * (strike.action == SwordAction.ReverseCleave ? 0.2f : strike.action == SwordAction.Cleave ? -0.12f : 0);
                 enemy.TakeHit(strike.damage, direction.normalized, strike.knockback, strike.action == SwordAction.WideCleave);
+                if (!IsTechniqueActive) RegisterTechniqueHit(ComboIndex);
                 arena.Effects.HitStop(strike.action == SwordAction.WideCleave ? 0.045f : 0.033f);
                 arena.CameraRig.Shake((strike.action == SwordAction.WideCleave ? 0.09f : 0.055f) * 0.2f);
             }
+        }
+
+        void OnWhirlwindHit()
+        {
+            RegisterTechniqueHit(3);
+            arena.CameraRig.Shake(0.011f);
+            if (Realm >= CultivationRealm.NascentSoul)
+            {
+                var wave = heavyAttack.Clone();
+                wave.damage = Mathf.RoundToInt(wave.damage * techniqueCombo.DamageMultiplier(Realm));
+                arena.Effects.LaunchSwordWave(body.position + attackAim * 0.4f, attackAim, wave, this);
+                TotalSwordWaves++;
+            }
+        }
+
+        public void OnSwordTideHit()
+        {
+            if (!IsAlive) return;
+            int previous = ComboStacks;
+            techniqueCombo.RegisterSwordTideHit(Time.time, Realm);
+            ApplyRebuildReward(previous);
+            techniqueCooldownLeft = Mathf.Max(0, techniqueCooldownLeft - FlowingCloudRules.SwordTideCooldownReduction);
+        }
+
+        void RegisterTechniqueHit(int segment)
+        {
+            int previous = ComboStacks;
+            if (techniqueCombo.RegisterHit(segment, Time.time, Realm)) ApplyRebuildReward(previous);
+        }
+
+        void ApplyRebuildReward(int previous)
+        {
+            float reduction = rebuildReward.OnStacksIncreased(previous, ComboStacks, Realm, FlowingCloud.maxStacks);
+            techniqueCooldownLeft = Mathf.Max(0, techniqueCooldownLeft - reduction);
         }
 
         void FixedUpdate()
@@ -431,6 +723,12 @@ namespace SlashDemo
             recoil *= Mathf.Exp(-14 * Time.fixedDeltaTime);
             Vector2 velocity = IsDashing ? dashDirection * dashSpeed : IsHeavyBusy ? Vector2.zero
                 : move * moveSpeed * (IsAttacking || IsComboRecovering ? AttackMoveMultiplier : 1) + recoil;
+            if (IsTechniqueActive)
+            {
+                float step = Mathf.Min(skillRushRemaining, Time.fixedDeltaTime);
+                velocity = attackAim * skillRushSpeed * (step / Time.fixedDeltaTime);
+                skillRushRemaining -= step;
+            }
             body.linearVelocity = velocity;
         }
 
@@ -438,6 +736,8 @@ namespace SlashDemo
         {
             if (!IsAlive || invincible || invulnerability > 0 || IsDashing) return false;
             Health = Mathf.Max(0, Health - damage);
+            InterruptCombo();
+            CancelHeavyAttack();
             invulnerability = 0.8f;
             flash = 0.1f;
             recoil = direction.normalized * 5;
@@ -458,6 +758,43 @@ namespace SlashDemo
             }
             return true;
         }
+
+        public void Teleport(Vector2 position)
+        {
+            InterruptCombo();
+            CancelHeavyAttack();
+            IsAttacking = false;
+            queued = false;
+            inputBuffer.Clear();
+            comboRecoveryLeft = dashRemaining = 0;
+            heavyPressedQueued = heavyReleaseQueued = false;
+            move = recoil = Vector2.zero;
+            ClearTrail();
+            body.position = position;
+            transform.position = position;
+            body.linearVelocity = Vector2.zero;
+            previousAttackOrigin = position;
+            presentation.SetPose(Vector2.zero, 0, 0);
+        }
+
+        public static string GetRealmName(CultivationRealm realm) => realm switch
+        {
+            CultivationRealm.QiRefining => "练气",
+            CultivationRealm.FoundationEstablishment => "筑基",
+            CultivationRealm.GoldenCore => "金丹",
+            CultivationRealm.NascentSoul => "元婴",
+            _ => "练气"
+        };
+
+        public void SetRealm(CultivationRealm realm)
+        {
+            var next = (CultivationRealm)Mathf.Clamp((int)realm,
+                (int)CultivationRealm.QiRefining, (int)CultivationRealm.NascentSoul);
+            if (Realm != next) { rebuildReward.Clear(); InterruptCombo(); }
+            Realm = next;
+        }
+
+        public void ResetRealm() => SetRealm(CultivationRealm.QiRefining);
 
         public void Heal(int amount) { if (IsAlive) Health = Mathf.Min(maxHealth, Health + amount); }
 
@@ -481,6 +818,9 @@ namespace SlashDemo
             if (trailMaterial != null) trailMaterial.SetFloat("_Intensity", trailHDRIntensity);
             strikes = SlashTuningSettings.CopyStrikes(settings.strikes);
             heavyAttack = settings.heavyAttack.Clone();
+            FlowingCloud = (settings.flowingCloud ?? new SlashTuningSettings.FlowingCloudSettings()).Clone();
+            techniqueCombo.Configure(FlowingCloud);
+            techniqueCooldownLeft = Mathf.Min(techniqueCooldownLeft, FlowingCloud.activeCooldown);
         }
 
         void ConfigureWeapon()
@@ -587,6 +927,7 @@ namespace SlashDemo
         void RecordTrail(float previousAge, float currentAge)
         {
             var s = CurrentStrike;
+            if (s.action == SwordAction.SpinCleave) return;
             float start = Mathf.Max(previousAge / s.duration, SwordMotion.SwingStart(s));
             float end = Mathf.Min(currentAge / s.duration, s.windupRatio + s.activeRatio);
             if (end < start || previousAge / s.duration > s.windupRatio + s.activeRatio) return;
@@ -596,7 +937,7 @@ namespace SlashDemo
                 float t = Mathf.Lerp(start, end, i / (float)count);
                 float born = Time.time - (currentAge - t * s.duration);
                 if (trail.Count > 0 && born <= trail[trail.Count - 1].born + 0.0001f) continue;
-                var pose = SwordMotion.Evaluate(s, t);
+                var pose = SwordMotion.EvaluateAttack(s, t);
                 float rootT = Mathf.InverseLerp(previousAge, currentAge, t * s.duration);
                 Vector2 origin = Vector2.Lerp(previousAttackOrigin, body.position, rootT);
                 trail.Add(new TrailPoint { tip = origin + SwordMotion.ToWorld(pose.tip, attackAim),
@@ -604,6 +945,22 @@ namespace SlashDemo
                     born = born, intensity = 1 });
             }
             if (trail.Count > 80) trail.RemoveRange(0, trail.Count - 80);
+        }
+
+        void RecordWhirlwindSwordLight(Strike strike)
+        {
+            // A complete energy ribbon surrounds the player; the physical sword keeps its front-only motion.
+            trail.Clear();
+            const int segments = 64;
+            Vector2 origin = body.position;
+            for (int i = 0; i <= segments; i++)
+            {
+                float angle = i * Mathf.PI * 2 / segments;
+                Vector2 direction = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                trail.Add(new TrailPoint { tip = origin + direction * strike.reach,
+                    inner = origin + direction * (strike.reach * 0.70f),
+                    born = Time.time, life = 0.18f, intensity = 0.85f, closed = true });
+            }
         }
 
         void AddHeavyTrail(SwordMotion.Pose pose, Vector2 facing, float born, float life, float intensity, float heat)
@@ -634,12 +991,12 @@ namespace SlashDemo
                 var view = arena.View;
                 Vector3 tip = transform.InverseTransformPoint(view.LiftPoint(point.tip, view.WeaponHeight));
                 float u = Mathf.InverseLerp(trail[0].born, trail[trail.Count - 1].born, point.born);
-                float crescent = CombatFeedbackMath.TrailCrescent(u, trailCrescentPower);
+                float crescent = point.closed ? 1 : CombatFeedbackMath.TrailCrescent(u, trailCrescentPower);
                 float taper = (0.35f + 0.65f * alpha) * crescent;
                 Vector2 groundInner = Vector2.Lerp(point.tip, point.inner, taper);
                 Vector3 inner = transform.InverseTransformPoint(view.LiftPoint(groundInner, view.WeaponHeight));
                 Vector2 outward = (point.tip - point.inner).normalized;
-                Vector3 glow = transform.InverseTransformPoint(view.LiftPoint(point.tip + outward * (trailGlowWidth * taper * (point.heavy ? 1.3f : 1)), view.WeaponHeight));
+                Vector3 glow = transform.InverseTransformPoint(view.LiftPoint(point.tip + outward * (trailGlowWidth * taper * (point.heavy ? 1.3f : point.closed ? 1.25f : 1)), view.WeaponHeight));
                 // Keep a transparent boundary outside the visible mist to avoid a hard outer edge.
                 // Geometry tapers to a point at both ends; sample alpha still depends only on age.
                 trailVertices.Add(glow);
@@ -818,7 +1175,7 @@ namespace SlashDemo
                 heavyPressedQueued = heavyReleaseQueued = false;
             }
         }
-        void OnDisable() { inputBuffer.Clear(); queued = false; comboRecoveryLeft = 0; CancelHeavyAttack(); ClearTrail(); }
+        void OnDisable() { rebuildReward.Clear(); InterruptCombo(); CancelHeavyAttack(); }
         void OnDestroy()
         {
             if (scabbardSprite != null) Destroy(scabbardSprite);

@@ -15,13 +15,19 @@ namespace SlashDemo
         public SlashTuningSettings Settings { get; private set; }
         public bool IsOpen { get; private set; }
         bool pointerCaptured;
-        int page, strikeIndex;
+        int page, strikeIndex, techniquePage;
         Vector2 scroll;
         Font font;
         GUIStyle label, heading, note, button, toggle;
         string status;
         float statusUntil;
-        static readonly string[] Pages = { "角色", "连招", "敌人", "反馈", "视角", "重击" };
+        static readonly string[] Pages = { "角色", "连招", "敌人", "反馈", "视角", "重击", "功法", "主动技能" };
+        static readonly string[] RealmOptions = {
+            SlashPlayer.GetRealmName(CultivationRealm.QiRefining),
+            SlashPlayer.GetRealmName(CultivationRealm.FoundationEstablishment),
+            SlashPlayer.GetRealmName(CultivationRealm.GoldenCore),
+            SlashPlayer.GetRealmName(CultivationRealm.NascentSoul)
+        };
         static readonly Color Background = new Color(0.025f, 0.047f, 0.063f, 0.98f);
 
         static float Scale => Mathf.Max(0.01f, Mathf.Min(Screen.width / 1600f, Screen.height / 900f));
@@ -53,6 +59,7 @@ namespace SlashDemo
         void Update()
         {
             if (Settings == null) return;
+            if (arena.Paused) return;
             if (DemoInput.TuningPressed) IsOpen = !IsOpen;
             if (!DemoInput.AttackHeld && !DemoInput.HeavyHeld) pointerCaptured = false;
             else if (PointerInside) pointerCaptured = true;
@@ -135,6 +142,7 @@ namespace SlashDemo
         void OnGUI()
         {
             if (Settings == null) return;
+            if (arena.Paused) return;
             InitStyles();
             int previousDepth = GUI.depth;
             Matrix4x4 previousMatrix = GUI.matrix;
@@ -157,10 +165,11 @@ namespace SlashDemo
             GUI.color = oldColor;
             GUI.Label(new Rect(r.x + 20, r.y + 10, 330, 36), "运行时调参", heading);
             if (GUI.Button(new Rect(r.xMax - 95, r.y + 10, 77, 32), "收起 F1", button)) IsOpen = false;
-            int nextPage = GUI.Toolbar(new Rect(r.x + 18, r.y + 57, r.width - 36, 34), page, Pages, button);
+            int nextPage = GUI.SelectionGrid(new Rect(r.x + 18, r.y + 57, r.width - 36, 68), page, Pages, 4, button);
             if (nextPage != page) { page = nextPage; scroll = Vector2.zero; }
-            var view = new Rect(r.x + 18, r.y + 106, r.width - 36, r.height - 216);
-            float contentHeight = page == 0 ? 450 : page == 1 ? 760 : page == 2 ? 430 : page == 5 ? 560 : page == 3 ? 600 : 330;
+            var view = new Rect(r.x + 18, r.y + 140, r.width - 36, r.height - 250);
+            float contentHeight = page == 7 ? 1150 : page == 6 ? (techniquePage == 1 ? 1300 : 900)
+                : page == 0 ? 560 : page == 1 ? 760 : page == 2 ? 430 : page == 5 ? 560 : page == 3 ? 600 : 330;
             scroll = GUI.BeginScrollView(view, scroll, new Rect(0, 0, view.width - 22, contentHeight));
             float y = 0;
             float w = view.width - 28;
@@ -171,7 +180,9 @@ namespace SlashDemo
             else if (page == 2) DrawEnemies(ref y, w);
             else if (page == 3) DrawFeedback(ref y, w);
             else if (page == 4) DrawView(ref y, w);
-            else DrawHeavy(ref y, w);
+            else if (page == 5) DrawHeavy(ref y, w);
+            else if (page == 6) DrawTechnique(ref y, w);
+            else DrawTechniqueActive(ref y, w);
             bool tuningChanged = GUI.changed;
             GUI.changed |= changedBefore;
             GUI.EndScrollView();
@@ -205,6 +216,14 @@ namespace SlashDemo
         void DrawPlayer(ref float y, float width)
         {
             var s = Settings;
+            var player = arena.Player;
+            GUI.Label(new Rect(0, y, width, 26), "境界", label);
+            y += 32;
+            int realm = GUI.Toolbar(new Rect(0, y, width, 32), (int)player.Realm, RealmOptions, button);
+            if (realm != (int)player.Realm) player.SetRealm((CultivationRealm)realm);
+            y += 38;
+            GUI.Label(new Rect(0, y, width, 40), "境界即时生效；返回洞府重置为练气，不随调参保存。", note);
+            y += 48;
             s.moveSpeed = Slider(ref y, width, "移动速度", s.moveSpeed, 1, 12, 0.1f);
             s.dashSpeed = Slider(ref y, width, "冲刺速度", s.dashSpeed, 5, 30, 0.5f);
             s.dashDuration = Slider(ref y, width, "冲刺时长", s.dashDuration, 0.06f, 0.4f, 0.01f, " s");
@@ -275,6 +294,90 @@ namespace SlashDemo
             s.damage = Mathf.RoundToInt(Slider(ref y, width, "剑气伤害", s.damage, 1, 200, 1));
             s.knockback = Slider(ref y, width, "剑气击退", s.knockback, 0, 20, 0.5f);
             GUI.Label(new Rect(0, y, width, 80), "满蓄松手后停顿 0.033s，再横扫 0.17s；扫过前方时发出剑气，之后进入收势。全程锁定移动，空格可打断。参数从下一次蓄力生效。", note);
+        }
+
+        void DrawTechnique(ref float y, float width)
+        {
+            var s = Settings.flowingCloud;
+            var player = arena.Player;
+            GUI.Label(new Rect(0, y, width, 32), "《流云剑诀》 · 连段", heading);
+            y += 40;
+            int realm = GUI.Toolbar(new Rect(0, y, width, 32), (int)player.Realm, RealmOptions, button);
+            if (realm != (int)player.Realm) player.SetRealm((CultivationRealm)realm);
+            y += 42;
+            int nextPage = GUI.Toolbar(new Rect(0, y, width, 32), techniquePage, new[] { "被动与旋风斩", "Q 主动" }, button);
+            if (nextPage != techniquePage) { techniquePage = nextPage; scroll = Vector2.zero; }
+            y += 40;
+            GUI.Label(new Rect(0, y, width, 50), "叠浪 " + player.ComboStacks + " / " + s.maxStacks
+                + "    剩余 " + player.ComboStackTimeLeft.ToString("0.0") + " s"
+                + "    普攻攻速 +" + ((player.NormalAttackSpeedMultiplier - 1) * 100).ToString("0.#") + "%\n满层减 Q 冷却："
+                + (player.Realm < CultivationRealm.FoundationEstablishment ? "筑基解锁"
+                    : player.RebuildCooldownRewardPending ? "待触发（首次满层减 1 秒）" : "需完成下一次 Q 释放"), note);
+            y += 56;
+            if (techniquePage == 0)
+            {
+                float percent = Slider(ref y, width, "叠浪每层增伤", s.stackBonus * 100, 0, 25, 1, "%");
+                if (percent != s.stackBonus * 100) s.stackBonus = percent / 100;
+                s.maxStacks = Mathf.RoundToInt(Slider(ref y, width, "叠浪最大层数", s.maxStacks, 1, FlowingCloudRules.MaxStacks, 1));
+                GUI.Label(new Rect(0, y, width, 50), "叠浪达到 5 层时额外提升 20% 普攻伤害。\n当前普攻总增伤 +"
+                    + (player.ComboDamageBonus * 100).ToString("0.#") + "%", note);
+                y += 56;
+                float speedPercent = Slider(ref y, width, "筑基起风 · 每层普攻攻速", s.attackSpeedPerStack * 100, 0, 25, 1, "%");
+                if (speedPercent != s.attackSpeedPerStack * 100) s.attackSpeedPerStack = speedPercent / 100;
+                s.pursuitDamage = Mathf.RoundToInt(Slider(ref y, width, "旋风斩基础伤害", s.pursuitDamage, 1, 200, 1));
+                s.pursuitReach = Slider(ref y, width, "旋风斩环形剑气半径", s.pursuitReach, 0.5f, 4.5f, 0.05f);
+                s.pursuitDuration = Slider(ref y, width, "旋风斩挥剑时长", s.pursuitDuration, 0.18f, 0.8f, 0.01f, " s");
+                s.pursuitKnockback = Slider(ref y, width, "旋风斩击退", s.pursuitKnockback, 0, 20, 0.5f);
+                var wave = Settings.heavyAttack;
+                GUI.Label(new Rect(0, y, width, 116), "金丹风舞：旋风斩命中叠两层叠浪。元婴剑潮共用「重击」页基础参数：伤害 "
+                    + wave.damage + "，宽度 " + wave.width.ToString("0.##") + "，距离 " + wave.distance.ToString("0.##")
+                    + "，速度 " + wave.speed.ToString("0.##") + "，击退 " + wave.knockback.ToString("0.##")
+                    + "。剑潮按普攻增伤结算；每道首次命中叠一层并减少 Q 冷却 1 秒。", note);
+                y += 124;
+            }
+            else
+            {
+                DrawTechniqueActive(ref y, width);
+                return;
+            }
+            if (GUI.Button(new Rect(0, y, width / 2 - 5, 34), "清空连击", button)) player.ResetTechniqueCombo();
+            if (GUI.Button(new Rect(width / 2 + 5, y, width / 2 - 5, 34), "刷新 Q 冷却", button)) player.ResetTechniqueCooldown();
+        }
+
+        void DrawTechniqueActive(ref float y, float width)
+        {
+            var s = Settings.flowingCloud;
+            var player = arena.Player;
+            GUI.Label(new Rect(0, y, width, 32), "Q · 流云疾斩", heading); y += 38;
+            GUI.Label(new Rect(0, y, width, 48), "叠浪 " + player.ComboStacks + " / " + s.maxStacks
+                + "    冷却 " + player.TechniqueCooldownLeft.ToString("0.0") + " s\n实际距离 "
+                + s.RushDistance(0).ToString("0.##") + "–" + s.RushDistance(5).ToString("0.##")
+                + " 米；施放时消耗全部叠浪，Q 命中不叠层。", note); y += 56;
+            float cell = (width - 12) / 3;
+            if (GUI.Button(new Rect(0, y, cell, 34), "叠满连击", button)) player.FillTechniqueStacksForDebug();
+            if (GUI.Button(new Rect(cell + 6, y, cell, 34), "清空连击", button)) player.ResetTechniqueCombo();
+            if (GUI.Button(new Rect((cell + 6) * 2, y, cell, 34), "刷新 Q 冷却", button)) player.ResetTechniqueCooldown();
+            y += 44;
+            s.activeCooldown = Slider(ref y, width, "Q 冷却", s.activeCooldown, 0.2f, 15, 0.1f, " s");
+            s.rushDistanceMultiplier = Slider(ref y, width, "Q 突进距离倍率", s.rushDistanceMultiplier, 1, 5, 0.1f, " ×");
+            s.rushDistance = Slider(ref y, width, "Q 基础距离（倍率前）", s.rushDistance, 0, 3, 0.05f);
+            s.rushDistancePerStack = Slider(ref y, width, "Q 每层距离（倍率前）", s.rushDistancePerStack, 0.05f, 0.6f, 0.05f);
+            s.rushDuration = Slider(ref y, width, "Q 突进时长", s.rushDuration, 0.06f, 0.3f, 0.01f, " s");
+            s.activeBaseDamage = Mathf.RoundToInt(Slider(ref y, width, "Q 练气基础伤害", s.activeBaseDamage, 1, 200, 1));
+            s.activeDamagePerRealm = Mathf.RoundToInt(Slider(ref y, width, "Q 每境界增加伤害", s.activeDamagePerRealm, 0, 50, 1));
+            s.activeDamagePerStack = Mathf.RoundToInt(Slider(ref y, width, "Q 每层追加伤害", s.activeDamagePerStack, 1, 50, 1));
+            s.activeWidth = Slider(ref y, width, "Q 基础剑光宽度", s.activeWidth, 0.4f, 3, 0.05f);
+            s.activeWidthPerStack = Slider(ref y, width, "Q 每层追加宽度", s.activeWidthPerStack, 0.05f, 0.4f, 0.01f);
+            s.rushTrailLifetime = Slider(ref y, width, "Q 轨迹剑光消散时间", s.rushTrailLifetime, 0.2f, 2, 0.05f, " s");
+            s.activeDuration = Slider(ref y, width, "Q 突进动作时长", s.activeDuration, 0.16f, 0.8f, 0.01f, " s");
+            s.activeKnockback = Slider(ref y, width, "Q 沿途击退", s.activeKnockback, 0, 20, 0.5f);
+            var finisher = Settings.strikes[2];
+            GUI.Label(new Rect(0, y, width, 76), "5 层落点追加普攻第三段：伤害 " + finisher.damage
+                + "，范围 " + finisher.reach.ToString("0.##") + "，挥剑 " + finisher.arc.ToString("0")
+                + "°。动作与数值共用「连招 → 第三段」设置；此斩击属于 Q，不叠连击。", note);
+            y += 84;
+            if (GUI.Button(new Rect(0, y, width, 34), "调整满层收招：普攻第三段", button))
+            { page = 1; strikeIndex = 2; scroll = Vector2.zero; }
         }
 
         void OnDisable() { pointerCaptured = false; }

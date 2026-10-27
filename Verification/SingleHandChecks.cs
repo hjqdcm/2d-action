@@ -15,11 +15,7 @@ static class SingleHandChecks
             {
                 float t = frame / 40f;
                 float w = HeroArmMath.SingleHandWeight(true, combo, false, true, t, strike.windupRatio);
-                Check(w >= 0 && w <= 1, "single hand blend stays bounded throughout the cut");
-                if (combo == 2 || frame == 0 || frame == 40)
-                    Check(w == 0, "third cut remains two handed and transitions join at the shared grip");
-                else if (t >= strike.windupRatio && t <= 0.85f)
-                    Check(w == 1, "first two active cuts fully detach the support hand");
+                Check(w == 0, "all three cuts keep the support hand on the shared sword grip throughout windup, swing and recovery");
                 Check(HeroArmMath.SingleHandWeight(true, combo, true, true, t, strike.windupRatio) == 0,
                     "heavy charge, sweep and recovery retain both hands on the sword");
                 Check(HeroArmMath.SingleHandWeight(true, combo, false, false, t, strike.windupRatio) == 0,
@@ -47,6 +43,6 @@ static class SingleHandChecks
             if (facing >= 3 && facing <= 5)
                 Check(orders.hand + 1 < 100, "relaxed hand remain occluded by the body from behind");
         }
-        Console.WriteLine("SINGLE_HAND_PASS: " + count + " assertions");
+        Console.WriteLine("TWO_HAND_GRIP_PASS: " + count + " assertions");
     }
 }

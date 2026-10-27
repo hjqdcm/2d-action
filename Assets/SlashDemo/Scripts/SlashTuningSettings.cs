@@ -5,6 +5,8 @@ namespace SlashDemo
     [System.Serializable]
     public sealed class SlashTuningSettings
     {
+        // Project defaults synchronized from the user's saved v3 tuning on 2026-10-27.
+        public const int DefaultDummyHealth = 1000;
         public int version = 3;
         public float moveSpeed = 5.4f, dashSpeed = 17, dashDuration = 0.15f, dashCooldown = 0.75f;
         public float comboResetTime = 0.65f;
@@ -12,7 +14,7 @@ namespace SlashDemo
         public bool invincible;
         public SlashPlayer.Strike[] strikes = DefaultStrikes();
         public float enemySpeedMultiplier = 1, enemyHealthMultiplier = 1;
-        public int enemyDamage = 12, dummyHealth = 150;
+        public int enemyDamage = 12, dummyHealth = DefaultDummyHealth;
         public float enemyWindup = 0.58f, enemyRange = 1.15f;
         public float hitStopMultiplier = 1, shakeMultiplier = 1, volume = 0.18f;
         public float trailLifetime = 0.12f;
@@ -20,6 +22,50 @@ namespace SlashDemo
         // A nested default also migrates earlier v3 saves without replacing unrelated settings.
         public HeavyAttackSettings heavyAttack = new HeavyAttackSettings();
         public BladeFeedbackSettings bladeFeedback = new BladeFeedbackSettings();
+        public FlowingCloudSettings flowingCloud = new FlowingCloudSettings();
+
+        [System.Serializable]
+        public sealed class FlowingCloudSettings
+        {
+            public float attackSpeedPerStack = FlowingCloudRules.AttackSpeedPerStack, stackBonus = 0.08f;
+            public int maxStacks = 5, pursuitDamage = 48;
+            public float pursuitReach = 2.1f, pursuitDuration = 0.68f, pursuitKnockback = 7;
+            public float activeCooldown = FlowingCloudRules.ActiveCooldown, rushDistance = FlowingCloudRules.RushDistance, rushDuration = FlowingCloudRules.RushDuration;
+            public int activeBaseDamage = 28, activeDamagePerRealm = 6;
+            public float activeDuration = 0.26f, activeReach = 2.1f, activeKnockback = 4;
+            public int activeDamagePerStack = 8;
+            public float rushDistancePerStack = 0.25f, activeWidth = 1.1f, activeWidthPerStack = 0.18f;
+            public float rushDistanceMultiplier = 2.4f, rushTrailLifetime = 0.8f;
+            public int ActiveDamage(CultivationRealm realm, int stacks = 0)
+                => activeBaseDamage + activeDamagePerRealm * (int)realm + activeDamagePerStack * Mathf.Clamp(stacks, 0, FlowingCloudRules.MaxStacks);
+            public float RushDistance(int stacks) => (rushDistance + rushDistancePerStack * Mathf.Clamp(stacks, 0, FlowingCloudRules.MaxStacks)) * rushDistanceMultiplier;
+            public float ActiveWidth(int stacks) => activeWidth + activeWidthPerStack * Mathf.Clamp(stacks, 0, FlowingCloudRules.MaxStacks);
+            public FlowingCloudSettings Clone() => (FlowingCloudSettings)MemberwiseClone();
+            public void Validate(FlowingCloudSettings fallback)
+            {
+                attackSpeedPerStack = Safe(attackSpeedPerStack, 0, 0.25f, fallback.attackSpeedPerStack);
+                stackBonus = Safe(stackBonus, 0, 0.25f, fallback.stackBonus);
+                maxStacks = Mathf.Clamp(maxStacks, 1, FlowingCloudRules.MaxStacks);
+                pursuitDamage = Mathf.Clamp(pursuitDamage, 1, 200);
+                pursuitReach = Safe(pursuitReach, 0.5f, 4.5f, fallback.pursuitReach);
+                pursuitDuration = Safe(pursuitDuration, 0.18f, 0.8f, fallback.pursuitDuration);
+                pursuitKnockback = Safe(pursuitKnockback, 0, 20, fallback.pursuitKnockback);
+                activeCooldown = Safe(activeCooldown, 0.2f, 15, fallback.activeCooldown);
+                rushDistance = Safe(rushDistance, 0, 3, fallback.rushDistance);
+                rushDuration = Safe(rushDuration, 0.06f, 0.3f, fallback.rushDuration);
+                activeBaseDamage = Mathf.Clamp(activeBaseDamage, 1, 200);
+                activeDamagePerRealm = Mathf.Clamp(activeDamagePerRealm, 0, 50);
+                activeDuration = Safe(activeDuration, 0.16f, 0.8f, fallback.activeDuration);
+                activeReach = Safe(activeReach, 0.5f, 4.5f, fallback.activeReach);
+                activeKnockback = Safe(activeKnockback, 0, 20, fallback.activeKnockback);
+                activeDamagePerStack = Mathf.Clamp(activeDamagePerStack, 1, 50);
+                rushDistancePerStack = Safe(rushDistancePerStack, 0.05f, 0.6f, fallback.rushDistancePerStack);
+                activeWidth = Safe(activeWidth, 0.4f, 3, fallback.activeWidth);
+                activeWidthPerStack = Safe(activeWidthPerStack, 0.05f, 0.4f, fallback.activeWidthPerStack);
+                rushDistanceMultiplier = Safe(rushDistanceMultiplier, 1, 5, fallback.rushDistanceMultiplier);
+                rushTrailLifetime = Safe(rushTrailLifetime, 0.2f, 2, fallback.rushTrailLifetime);
+            }
+        }
 
         [System.Serializable]
         public sealed class BladeFeedbackSettings
@@ -40,7 +86,7 @@ namespace SlashDemo
         public sealed class HeavyAttackSettings
         {
             public float chargeTime = 0.8f, recoveryTime = 0.25f;
-            public float width = 1.8f, distance = 6, speed = 12, knockback = 8;
+            public float width = 3.4f, distance = 6, speed = 15.5f, knockback = 8;
             public int damage = 55;
             public HeavyAttackSettings Clone() => (HeavyAttackSettings)MemberwiseClone();
             public void Validate(HeavyAttackSettings fallback)
@@ -63,6 +109,7 @@ namespace SlashDemo
             copy.strikes = CopyStrikes(strikes);
             copy.heavyAttack = (heavyAttack ?? new HeavyAttackSettings()).Clone();
             copy.bladeFeedback = (bladeFeedback ?? new BladeFeedbackSettings()).Clone();
+            copy.flowingCloud = (flowingCloud ?? new FlowingCloudSettings()).Clone();
             return copy;
         }
 
@@ -86,6 +133,7 @@ namespace SlashDemo
                 comboResetTime = player.comboResetTime, maxHealth = player.maxHealth,
                 invincible = player.invincible, strikes = CopyStrikes(player.strikes),
                 heavyAttack = (player.heavyAttack ?? new HeavyAttackSettings()).Clone(),
+                flowingCloud = player.FlowingCloud.Clone(),
                 bladeFeedback = new BladeFeedbackSettings { glowWidth = player.trailGlowWidth,
                     crescentPower = player.trailCrescentPower, punchAmount = camera.punchAmount, hdrIntensity = player.trailHDRIntensity },
                 hitStopMultiplier = effects.hitStopMultiplier, shakeMultiplier = camera.shakeMultiplier,
@@ -102,6 +150,9 @@ namespace SlashDemo
         // Saved values go through the same bounds as the sliders before touching live actors.
         public void Validate(SlashTuningSettings fallback)
         {
+            // JsonUtility may omit this object in pre-technique v3 saves.
+            if (flowingCloud == null) flowingCloud = (fallback.flowingCloud ?? new FlowingCloudSettings()).Clone();
+            flowingCloud.Validate(fallback.flowingCloud ?? new FlowingCloudSettings());
             if (heavyAttack == null) heavyAttack = new HeavyAttackSettings();
             heavyAttack.Validate(fallback.heavyAttack ?? new HeavyAttackSettings());
             if (bladeFeedback == null) bladeFeedback = new BladeFeedbackSettings();

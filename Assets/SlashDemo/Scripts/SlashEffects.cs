@@ -5,6 +5,7 @@ namespace SlashDemo
 {
     public sealed class SlashEffects : MonoBehaviour
     {
+        const float SwordWaveGlowThickness = 0.48f, SwordWaveCoreThickness = 0.156f;
         sealed class Fleck
         {
             public SpriteRenderer renderer;
@@ -26,8 +27,23 @@ namespace SlashDemo
             public float age, life, size;
         }
         readonly List<ImpactRing> rings = new List<ImpactRing>(24);
+        sealed class WhirlwindRing
+        {
+            public SlashPlayer owner;
+            public Vector2 origin;
+            public float age, previousAge = -1, reach, knockback;
+            public int damage, createdFrame;
+            public bool notified;
+            public System.Action onFirstHit;
+            public readonly HashSet<SlashEnemy> hit = new HashSet<SlashEnemy>();
+        }
+        readonly List<WhirlwindRing> whirlwinds = new List<WhirlwindRing>(4);
+        readonly List<Collider2D> whirlwindOverlaps = new List<Collider2D>(32);
+        public int ActiveWhirlwindCount => whirlwinds.Count;
         sealed class SwordWave
         {
+            public SlashPlayer normalAttackOwner;
+            public bool normalAttack, notified;
             public Transform root;
             public LineRenderer outer, core;
             public Vector2 position, direction;
@@ -38,6 +54,26 @@ namespace SlashDemo
         readonly List<SwordWave> waves = new List<SwordWave>();
         readonly List<Collider2D> waveOverlaps = new List<Collider2D>(32);
         public int ActiveSwordWaveCount => waves.Count;
+        sealed class CloudLight
+        {
+            public Transform root;
+            public Mesh mesh;
+            public MeshRenderer renderer;
+            public Vector2 from, to, direction;
+            public float width, age, life;
+            public bool path;
+        }
+        readonly List<CloudLight> cloudLights = new List<CloudLight>(32);
+        readonly List<Vector3> cloudVertices = new List<Vector3>(240);
+        readonly List<Color> cloudColors = new List<Color>(240);
+        readonly List<Vector2> cloudUVs = new List<Vector2>(240);
+        readonly List<int> cloudTriangles = new List<int>(1100);
+        Material cloudMaterial;
+        public int ActiveCloudLightCount => cloudLights.Count;
+        public int ActiveCloudTrailCount
+        {
+            get { int count = 0; foreach (var light in cloudLights) if (light.path) count++; return count; }
+        }
         public struct FloatingText { public Vector3 position; public string text; public Color color; public float born; }
         public IReadOnlyList<FloatingText> Texts => texts;
         float freezeRemaining;
@@ -122,7 +158,171 @@ namespace SlashDemo
             foreach (var ring in rings)
                 if (ring.line != null) Destroy(ring.line.gameObject);
             rings.Clear();
+            CancelWhirlwinds(null);
             ClearSwordWaves();
+            foreach (var light in cloudLights) DisposeCloudLight(light);
+            cloudLights.Clear();
+        }
+
+        // Share the ordinary blade trail's additive HDR shader and soft blue/white cross section.
+        public void DrawCloudRush(Vector2 from, Vector2 to, Vector2 direction, float width, float intensity, float trailLife)
+        {
+            CreateCloudLight(from, to, direction, width, false, intensity, 0.14f);
+            if ((to - from).sqrMagnitude > 0.0001f)
+                CreateCloudLight(from, to, direction, width, true, intensity, trailLife);
+        }
+
+        void CreateCloudLight(Vector2 from, Vector2 to, Vector2 direction, float width, bool path, float intensity, float life)
+        {
+            if (cloudLights.Count >= 96) { DisposeCloudLight(cloudLights[0]); cloudLights.RemoveAt(0); }
+            if (cloudMaterial == null)
+                cloudMaterial = new Material(Resources.Load<Shader>("SlashDemo/BladeTrailAdditive")) { name = "Flowing cloud sword light" };
+            cloudMaterial.SetFloat("_Intensity", intensity);
+            var root = new GameObject(path ? "Lingering cloud sword path" : "Cloud rush sword light").transform;
+            root.SetParent(transform, false);
+            var mesh = new Mesh { name = root.name }; mesh.MarkDynamic();
+            root.gameObject.AddComponent<MeshFilter>().sharedMesh = mesh;
+            var renderer = root.gameObject.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = cloudMaterial;
+            var light = new CloudLight { root = root, mesh = mesh, renderer = renderer, from = from, to = to,
+                direction = direction, width = width, path = path, life = life };
+            cloudLights.Add(light);
+            DrawCloudLight(light);
+        }
+
+        void DrawCloudLight(CloudLight light)
+        {
+            cloudVertices.Clear(); cloudColors.Clear(); cloudUVs.Clear(); cloudTriangles.Clear();
+            float progress = Mathf.Clamp01(light.age / light.life);
+            float alpha = (1 - progress) * (1 - progress);
+            Vector2 side = new Vector2(-light.direction.y, light.direction.x);
+            float radius = light.width * 0.5f;
+            light.renderer.sortingOrder = ObliqueProjection.DepthOrder(light.to.y) + 32;
+            if (light.path)
+            {
+                // World-fixed ribbons cover every actual movement segment and fade independently.
+                // Keep segment ends open at equal width so consecutive steps join without gaps.
+                for (int lane = -1; lane <= 1; lane++)
+                    for (int i = 0; i <= 8; i++)
+                    {
+                        float t = i / 8f;
+                        Vector2 edge = Vector2.Lerp(light.from, light.to, t) + side * (radius * 0.66f * lane);
+                        float thickness = radius * (lane == 0 ? 0.30f : 0.10f) * Mathf.Lerp(0.35f, 1, 1 - progress);
+                        AddCloudSection(light, edge, side, thickness, alpha * (lane == 0 ? 0.50f : 0.24f), i > 0);
+                    }
+            }
+            else
+            {
+                const int segments = 40;
+                for (int i = 0; i <= segments; i++)
+                {
+                    float t = i / (float)segments, lateral = t * 2 - 1;
+                    float taper = Mathf.Pow(Mathf.Max(0, Mathf.Sin(t * Mathf.PI)), 0.65f);
+                    float forward = Mathf.Sqrt(Mathf.Max(0, 1 - lateral * lateral));
+                    Vector2 edge = light.to + (light.direction * forward + side * lateral) * radius;
+                    AddCloudSection(light, edge, -light.direction, radius * 0.40f * taper, alpha, i > 0);
+                }
+            }
+            light.mesh.Clear(); light.mesh.SetVertices(cloudVertices); light.mesh.SetColors(cloudColors);
+            light.mesh.SetUVs(0, cloudUVs); light.mesh.SetTriangles(cloudTriangles, 0); light.mesh.RecalculateBounds();
+        }
+
+        void AddCloudSection(CloudLight light, Vector2 edge, Vector2 inward, float width, float alpha, bool connect)
+        {
+            int first = cloudVertices.Count;
+            for (int col = 0; col < 5; col++)
+            {
+                float offset = col == 0 ? -0.3f : col == 1 ? -0.12f : col == 2 ? 0 : col == 3 ? 0.3f : 1;
+                Vector2 point = edge + inward * (width * offset);
+                cloudVertices.Add(light.root.InverseTransformPoint(View.LiftPoint(point, View.WeaponHeight)));
+                Color color = col == 2 ? new Color(0.95f, 0.99f, 1, alpha * 0.95f)
+                    : new Color(0.35f, 0.75f, 1, alpha * (col == 1 ? 0.25f : col == 3 ? 0.7f : 0));
+                cloudColors.Add(color);
+                cloudUVs.Add(new Vector2(col == 2 ? 1 : col == 3 ? 0.5f : 0, 0));
+                if (!connect || col == 4) continue;
+                int a = first - 5 + col, b = first + col;
+                cloudTriangles.Add(a); cloudTriangles.Add(b); cloudTriangles.Add(a + 1);
+                cloudTriangles.Add(a + 1); cloudTriangles.Add(b); cloudTriangles.Add(b + 1);
+            }
+        }
+
+        void DisposeCloudLight(CloudLight light)
+        {
+            if (light.mesh != null) Destroy(light.mesh);
+            if (light.root != null) Destroy(light.root.gameObject);
+        }
+
+        void UpdateCloudLights(float dt)
+        {
+            for (int i = cloudLights.Count - 1; i >= 0; i--)
+            {
+                var light = cloudLights[i]; light.age += dt;
+                if (light.root == null || light.age >= light.life)
+                { DisposeCloudLight(light); cloudLights.RemoveAt(i); }
+                else DrawCloudLight(light);
+            }
+        }
+
+        public bool HasWhirlwind(SlashPlayer owner)
+        {
+            foreach (var ring in whirlwinds) if (ring.owner == owner) return true;
+            return false;
+        }
+
+        public void CancelWhirlwinds(SlashPlayer owner)
+        {
+            for (int i = whirlwinds.Count - 1; i >= 0; i--)
+                if (owner == null || whirlwinds[i].owner == owner)
+                {
+                    whirlwinds.RemoveAt(i);
+                }
+        }
+
+        public void LaunchWhirlwind(SlashPlayer owner, Vector2 origin, SlashPlayer.Strike strike,
+            float initialAge, System.Action onFirstHit)
+        {
+            CancelWhirlwinds(owner);
+            // Apply the complete circle once, in the same update that draws the full sword-light ribbon.
+            var ring = new WhirlwindRing { owner = owner, origin = origin, age = Mathf.Max(0, initialAge),
+                reach = strike.reach, damage = strike.damage, knockback = strike.knockback,
+                createdFrame = Time.frameCount, onFirstHit = onFirstHit };
+            whirlwinds.Add(ring);
+            ResolveWhirlwind(ring);
+        }
+
+        void ResolveWhirlwind(WhirlwindRing ring)
+        {
+            float radius = SwordMotion.WhirlwindRadius(ring.age, ring.reach);
+            Physics2D.OverlapCircle(ring.origin, radius + 0.7f, ContactFilter2D.noFilter, whirlwindOverlaps);
+            foreach (var collider in whirlwindOverlaps)
+            {
+                var enemy = collider.GetComponent<SlashEnemy>();
+                if (enemy == null || !enemy.Alive || ring.hit.Contains(enemy)
+                    || !SwordMotion.WhirlwindHit(ring.origin, ring.previousAge, ring.age, ring.reach,
+                        enemy.transform.position, enemy.Radius)) continue;
+                ring.hit.Add(enemy);
+                Vector2 direction = (Vector2)enemy.transform.position - ring.origin;
+                enemy.TakeHit(ring.damage, direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right, ring.knockback, true);
+                if (!ring.notified) { ring.notified = true; ring.onFirstHit?.Invoke(); }
+                HitStop(0.033f);
+            }
+            ring.previousAge = ring.age;
+        }
+
+        void UpdateWhirlwinds(float dt)
+        {
+            for (int i = whirlwinds.Count - 1; i >= 0; i--)
+            {
+                var ring = whirlwinds[i];
+                if (ring.owner == null || !ring.owner.IsAlive)
+                { whirlwinds.RemoveAt(i); continue; }
+                if (dt > 0 && ring.createdFrame != Time.frameCount)
+                {
+                    ring.age += dt;
+                }
+                if (ring.age >= SwordMotion.WhirlwindRingLife + SwordMotion.WhirlwindInnerDelay)
+                { whirlwinds.RemoveAt(i); continue; }
+            }
         }
 
         public void Impact(Vector2 position, bool heavy, bool lethal)
@@ -198,21 +398,22 @@ namespace SlashDemo
             waves.Clear();
         }
 
-        public void LaunchSwordWave(Vector2 position, Vector2 direction, SlashTuningSettings.HeavyAttackSettings settings)
+        public void LaunchSwordWave(Vector2 position, Vector2 direction, SlashTuningSettings.HeavyAttackSettings settings,
+            SlashPlayer normalAttackOwner = null)
         {
             var root = new GameObject("Charged sword wave").transform;
             root.SetParent(transform, false);
             var wave = new SwordWave { root = root, position = position,
                 direction = direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right,
-                settings = settings.Clone() };
+                settings = settings.Clone(), normalAttackOwner = normalAttackOwner, normalAttack = normalAttackOwner != null };
             int points = SwordMotion.WaveArcSegments + 1;
-            wave.outer = DemoArt.Line("Ice glow", root, new Vector3[points], new Color(0.3f, 0.73f, 1, 0.55f), 0.20f, 0);
-            wave.core = DemoArt.Line("White edge", root, new Vector3[points], new Color(0.9f, 0.98f, 1), 0.065f, 1);
+            wave.outer = DemoArt.Line("Ice glow", root, new Vector3[points], new Color(0.3f, 0.73f, 1, 0.55f), SwordWaveGlowThickness, 0);
+            wave.core = DemoArt.Line("White edge", root, new Vector3[points], new Color(0.9f, 0.98f, 1), SwordWaveCoreThickness, 1);
             var taper = new AnimationCurve(new Keyframe(0, 0), new Keyframe(0.2f, 0.7f),
                 new Keyframe(0.5f, 1), new Keyframe(0.8f, 0.7f), new Keyframe(1, 0));
             wave.outer.widthCurve = wave.core.widthCurve = taper;
-            wave.outer.widthMultiplier = 0.20f;
-            wave.core.widthMultiplier = 0.065f;
+            wave.outer.widthMultiplier = SwordWaveGlowThickness;
+            wave.core.widthMultiplier = SwordWaveCoreThickness;
             waves.Add(wave);
             DrawSwordWave(wave);
         }
@@ -221,8 +422,8 @@ namespace SlashDemo
         {
             float progress = Mathf.Clamp01(wave.traveled / Mathf.Max(0.01f, wave.settings.distance));
             float fade = CombatFeedbackMath.WaveFade(progress);
-            wave.outer.widthMultiplier = 0.20f * Mathf.Lerp(1, 1.35f, progress);
-            wave.core.widthMultiplier = 0.065f * Mathf.Lerp(1, 1.10f, progress);
+            wave.outer.widthMultiplier = SwordWaveGlowThickness * Mathf.Lerp(1, 1.35f, progress);
+            wave.core.widthMultiplier = SwordWaveCoreThickness * Mathf.Lerp(1, 1.10f, progress);
             wave.outer.startColor = wave.outer.endColor = new Color(0.3f, 0.73f, 1, 0.55f * fade);
             wave.core.startColor = wave.core.endColor = new Color(0.9f, 0.98f, 1, fade);
             wave.root.position = View.LiftPoint(wave.position, View.WeaponHeight);
@@ -259,7 +460,12 @@ namespace SlashDemo
                         if (!SwordMotion.WaveHit(wave.position, wave.direction, step, wave.settings.width,
                             enemy.transform.position, enemy.Radius)) continue;
                         wave.hit.Add(enemy);
-                        enemy.TakeHit(wave.settings.damage, wave.direction, wave.settings.knockback, true);
+                        enemy.TakeHit(wave.settings.damage, wave.direction, wave.settings.knockback, !wave.normalAttack);
+                        if (!wave.notified)
+                        {
+                            wave.notified = true;
+                            if (wave.normalAttackOwner != null) wave.normalAttackOwner.OnSwordTideHit();
+                        }
                     }
                     wave.position = next;
                     wave.traveled += step;
@@ -353,6 +559,8 @@ namespace SlashDemo
                 gatherTimer = Mathf.Max(0, gatherTimer);
             }
             UpdateSwordWaves(dt);
+            UpdateWhirlwinds(dt);
+            UpdateCloudLights(dt);
             for (int i = rings.Count - 1; i >= 0; i--)
             {
                 var ring = rings[i];
@@ -404,6 +612,7 @@ namespace SlashDemo
         void OnDestroy()
         {
             if (gatherMaterial != null) Destroy(gatherMaterial);
+            if (cloudMaterial != null) Destroy(cloudMaterial);
             if (swing != null) Destroy(swing);
             if (heavySwing != null) Destroy(heavySwing);
             if (hit != null) Destroy(hit);

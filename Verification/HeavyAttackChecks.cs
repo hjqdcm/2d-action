@@ -61,7 +61,7 @@ static class HeavyAttackChecks
         var copy = settings.Clone();
         copy.heavyAttack.chargeTime = 1.5f;
         copy.heavyAttack.width = 3;
-        Check(settings.heavyAttack.chargeTime == 0.8f && settings.heavyAttack.width == 1.8f,
+        Check(settings.heavyAttack.chargeTime == 0.8f && settings.heavyAttack.width == 3.4f,
             "charge snapshots do not mutate live or saved tuning");
         copy.heavyAttack = null;
         copy.Validate(settings);
@@ -74,7 +74,7 @@ static class HeavyAttackChecks
         copy.heavyAttack.speed = 0;
         copy.heavyAttack.damage = -50;
         copy.Validate(settings);
-        Check(copy.heavyAttack.width == 1.8f && copy.heavyAttack.distance == 6,
+        Check(copy.heavyAttack.width == 3.4f && copy.heavyAttack.distance == 6,
             "nonfinite projectile tuning falls back safely");
         Check(copy.heavyAttack.chargeTime == 0.1f && copy.heavyAttack.recoveryTime == 1.5f
             && copy.heavyAttack.speed == 3 && copy.heavyAttack.damage == 1, "tuning bounds match sliders");

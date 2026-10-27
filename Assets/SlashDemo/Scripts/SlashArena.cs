@@ -8,7 +8,7 @@ namespace SlashDemo
     public sealed class SlashArena : MonoBehaviour
     {
         [Header("Prototype mode")]
-        [Tooltip("T toggles between practice dummies and hostile waves.")]
+        [Tooltip("Enable practice dummies; disable for hostile waves in the training ground.")]
         public bool practiceMode = true;
         public Vector2 arenaHalfSize = new Vector2(10.5f, 5.6f);
         [SerializeField] SlashPlayer player;
@@ -20,8 +20,8 @@ namespace SlashDemo
         readonly List<SlashEnemy> enemies = new List<SlashEnemy>();
         float nextWave = -1;
         float respawnDummies = -1;
-        float bannerTimer;
-        string banner = "";
+        bool waitingForMenuRelease;
+        int menuReleaseFrame;
         ObliqueView obliqueView;
         public ObliqueView View
         {
@@ -37,44 +37,75 @@ namespace SlashDemo
         public SlashCamera CameraRig => worldCamera.GetComponent<SlashCamera>();
         public SlashEffects Effects => effects;
         public SlashTuningPanel Tuning { get; private set; }
-        public bool InputBlocked => Tuning != null && Tuning.BlocksGameplayInput;
+        public SceneTravel Travel { get; private set; }
+        public TechniqueCodex Codex { get; private set; }
+        public CharacterPanel CharacterPanel { get; private set; }
+        public bool InputBlocked => Paused || waitingForMenuRelease || (Tuning != null && Tuning.BlocksGameplayInput)
+            || (Travel != null && Travel.BlocksGameplayInput);
         public IReadOnlyList<SlashEnemy> Enemies => enemies;
         public bool Paused { get; private set; }
+        public bool PauseMenuOpen => Paused && (Travel == null || !Travel.IsSelectionOpen)
+            && (Codex == null || !Codex.IsOpen) && (CharacterPanel == null || !CharacterPanel.IsOpen);
         public bool Defeated { get; private set; }
         public int Wave { get; private set; }
         public int Kills { get; private set; }
-        public string Banner => bannerTimer > 0 ? banner : "";
+        public string LocationName => player != null && ManorEnvironment.InTraining(player.transform.position)
+            ? "试刀训练场" : "私人洞府";
 
         void Start()
         {
             Time.timeScale = 1;
             if (player == null || worldCamera == null) BuildWorld();
+            EnsureManorEnvironment();
             ConfigureBloom();
             View.PrepareEnvironment(transform.Find("Environment"));
             enemies.Clear();
             enemies.AddRange(actors.GetComponentsInChildren<SlashEnemy>());
+            // Existing serialized actors keep their appearance, tuning and components.
+            player.GetComponent<Rigidbody2D>().position = ManorEnvironment.SpawnPoint;
+            for (int i = 0; i < enemies.Count; i++)
+                enemies[i].GetComponent<Rigidbody2D>().position = ManorEnvironment.DummyPoint(i);
             CameraRig.target = player.transform;
             Tuning = GetComponent<SlashTuningPanel>();
             if (Tuning == null) Tuning = gameObject.AddComponent<SlashTuningPanel>();
             Tuning.Initialize(this);
-            if (practiceMode)
-                ShowBanner("试刀 · 按住左键连斩", 3);
-            else
+            if (!practiceMode)
             {
                 RemoveEnemies();
                 nextWave = Time.time + 2;
-                ShowBanner("准备迎敌", 2);
             }
+            Travel = GetComponent<SceneTravel>();
+            if (Travel == null) Travel = gameObject.AddComponent<SceneTravel>();
+            Travel.Initialize(this);
+            Codex = GetComponent<TechniqueCodex>();
+            if (Codex == null) Codex = gameObject.AddComponent<TechniqueCodex>();
+            Codex.Initialize(this);
+            CharacterPanel = GetComponent<CharacterPanel>();
+            if (CharacterPanel == null) CharacterPanel = gameObject.AddComponent<CharacterPanel>();
+            CharacterPanel.Initialize(this);
         }
 
         void Update()
         {
-            if (DemoInput.RestartPressed) Restart();
-            if (DemoInput.PracticePressed) { practiceMode = !practiceMode; Restart(); }
+            if (waitingForMenuRelease && Time.frameCount > menuReleaseFrame
+                && !DemoInput.GameplayHeld)
+                waitingForMenuRelease = false;
+            if (Codex != null && (Codex.IsOpen || Codex.ConsumedInputThisFrame)) return;
+            if (CharacterPanel != null && (CharacterPanel.IsOpen || CharacterPanel.ConsumedInputThisFrame)) return;
+            if (Travel != null && Travel.IsSelectionOpen)
+            {
+                if (DemoInput.PausePressed)
+                {
+                    Travel.CancelSelection();
+                    TogglePause();
+                }
+                return;
+            }
             if (DemoInput.PausePressed && !Defeated) TogglePause();
             if (Paused || Defeated || Time.deltaTime <= 0) return;
-            bannerTimer = Mathf.Max(0, bannerTimer - Time.deltaTime);
-            if (!practiceMode && nextWave > 0 && Time.time >= nextWave)
+            if (Travel != null && Travel.Current != TravelDestination.Manor) return;
+            if (!practiceMode && nextWave > 0 && Time.time >= nextWave
+                && ManorEnvironment.InTraining(player.transform.position))
             { nextWave = -1; SpawnWave(); }
             if (practiceMode && respawnDummies > 0 && Time.time >= respawnDummies)
             {
@@ -88,10 +119,38 @@ namespace SlashDemo
             effects.RestoreTime();
             Paused = !Paused;
             Time.timeScale = Paused ? 0 : 1;
+            if (Paused && player != null) player.GetComponent<Rigidbody2D>().linearVelocity = Vector2.zero;
+            if (!Paused)
+            {
+                waitingForMenuRelease = true;
+                menuReleaseFrame = Time.frameCount;
+            }
+        }
+
+        public void ResumeGame()
+        {
+            if (PauseMenuOpen) TogglePause();
+        }
+
+        public void ReturnHome()
+        {
+            if (!PauseMenuOpen) return;
+            effects.Clear();
+            if (Travel != null) Travel.ReturnHome();
+            else
+            {
+                player.ResetRealm();
+                player.Teleport(ManorEnvironment.SpawnPoint);
+            }
+            CameraRig.ResetFeedback();
+            ResumeGame();
         }
 
         public void Restart()
         {
+            if (Codex != null) Codex.Close();
+            if (CharacterPanel != null) CharacterPanel.Close();
+            if (Travel != null) Travel.ResetForRestart();
             effects.Clear();
             CameraRig.ResetFeedback();
             Paused = Defeated = false;
@@ -100,18 +159,16 @@ namespace SlashDemo
             foreach (Transform child in actors)
             { child.gameObject.SetActive(false); Destroy(child.gameObject); }
             enemies.Clear();
-            player = CreatePlayer(actors, new Vector2(-1.5f, -0.6f));
+            player = CreatePlayer(actors, ManorEnvironment.SpawnPoint);
             if (Tuning != null) Tuning.ApplyPlayer(player);
             CameraRig.target = player.transform;
             if (practiceMode)
             {
                 SpawnDummies();
-                ShowBanner("试刀 · 按住左键连斩", 2.5f);
             }
             else
             {
                 nextWave = Time.time + 2;
-                ShowBanner("准备迎敌", 2);
             }
         }
 
@@ -122,13 +179,12 @@ namespace SlashDemo
             if (practiceMode)
             {
                 if (enemies.Count == 0)
-                { respawnDummies = Time.time + 2; ShowBanner("试刀完成 · 木桩即将重置", 2); }
+                    respawnDummies = Time.time + 2;
             }
             else if (enemies.Count == 0 && player.IsAlive)
             {
                 player.Heal(15);
                 nextWave = Time.time + 3;
-                ShowBanner("本轮肃清 · 气血 +15", 2.6f);
             }
         }
 
@@ -139,7 +195,6 @@ namespace SlashDemo
             effects.ClearSwordWaves();
         }
 
-        void ShowBanner(string value, float duration) { banner = value; bannerTimer = duration; }
         void RemoveEnemies()
         {
             foreach (var enemy in enemies)
@@ -153,9 +208,8 @@ namespace SlashDemo
 
         void SpawnDummies()
         {
-            enemies.Add(CreateEnemy(actors, new Vector2(1.3f, 0), true));
-            enemies.Add(CreateEnemy(actors, new Vector2(3.6f, 1.8f), true));
-            enemies.Add(CreateEnemy(actors, new Vector2(3.6f, -1.8f), true));
+            for (int i = 0; i < 3; i++)
+                enemies.Add(CreateEnemy(actors, ManorEnvironment.DummyPoint(i), true));
             if (Tuning != null)
                 foreach (var enemy in enemies) Tuning.ApplyEnemy(enemy);
         }
@@ -166,16 +220,30 @@ namespace SlashDemo
             int count = Mathf.Min(3 + Wave, 10);
             for (int i = 0; i < count; i++)
             {
-                float a = (i / (float)count * 360) + Wave * 33;
-                Vector2 position = new Vector2(Mathf.Cos(a * Mathf.Deg2Rad) * 8.3f, Mathf.Sin(a * Mathf.Deg2Rad) * 4.2f);
-                if (Vector2.Distance(position, player.transform.position) < 3)
-                    position = -position;
+                Vector2 position = ManorEnvironment.WavePoint(i, count, Wave);
+                if (Vector2.Distance(position, player.transform.position) < 1.5f)
+                    position = ManorEnvironment.TrainingCenter * 2 - position;
                 var enemy = CreateEnemy(actors, position, false, Mathf.Min(90, 52 + Wave * 4), Mathf.Min(2.9f, 1.65f + Wave * 0.12f));
                 enemies.Add(enemy);
                 if (Tuning != null) Tuning.ApplyEnemy(enemy);
                 effects.Burst(position, DemoArt.Red, 8, 0.4f);
             }
-            ShowBanner("第 " + Wave.ToString("00") + " 波 · 来敌 " + count, 2);
+        }
+
+        void EnsureManorEnvironment()
+        {
+            var environment = transform.Find("Environment");
+            if (environment != null && environment.GetComponentInChildren<ManorEnvironment>() != null) return;
+            if (environment != null)
+            {
+                // Disable the legacy colliders immediately; Destroy is deferred until frame end.
+                environment.name = "Legacy courtyard - replaced";
+                environment.gameObject.SetActive(false);
+                Destroy(environment.gameObject);
+            }
+            environment = new GameObject("Environment").transform;
+            environment.SetParent(transform, false);
+            CreateEnvironment(environment);
         }
 
         // Called by the editor builder. The scene remains editable and contains real scene objects.
@@ -203,7 +271,7 @@ namespace SlashDemo
             worldCamera.farClipPlane = 100;
             cameraObject.AddComponent<AudioListener>();
             cameraObject.AddComponent<SlashCamera>();
-            player = CreatePlayer(actors, new Vector2(-1.5f, -0.6f));
+            player = CreatePlayer(actors, ManorEnvironment.SpawnPoint);
             CameraRig.target = player.transform;
             SpawnDummies();
             gameObject.AddComponent<SlashHUD>();
@@ -248,65 +316,14 @@ namespace SlashDemo
             warning.gameObject.SetActive(false);
             var enemy = go.AddComponent<SlashEnemy>();
             enemy.trainingDummy = dummy;
-            enemy.maxHealth = dummy ? 150 : hp;
+            enemy.maxHealth = dummy ? SlashTuningSettings.DefaultDummyHealth : hp;
             enemy.moveSpeed = speed;
             go.AddComponent<ObliqueActor>().Initialize(parent.GetComponentInParent<SlashArena>(), dummy);
             go.SetActive(true);
             return enemy;
         }
 
-        void CreateEnvironment(Transform root)
-        {
-            DemoArt.Shape("Outer darkness", root, "Square", Vector2.zero, new Vector2(70, 45), new Color(0.027f, 0.047f, 0.064f), -200);
-            DemoArt.Shape("Arena foundation", root, "Square", Vector2.zero, arenaHalfSize * 2 + Vector2.one * 0.6f, new Color(0.13f, 0.21f, 0.24f), -190);
-            DemoArt.Shape("Stone floor", root, "Square", Vector2.zero, arenaHalfSize * 2, new Color(0.075f, 0.12f, 0.15f), -180);
-            for (int y = -5; y <= 5; y++)
-            for (int x = -10; x <= 10; x++)
-            {
-                float shift = y % 2 == 0 ? 0 : 0.48f;
-                float tint = ((x * 17 + y * 13 + 300) % 7) * 0.002f;
-                DemoArt.Shape("Slate", root, "Square", new Vector2(x + shift, y), new Vector2(0.96f, 0.96f),
-                    new Color(0.085f + tint, 0.134f + tint, 0.16f + tint), -170);
-            }
-            var seal = new GameObject("Courtyard seal").transform;
-            seal.SetParent(root, false);
-            var ringColor = new Color(0.22f, 0.40f, 0.41f, 0.5f);
-            DemoArt.Ring("Outer seal", seal, 3.6f, ringColor, 0.035f, -160);
-            DemoArt.Ring("Inner seal", seal, 3.35f, ringColor, 0.02f, -160);
-            DemoArt.Ring("Center seal", seal, 0.72f, ringColor, 0.035f, -160);
-            for (int i = 0; i < 8; i++)
-            {
-                float angle = i * 45;
-                DemoArt.Shape("Seal glyph", seal, "Square", DemoArt.Direction(angle) * 3.48f, new Vector2(0.13f, 0.13f), ringColor, -159, angle);
-            }
-            CreateWall(root, new Vector2(0, arenaHalfSize.y + 0.2f), new Vector2(arenaHalfSize.x * 2 + 0.8f, 0.4f));
-            CreateWall(root, new Vector2(0, -arenaHalfSize.y - 0.2f), new Vector2(arenaHalfSize.x * 2 + 0.8f, 0.4f));
-            CreateWall(root, new Vector2(arenaHalfSize.x + 0.2f, 0), new Vector2(0.4f, arenaHalfSize.y * 2));
-            CreateWall(root, new Vector2(-arenaHalfSize.x - 0.2f, 0), new Vector2(0.4f, arenaHalfSize.y * 2));
-            for (int i = 0; i < 6; i++)
-            {
-                float x = (i % 3 - 1) * 8.7f;
-                float y = i < 3 ? 5.4f : -5.4f;
-                DemoArt.Shape("Lantern shadow", root, "Disk", new Vector2(x, y), new Vector2(1.8f, 0.8f), new Color(1, 0.62f, 0.24f, 0.035f), -120);
-                DemoArt.Shape("Lantern base", root, "Square", new Vector2(x, y), new Vector2(0.35f, 0.5f), new Color(0.23f, 0.28f, 0.29f), -100);
-                DemoArt.Shape("Lantern light", root, "Disk", new Vector2(x, y + 0.12f), new Vector2(0.19f, 0.24f), DemoArt.Gold, -99);
-            }
-            // Deterministic edge debris gives scale without adding obstacles to the first combat test.
-            var random = new System.Random(71);
-            for (int i = 0; i < 70; i++)
-            {
-                float x = (float)random.NextDouble() * 20 - 10;
-                float y = (float)random.NextDouble() * 10.5f - 5.25f;
-                if (Mathf.Abs(y) < 3.7f && Mathf.Abs(x) < 8) continue;
-                DemoArt.Shape("Fallen leaf", root, "Blade", new Vector2(x, y), new Vector2(0.13f, 0.05f), new Color(0.46f, 0.47f, 0.33f, 0.45f), -140, (float)random.NextDouble() * 360);
-            }
-        }
-
-        static void CreateWall(Transform root, Vector2 position, Vector2 size)
-        {
-            var wall = DemoArt.Shape("Arena boundary", root, "Square", position, size, new Color(0.18f, 0.29f, 0.31f), -130);
-            wall.gameObject.AddComponent<BoxCollider2D>();
-        }
+        void CreateEnvironment(Transform root) => ManorEnvironment.Build(root);
 
         public void ConfigureBloom()
         {

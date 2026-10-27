@@ -96,6 +96,7 @@ namespace SlashDemo
         public bool HasAttack => attackRemaining > 0;
         public bool HasDash => dashRemaining > 0;
         public Vector2 AttackDirection { get; private set; }
+        public float AttackTime { get; private set; }
         public Vector2 DashDirection { get; private set; }
 
         public void Advance(float unscaledDelta, bool frozen)
@@ -105,7 +106,8 @@ namespace SlashDemo
             dashRemaining = Mathf.Max(0, dashRemaining - Mathf.Max(0, unscaledDelta));
         }
         static Vector2 Direction(Vector2 direction) => direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right;
-        public void Attack(Vector2 direction) { AttackDirection = Direction(direction); attackRemaining = Window; }
+        public void Attack(Vector2 direction, float atTime = 0)
+        { AttackDirection = Direction(direction); AttackTime = atTime; attackRemaining = Window; }
         public void Dash(Vector2 direction) { DashDirection = Direction(direction); dashRemaining = Window; }
         public void ConsumeAttack() { attackRemaining = 0; }
         public void Clear() { attackRemaining = dashRemaining = 0; }

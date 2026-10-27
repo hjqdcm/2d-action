@@ -45,10 +45,8 @@ namespace SlashDemo
         public static float SingleHandWeight(bool attacking, int combo, bool heavy, bool ready,
             float progress, float windup)
         {
-            if (!attacking || combo < 0 || combo > 1 || heavy || !ready) return 0;
-            float enter = Mathf.SmoothStep(0, 1, progress / Mathf.Max(0.01f, windup * 0.65f));
-            float leave = Mathf.SmoothStep(0, 1, (1 - progress) / 0.12f);
-            return enter * leave;
+            // All light attacks now keep the support hand on the sword, like the finisher and heavy attack.
+            return 0;
         }
 
         public static Vector3 RelaxedOffHand(Vector3 shoulder, Vector3 up, bool left, float scale)

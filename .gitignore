@@ -54,3 +54,9 @@ desktop.ini
 crashlytics-build.properties
 sysinfo.txt
 *.stackdump
+
+# Verification output, python cache, Unity crash recovery
+Verification/Artifacts/
+__pycache__/
+Assets/_Recovery/
+Assets/_Recovery.meta

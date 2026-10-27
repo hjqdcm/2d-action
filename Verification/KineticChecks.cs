@@ -16,17 +16,16 @@ static class KineticChecks
     static void Main()
     {
         var first = SwordMotion.Defaults()[0];
-        var hipFrame = SwordMotion.Evaluate(first, 5.5f / 60 / first.duration);
+        var hipFrame = SwordMotion.Evaluate(first, 0.26f);
         Check(hipFrame.hipPhase > 0 && hipFrame.torsoPhase == 0 && hipFrame.shoulderPhase == 0
-            && hipFrame.swordPhase == 0, "hip drive begins first near frame five");
-        var torsoFrame = SwordMotion.Evaluate(first, 6.5f / 60 / first.duration);
+            && hipFrame.swordPhase == 0, "hip drive begins before torso in the first active phase");
+        var torsoFrame = SwordMotion.Evaluate(first, 0.31f);
         Check(torsoFrame.hipPhase > torsoFrame.torsoPhase && torsoFrame.torsoPhase > 0
-            && torsoFrame.shoulderPhase == 0 && torsoFrame.swordPhase == 0, "torso begins near frame six after hips");
-        var shoulderFrame = SwordMotion.Evaluate(first, 7.5f / 60 / first.duration);
+            && torsoFrame.shoulderPhase == 0 && torsoFrame.swordPhase == 0, "torso begins after hips before shoulders");
+        var shoulderFrame = SwordMotion.Evaluate(first, 0.36f);
         Check(shoulderFrame.shoulderPhase > 0 && shoulderFrame.torsoPhase > shoulderFrame.shoulderPhase
-            && shoulderFrame.swordPhase == 0, "shoulders begin near frame seven before sword");
-        Check(SwordMotion.Evaluate(first, 9f / 60 / first.duration).swordPhase > 0,
-            "sword drive begins near frame nine");
+            && shoulderFrame.swordPhase == 0, "shoulders begin before the sword");
+        Check(SwordMotion.Evaluate(first, 0.42f).swordPhase > 0, "sword drive follows the body phases");
 
         var waist = new Vector2(0, 0.52f);
         foreach (var strike in SwordMotion.Defaults())
@@ -35,9 +34,9 @@ static class KineticChecks
             float endTime = strike.windupRatio + strike.activeRatio;
             var load = SwordMotion.Evaluate(strike, strike.windupRatio);
             var end = SwordMotion.Evaluate(strike, endTime);
-            float expectedStart = strike.action == SwordAction.Cleave ? 55 : strike.action == SwordAction.ReverseCleave ? -60 : 80;
+            float expectedStart = strike.action == SwordAction.Cleave ? 45 : strike.action == SwordAction.ReverseCleave ? -72.5f : 85;
             Check(Near(load.angle, expectedStart) && Near(end.angle, -expectedStart),
-                "restored horizontal cuts use their original 110, 120 and 160 degree arcs");
+                "horizontal cuts use the synchronized 90, 145 and 170 degree arcs");
             Check(Near(load.bodyOffset.x, -0.06f) && Near(load.sink, -0.04f), "windup shifts hips back and sinks");
             Check(Near(load.torsoShear, -0.10f * stroke), "windup twists back around waist");
             Check(Near(end.bodyOffset.x, 0.08f) && Near(end.sink, -0.12f), "release drives hips forward and presses down");
@@ -110,7 +109,7 @@ static class KineticChecks
         var oldThird = SwordMotion.Defaults()[2];
         oldThird.arc = 190; oldThird.motionVersion = 4;
         SwordMotion.UpgradeLegacy(oldThird, 2);
-        Check(oldThird.arc == 160 && oldThird.motionVersion == 5, "discarded combo saves restore the previous 160 degree sweep");
+        Check(oldThird.arc == 170 && oldThird.motionVersion == 5, "discarded combo saves restore the saved default 170 degree sweep");
         oldThird.arc = 150;
         SwordMotion.UpgradeLegacy(oldThird, 2);
         Check(oldThird.arc == 150, "newly tuned arcs survive repeated migration");
@@ -119,7 +118,7 @@ static class KineticChecks
         Check(custom.arc == 145, "old custom arcs remain intact");
         var settings = new SlashTuningSettings();
         settings.Validate(new SlashTuningSettings());
-        Check(settings.strikes[2].arc == 160, "tuning validation retains the restored finisher default");
+        Check(settings.strikes[2].arc == 170, "tuning validation retains the synchronized finisher default");
         Console.WriteLine("KINETIC_PASS: " + count + " assertions");
     }
 }

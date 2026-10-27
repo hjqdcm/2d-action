@@ -8355,7 +8355,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SlashDemo.SlashEnemy
   trainingDummy: 1
-  maxHealth: 150
+  maxHealth: 1000
   moveSpeed: 1.9
   windupTime: 0.58
   damage: 12
@@ -15651,38 +15651,38 @@ MonoBehaviour:
   useContinuous3D: 0
   strikes:
   - damage: 22
-    reach: 1.85
-    arc: 110
-    duration: 0.36
+    reach: 2
+    arc: 90
+    duration: 0.28
     knockback: 5
     action: 0
     windupRatio: 0.24
     activeRatio: 0.38
     stepDistance: 0
     bladeWidth: 0.1
-    motionVersion: 3
+    motionVersion: 5
   - damage: 26
-    reach: 1.9
-    arc: 120
-    duration: 0.4
+    reach: 2
+    arc: 145
+    duration: 0.3
     knockback: 6
     action: 1
     windupRatio: 0.22
     activeRatio: 0.4
     stepDistance: 0
     bladeWidth: 0.1
-    motionVersion: 3
+    motionVersion: 5
   - damage: 40
-    reach: 2.65
-    arc: 160
-    duration: 0.52
+    reach: 2
+    arc: 170
+    duration: 0.43
     knockback: 10
     action: 2
     windupRatio: 0.28
     activeRatio: 0.36
     stepDistance: 0
     bladeWidth: 0.16
-    motionVersion: 3
+    motionVersion: 5
 --- !u!1 &770788009
 GameObject:
   m_ObjectHideFlags: 0
@@ -30138,7 +30138,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SlashDemo.SlashEnemy
   trainingDummy: 1
-  maxHealth: 150
+  maxHealth: 1000
   moveSpeed: 1.9
   windupTime: 0.58
   damage: 12
@@ -42312,7 +42312,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SlashDemo.SlashEnemy
   trainingDummy: 1
-  maxHealth: 150
+  maxHealth: 1000
   moveSpeed: 1.9
   windupTime: 0.58
   damage: 12

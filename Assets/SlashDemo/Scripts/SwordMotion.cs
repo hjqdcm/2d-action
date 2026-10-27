@@ -2,9 +2,9 @@ using UnityEngine;
 
 namespace SlashDemo
 {
-    public enum SwordAction { Cleave, ReverseCleave, WideCleave }
+    public enum SwordAction { Cleave, ReverseCleave, WideCleave, SpinCleave }
 
-    // The renderer and collision queries evaluate this same aim-local sword pose.
+    // Physical sword motion has a fixed length; sword light and collision share the attack envelope.
     public static class SwordMotion
     {
         public struct Pose
@@ -17,9 +17,9 @@ namespace SlashDemo
         }
 
         public static SlashPlayer.Strike[] Defaults() => new[] {
-            new SlashPlayer.Strike(22, 1.85f, 110, 0.36f, 5, SwordAction.Cleave, 0.24f, 0.38f, 0, 0.10f),
-            new SlashPlayer.Strike(26, 1.9f, 120, 0.40f, 6, SwordAction.ReverseCleave, 0.22f, 0.40f, 0, 0.10f),
-            new SlashPlayer.Strike(40, 2.65f, 160, 0.52f, 10, SwordAction.WideCleave, 0.28f, 0.36f, 0, 0.16f)
+            new SlashPlayer.Strike(22, 2, 90, 0.28f, 5, SwordAction.Cleave, 0.24f, 0.38f, 0, 0.10f),
+            new SlashPlayer.Strike(26, 2, 145, 0.30f, 6, SwordAction.ReverseCleave, 0.22f, 0.40f, 0, 0.10f),
+            new SlashPlayer.Strike(40, 2, 170, 0.43f, 10, SwordAction.WideCleave, 0.28f, 0.36f, 0, 0.16f)
         };
 
         public static void UpgradeLegacy(SlashPlayer.Strike strike, int slot)
@@ -53,6 +53,7 @@ namespace SlashDemo
 
         public static readonly Vector2 CarryGrip = new Vector2(0.04f, -0.24f);
         public const float CarryAngle = -122, CarryLength = 0.72f;
+        public const float BladeLength = 1.3f;
         public const float ExtractFraction = 0.72f;
 
         public static Vector2 CarryAxisInView(Vector2 facing, float elevation, int previous = -1)
@@ -117,7 +118,7 @@ namespace SlashDemo
         public static Pose HeavyPose(float charge, bool release, float sweep, float recovery, float clock)
         {
             float load = Ease(charge / 0.65f);
-            var p = new Pose { kinetic = true, headLock = true, bladeLength = 1.3f };
+            var p = new Pose { kinetic = true, headLock = true, bladeLength = BladeLength };
             p.grip = Vector2.Lerp(new Vector2(0.39f, -0.06f), new Vector2(0.24f, 0.18f), load);
             p.angle = Mathf.Lerp(-25, 100, load);
             p.bodyOffset = new Vector2(-0.06f * load, 0);
@@ -162,19 +163,27 @@ namespace SlashDemo
         }
 
         public static Pose Evaluate(SlashPlayer.Strike strike, float normalizedTime)
+            => EvaluatePose(strike, normalizedTime, false);
+
+        // Keep range tuning in the energy envelope, never in the physical weapon or hand reach.
+        public static Pose EvaluateAttack(SlashPlayer.Strike strike, float normalizedTime)
+            => EvaluatePose(strike, normalizedTime, true);
+
+        static Pose EvaluatePose(SlashPlayer.Strike strike, float normalizedTime, bool energy)
         {
+            if (strike.action == SwordAction.SpinCleave) return SpinPose(strike, normalizedTime, energy);
             float t = Mathf.Clamp01(normalizedTime);
             float windup = strike.windupRatio, end = windup + strike.activeRatio;
             bool reverse = strike.action == SwordAction.ReverseCleave;
             bool wide = strike.action == SwordAction.WideCleave;
-            float scale = strike.reach / (wide ? 2.65f : reverse ? 1.9f : 1.85f);
+            float scale = energy ? strike.reach / (wide ? 2.65f : reverse ? 1.9f : 1.85f) : 1;
             var rest = new Vector2(0.22f, -0.06f);
             Vector2 ready = reverse ? new Vector2(0.18f, -0.30f) : new Vector2(0.14f, 0.30f);
             float startAngle = (reverse ? -1 : 1) * Mathf.Clamp(strike.arc, 30, 170) * 0.5f;
             float endAngle = -startAngle;
             float phaseScale = PhaseScale(strike);
             float stroke = reverse ? -1 : 1;
-            var pose = new Pose { bladeLength = strike.reach * (wide ? 0.80f : 0.70f), kinetic = true };
+            var pose = new Pose { bladeLength = energy ? strike.reach * (wide ? 0.80f : 0.70f) : BladeLength, kinetic = true };
             pose.hipPhase = Drive(t, windup, end);
             pose.torsoPhase = Drive(t, windup + 0.05f * phaseScale, end);
             pose.shoulderPhase = Drive(t, windup + 0.10f * phaseScale, end);
@@ -232,6 +241,57 @@ namespace SlashDemo
             pose.grip += pose.bodyOffset;
             pose.tip = pose.grip + DemoArt.Direction(pose.angle) * pose.bladeLength;
             return pose;
+        }
+
+        static Pose SpinPose(SlashPlayer.Strike strike, float normalizedTime, bool energy)
+        {
+            float t = Mathf.Clamp01(normalizedTime), start = SwingStart(strike);
+            float end = strike.windupRatio + strike.activeRatio;
+            var rest = new Vector2(0.39f, -0.06f);
+            var pose = new Pose { kinetic = true, headLock = true,
+                bladeLength = energy ? Mathf.Max(0.1f, strike.reach - 0.18f) : BladeLength };
+            if (t < start)
+            {
+                float load = Ease(t / start);
+                pose.angle = Mathf.Lerp(-25, -105, load);
+                pose.grip = Vector2.Lerp(rest, new Vector2(-0.10f, 0.12f), load);
+                pose.sink = -0.06f * load;
+            }
+            else if (t <= end)
+            {
+                float sweep = (t - start) / Mathf.Max(0.01f, end - start);
+                float e = Ease(sweep);
+                pose.angle = Mathf.Lerp(-105, 105, e);
+                pose.grip = Vector2.Lerp(new Vector2(-0.10f, 0.12f), new Vector2(0.32f, -0.04f), e);
+                pose.torsoTurn = Mathf.Sin(sweep * Mathf.PI) * 11;
+                pose.shoulderTurn = pose.torsoTurn * 1.25f;
+                pose.sink = -0.06f - Mathf.Sin(sweep * Mathf.PI) * 0.05f;
+                pose.swordPhase = sweep;
+            }
+            else
+            {
+                float recovery = Ease((t - end) / Mathf.Max(0.01f, 1 - end));
+                pose.angle = Mathf.Lerp(105, -25, recovery);
+                pose.grip = Vector2.Lerp(new Vector2(0.32f, -0.04f), rest, recovery);
+                pose.sink = -0.06f * (1 - recovery);
+            }
+            pose.lean = pose.torsoTurn;
+            pose.tip = pose.grip + DemoArt.Direction(pose.angle) * pose.bladeLength;
+            return pose;
+        }
+
+        public const float WhirlwindRingLife = 0.28f, WhirlwindInnerDelay = 0.04f;
+        public const float WhirlwindEmissionPoint = 0.15f;
+        public static float WhirlwindRadius(float age, float reach)
+            => age < 0 ? 0 : reach;
+
+        public static bool WhirlwindHit(Vector2 origin, float previousAge, float age, float reach, Vector2 target, float targetRadius)
+        {
+            // The visible sword light is already a full circle at emission, so damage is one pulse then.
+            // Resolve the pulse even when a long frame crosses the entire visual lifetime.
+            if (age < 0 || previousAge >= 0) return false;
+            float padding = Mathf.Max(0, targetRadius) + 0.06f;
+            return Vector2.Distance(origin, target) <= reach + padding;
         }
 
         public static Vector2 ToWorld(Vector2 local, Vector2 facing)
@@ -292,15 +352,16 @@ namespace SlashDemo
             if (end < start || currentTime < swingStart || previousTime > strike.windupRatio + strike.activeRatio) return false;
             float radius = Mathf.Max(0, targetRadius) + strike.bladeWidth * 0.5f;
             float fraction = (end - start) / Mathf.Max(0.01f, strike.windupRatio + strike.activeRatio - swingStart);
-            float travel = strike.reach * (Mathf.Clamp(strike.arc, 30, 170) * Mathf.Deg2Rad + 0.5f) * fraction;
+            bool spin = strike.action == SwordAction.SpinCleave;
+            float travel = strike.reach * ((spin ? 210 : Mathf.Clamp(strike.arc, 30, 170)) * Mathf.Deg2Rad + 0.5f) * fraction;
             travel += Vector2.Distance(previousOrigin, origin);
-            int samples = Mathf.Clamp(Mathf.CeilToInt(travel / Mathf.Max(0.025f, radius * 0.55f)), 1, 160);
+            int samples = Mathf.Clamp(Mathf.CeilToInt(travel / Mathf.Max(0.025f, radius * 0.55f)), 1, spin ? 640 : 160);
             for (int i = 0; i <= samples; i++)
             {
                 float t = Mathf.Lerp(start, end, i / (float)samples);
                 float rootT = Mathf.InverseLerp(previousTime, currentTime, t);
                 Vector2 root = Vector2.Lerp(previousOrigin, origin, rootT);
-                var pose = Evaluate(strike, t);
+                var pose = EvaluateAttack(strike, t);
                 Vector2 bladeBase = root + ToWorld(pose.grip, facing);
                 Vector2 bladeTip = root + ToWorld(pose.tip, facing);
                 if (DistanceToBlade(target, bladeBase, bladeTip, out contact) <= radius) return true;

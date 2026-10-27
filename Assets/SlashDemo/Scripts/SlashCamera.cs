@@ -12,7 +12,6 @@ namespace SlashDemo
         [Range(0, 0.08f)] public float punchAmount = 0.04f;
         float shakeAmplitude, shakeElapsed, shakeDirection;
         float punch;
-        Vector3 smoothFocus;
         ObliqueView view;
         Camera worldCamera;
 
@@ -26,7 +25,9 @@ namespace SlashDemo
         void ApplyView(Vector2 jitter)
         {
             transform.rotation = view.Rotation;
-            transform.position = smoothFocus - ObliqueProjection.Forward(view.elevation) * 20
+            // Follow the body's center exactly, including teleports and respawns.
+            Vector3 focus = target != null ? target.position + view.Up * view.BodyLift : Vector3.zero;
+            transform.position = focus - ObliqueProjection.Forward(view.elevation) * 20
                 + transform.right * jitter.x + transform.up * jitter.y;
             worldCamera.orthographic = true;
             float groundDepth = ObliqueProjection.DepthScale(view.elevation) * 5.6f;
@@ -55,9 +56,6 @@ namespace SlashDemo
         void LateUpdate()
         {
             if (target == null) return;
-            var desired = (Vector3)((Vector2)target.position * 0.17f);
-            desired += view.Up * 0.25f;
-            smoothFocus = Vector3.Lerp(smoothFocus, desired, 1 - Mathf.Exp(-5 * Time.unscaledDeltaTime));
             if (shakeMultiplier <= 0) shakeAmplitude = 0;
             if (punchAmount <= 0) punch = 0;
             Vector2 jitter = CombatFeedbackMath.ShakeOffset(shakeAmplitude * FeedbackStrength, shakeElapsed, shakeDirection, shakeFrequency);
