@@ -53,5 +53,11 @@ namespace SlashDemo
             consumedFrame = Time.frameCount;
             if (arena.Paused) arena.TogglePause();
         }
+
+        public bool Equip(TechniqueDefinition technique)
+        {
+            if (!IsOpen || !NearTable || arena.Player == null) return false;
+            return arena.Player.EquipTechnique(technique, true);
+        }
     }
 }

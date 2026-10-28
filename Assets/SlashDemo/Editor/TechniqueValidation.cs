@@ -22,6 +22,20 @@ namespace SlashDemo.Editor
         static MouseState? pointer;
         static int checks;
         static EditorWindow captureView;
+        static bool hadTechniqueSelection;
+        static string savedTechniqueSelection;
+
+        public static void RunIronBatch()
+        {
+            SessionState.SetBool(Pending + ".Iron", true);
+            RunBatch();
+        }
+
+        public static void RunIronZeroImpactBatch()
+        {
+            SessionState.SetBool(Pending + ".ZeroImpact", true);
+            RunBatch();
+        }
 
         public static void RunBatch()
         {
@@ -65,11 +79,14 @@ namespace SlashDemo.Editor
             deadline = EditorApplication.timeSinceStartup + 240;
             EditorApplication.isPaused = false;
             checks = 0; routines.Clear(); keys = null; pointer = null;
+            hadTechniqueSelection = PlayerPrefs.HasKey(SlashPlayer.TechniqueSaveKey);
+            savedTechniqueSelection = PlayerPrefs.GetString(SlashPlayer.TechniqueSaveKey);
             keyboard = InputSystem.AddDevice<Keyboard>(); mouse = InputSystem.AddDevice<Mouse>();
             InputSystem.settings.backgroundBehavior = InputSettings.BackgroundBehavior.IgnoreFocus;
             InputSystem.settings.editorInputBehaviorInPlayMode = InputSettings.EditorInputBehaviorInPlayMode.AllDeviceInputAlwaysGoesToGameView;
             InputSystem.onBeforeUpdate += Inject;
-            routines.Push(Run());
+            routines.Push(SessionState.GetBool(Pending + ".ZeroImpact", false) ? ValidateIronZeroImpact()
+                : SessionState.GetBool(Pending + ".Iron", false) ? RunIron() : Run());
         }
         static void Tick()
         {
@@ -87,6 +104,8 @@ namespace SlashDemo.Editor
                 if (!current.MoveNext()) routines.Pop();
                 else if (current.Current is IEnumerator child) routines.Push(child);
                 if (routines.Count != 0) return;
+                if (SessionState.GetBool(Pending + ".ZeroImpact", false)) Debug.Log("IRON_ZERO_IMPACT_PASS: " + checks + " assertions.");
+                if (SessionState.GetBool(Pending + ".Iron", false)) Debug.Log("IRON_SWORD_PLAY_PASS: " + checks + " assertions.");
                 Debug.Log("TECHNIQUE_PLAY_PASS: " + checks + " assertions; combo passives, consuming rush/path damage/scaling/finisher/collision, codex and input suppression.");
                 Finish(0);
             }
@@ -94,6 +113,11 @@ namespace SlashDemo.Editor
         }
         static void Finish(int code)
         {
+            if (hadTechniqueSelection) PlayerPrefs.SetString(SlashPlayer.TechniqueSaveKey, savedTechniqueSelection);
+            else PlayerPrefs.DeleteKey(SlashPlayer.TechniqueSaveKey);
+            PlayerPrefs.Save();
+            SessionState.SetBool(Pending + ".Iron", false);
+            SessionState.SetBool(Pending + ".ZeroImpact", false);
             SessionState.SetBool(Pending, false); InputSystem.onBeforeUpdate -= Inject;
             if (keyboard != null) InputSystem.RemoveDevice(keyboard);
             if (mouse != null) InputSystem.RemoveDevice(mouse);
@@ -153,6 +177,7 @@ namespace SlashDemo.Editor
         {
             yield return Frames();
             var arena = UnityEngine.Object.FindAnyObjectByType<SlashArena>();
+            if (arena != null) arena.Player.EquipTechnique(TechniqueCatalog.FlowingCloud);
             Check(arena != null && arena.Codex != null && arena.Player.Technique == TechniqueCatalog.FlowingCloud,
                 "technique and codex initialize in the existing scene");
             var activeIcon = Resources.Load<Texture2D>("SlashDemo/FlowingCloudActiveIcon");
@@ -161,7 +186,10 @@ namespace SlashDemo.Editor
                 "HUD loads the supplied transparent active skill icon");
             arena.Tuning.RestoreDefaults();
             var savedDefaults = JsonUtility.FromJson<SlashTuningSettings>(File.ReadAllText("Verification/Artifacts/SavedTuning-2026-10-27.json"));
-            CheckSavedDefaults(new SlashTuningSettings(), savedDefaults, "code defaults");
+            var codeDefaults = new SlashTuningSettings();
+            codeDefaults.Validate(new SlashTuningSettings());
+            savedDefaults.Validate(codeDefaults);
+            CheckSavedDefaults(codeDefaults, savedDefaults, "code defaults");
             CheckSavedDefaults(arena.Tuning.Settings, savedDefaults, "scene restore defaults");
             yield return ValidateCharacterPanel(arena);
             yield return ValidateBuffBar(arena);
@@ -342,7 +370,7 @@ namespace SlashDemo.Editor
             Check(player.ComboStacks == 0 && player.ComboStackTimeLeft == 0 && player.TechniqueConsumedStacks == 1,
                 "Q immediately consumes the actual Qi Refining damage stack and its timer");
             yield return Idle(player);
-            Check(health - target.Health == 42 && player.ComboStacks == 0, "Q adds per-stack damage once and never rebuilds consumed layers");
+            Check(health - target.Health == 45 && player.ComboStacks == 0, "one-layer Q scales its 42 base damage by 1.08 and never rebuilds consumed layers");
             Check(player.TechniqueCooldownLeft > 3 && !player.TryTechniqueSkill(Vector2.right), "Q enforces its four-second cooldown");
             Check(player.RequestAttack(Vector2.right) && player.ComboIndex == 0, "normal attacks restart after consuming the combo");
             yield return Idle(player);
@@ -397,6 +425,9 @@ namespace SlashDemo.Editor
             tuning.flowingCloud.rushDistance = 1.8f; tuning.flowingCloud.activeBaseDamage = 35;
             tuning.flowingCloud.activeDamagePerRealm = 9;
             tuning.flowingCloud.rushDistanceMultiplier = 2.5f; tuning.flowingCloud.rushTrailLifetime = 1.2f;
+            tuning.flowingCloud.finisherStrike.damage = 113;
+            tuning.flowingCloud.finisherStrike.reach = 2.7f;
+            tuning.flowingCloud.finisherStrike.duration = 0.57f;
             arena.Tuning.ApplyAll();
             Check(player.FlowingCloud.pursuitDamage == 67 && player.FlowingCloud.activeCooldown == 2.5f
                 && player.FlowingCloud.ActiveDamage(CultivationRealm.NascentSoul) == 62, "technique debug tuning applies to the live player");
@@ -406,6 +437,14 @@ namespace SlashDemo.Editor
                 && restored.flowingCloud.rushDistance == 1.8f && restored.flowingCloud.rushDistanceMultiplier == 2.5f
                 && restored.flowingCloud.rushTrailLifetime == 1.2f && restored.flowingCloud.attackSpeedPerStack == 0.07f,
                 "per-stack attack speed and Q settings survive save serialization");
+            Check(restored.flowingCloud.finisherStrike.damage == 113 && restored.flowingCloud.finisherStrike.reach == 2.7f
+                && restored.flowingCloud.finisherStrike.duration == 0.57f && restored.strikes[2].damage == 40,
+                "independent finisher damage, reach and timing survive serialization without changing normal attacks");
+            var oldFinisherSave = JsonUtility.FromJson<SlashTuningSettings>(File.ReadAllText("Verification/Artifacts/SavedTuning-2026-10-27.json"));
+            oldFinisherSave.strikes[2].damage = 61; oldFinisherSave.strikes[2].reach = 2.8f;
+            oldFinisherSave.Validate(new SlashTuningSettings());
+            Check(oldFinisherSave.flowingCloud.finisherStrike.damage == 122 && oldFinisherSave.flowingCloud.finisherStrike.reach == 2.8f
+                && oldFinisherSave.strikes[2].damage == 61, "old saves seed an independent finisher from their third strike once");
             var legacy = JsonUtility.FromJson<SlashTuningSettings>("{\"version\":3,\"moveSpeed\":7.2}");
             legacy.Validate(new SlashTuningSettings());
             Check(legacy.flowingCloud.attackSpeedPerStack == 0.05f && legacy.flowingCloud.pursuitDamage == 48
@@ -439,7 +478,9 @@ namespace SlashDemo.Editor
             typeof(SlashTuningPanel).GetField("page", panelFields).SetValue(arena.Tuning, 7);
             typeof(SlashTuningPanel).GetField("scroll", panelFields).SetValue(arena.Tuning, Vector2.zero);
             yield return Frames(); Capture("CloudRush-Active-Debug.png");
-            typeof(SlashTuningPanel).GetField("scroll", panelFields).SetValue(arena.Tuning, new Vector2(0, 950));
+            typeof(SlashTuningPanel).GetField("scroll", panelFields).SetValue(arena.Tuning, new Vector2(0, 920));
+            yield return Frames(); Capture("CloudRush-Finisher-Debug.png");
+            typeof(SlashTuningPanel).GetField("scroll", panelFields).SetValue(arena.Tuning, new Vector2(0, 1600));
             yield return Frames(); Capture("CloudRush-Active-Debug-Bottom.png");
             keys = new KeyboardState(Key.F1);
             while (arena.Tuning.IsOpen) yield return null;
@@ -870,8 +911,8 @@ namespace SlashDemo.Editor
             Check(foundation.TryTechniqueSkill(Vector2.right) && foundation.NormalAttackSpeedMultiplier == 1,
                 "Q consumes attack speed together with all five damage stacks");
             while (!foundation.IsTechniqueFinisher) yield return null;
-            Check(Mathf.Abs(((SlashPlayer.Strike)currentStrike.GetValue(foundation)).duration - foundation.strikes[2].duration) < 0.0001f,
-                "Q finisher retains normal third-strike base timing without the consumed speed bonus");
+            Check(Mathf.Abs(((SlashPlayer.Strike)currentStrike.GetValue(foundation)).duration - foundation.FlowingCloud.finisherStrike.duration) < 0.0001f,
+                "Q finisher retains independent base timing without the consumed speed bonus");
             yield return Idle(foundation);
             Check(foundation.ComboStacks == 0 && foundation.NormalAttackSpeedMultiplier == 1,
                 "Q contacts cannot recreate attack speed or passive layers");
@@ -894,7 +935,15 @@ namespace SlashDemo.Editor
                 Physics2D.SyncTransforms(); yield return Frames(1);
                 Vector2 origin = player.transform.position;
                 float distance = player.FlowingCloud.RushDistance(stacks);
-                int damage = player.FlowingCloud.ActiveDamage(player.Realm, stacks);
+                float damageMultiplier = 1 + stacks * player.FlowingCloud.stackBonus + (stacks == 5 ? 0.2f : 0);
+                int damage = Mathf.RoundToInt(player.FlowingCloud.ActiveDamage(player.Realm, stacks) * damageMultiplier);
+                var finisherSnapshot = player.FlowingCloud.finisherStrike.Clone();
+                finisherSnapshot.damage = Mathf.RoundToInt(finisherSnapshot.damage * damageMultiplier);
+                if (stacks == 5)
+                {
+                    player.strikes[2].damage = 13; player.strikes[2].reach = 1;
+                    player.strikes[2].arc = 60; player.strikes[2].duration = 0.8f;
+                }
                 var first = arena.Enemies[0]; var end = arena.Enemies[1]; var side = arena.Enemies[2];
                 Vector2[] positions = { origin + Vector2.left * 0.8f,
                     origin + Vector2.left * (distance + 0.75f),
@@ -911,8 +960,17 @@ namespace SlashDemo.Editor
                 if (stacks == 1) Time.fixedDeltaTime = 0.08f;
                 Check(player.TryTechniqueSkill(Vector2.left) && player.ComboStacks == 0
                     && player.TechniqueConsumedStacks == stacks, "accepted rush consumes all layers atomically");
+                var rushStrike = (SlashPlayer.Strike)typeof(SlashPlayer).GetProperty("CurrentStrike", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
+                Check(rushStrike.damage == damage, "rush snapshots consumed-stack normal damage including the five-layer bonus before clearing stacks");
                 Check(!player.TryTechniqueSkill(Vector2.up) && player.TechniqueConsumedStacks == stacks,
                     "a repeated Q cannot alter a rush already in flight");
+                if (stacks == 5)
+                {
+                    player.FlowingCloud.stackBonus = 0.25f;
+                    player.FlowingCloud.finisherStrike.damage = 147;
+                    player.FlowingCloud.finisherStrike.reach = 0.7f;
+                    player.FlowingCloud.finisherStrike.duration = 1.1f;
+                }
                 float until = Time.time + 0.06f;
                 while (Time.time < until) yield return null;
                 Check(arena.Effects.ActiveCloudLightCount > 0, "rush renders ice-blue sword light");
@@ -930,9 +988,8 @@ namespace SlashDemo.Editor
                 {
                     while (!player.IsTechniqueFinisher) yield return null;
                     var strike = (SlashPlayer.Strike)typeof(SlashPlayer).GetProperty("CurrentStrike", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
-                    Check(strike.action == player.strikes[2].action && strike.damage == player.strikes[2].damage
-                        && strike.reach == player.strikes[2].reach && strike.arc == player.strikes[2].arc
-                        && strike.duration == player.strikes[2].duration, "five-stack Q uses the actual configured third normal strike");
+                    Check(JsonUtility.ToJson(strike) == JsonUtility.ToJson(finisherSnapshot),
+                        "five-stack Q uses independent finisher data snapshotted at cast, unaffected by either tuning change");
                     Check(end.Health == endHealth - damage && player.ComboStacks == 0,
                         "third-strike windup cannot deal damage early or grant passive layers");
                     yield return Wait(strike.duration * (SwordMotion.SwingStart(strike) + strike.activeRatio * 0.6f));
@@ -945,8 +1002,8 @@ namespace SlashDemo.Editor
                     "stack-scaled rush reaches the configured physics distance: expected " + distance
                     + ", actual " + Vector2.Distance(origin, player.transform.position));
                 Check(firstHealth - first.Health == damage, "start of path receives damage exactly once");
-                Check(endHealth - end.Health == damage + (stacks == 5 ? player.strikes[2].damage : 0),
-                    "endpoint takes path damage once and only five stacks add normal third-strike damage");
+                Check(endHealth - end.Health == damage + (stacks == 5 ? finisherSnapshot.damage : 0),
+                    "endpoint takes path damage once and only five stacks add independent finisher damage");
                 Check(sideHealth - side.Health == (stacks >= 4 ? damage : 0), "wider stacked sword light matches path collision");
                 Check(player.TotalTechniqueFinishers - finishers == (stacks == 5 ? 1 : 0)
                     && player.ComboStacks == 0, "finisher occurs exactly once and neither strike grants stacks");
@@ -1028,6 +1085,544 @@ namespace SlashDemo.Editor
                         + ", blocked=" + arena.InputBlocked + ", cooldown=" + arena.Player.TechniqueCooldownLeft
                         + ", attacking=" + arena.Player.IsAttacking + ", pending=" + keys.HasValue);
                 yield return null;
+            }
+        }
+
+        static void AimIronTest(SlashArena arena)
+        {
+            Vector2 origin = arena.Player.transform.position;
+            Vector3 screen = arena.WorldCamera.WorldToScreenPoint(arena.View.LiftPoint(origin + Vector2.right * 12, arena.View.WeaponHeight));
+            pointer = new MouseState { position = new Vector2(screen.x, screen.y), buttons = 2 };
+        }
+
+        static ChargedAttackState IronCharge(SlashPlayer player)
+            => (ChargedAttackState)typeof(SlashPlayer).GetField("heavyState", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
+
+        static IEnumerator EmitIron(SlashArena arena, int stacks)
+        {
+            var player = arena.Player;
+            player.CancelHeavyAttack();
+            Check(player.RequestHeavyAttack(), "Iron Sword charge begins");
+            IronCharge(player).Advance(player.heavyAttack.chargeTime * (stacks == 6 ? 1 : (stacks + 0.03f) / 6));
+            Check(player.GangQiStacks == stacks && player.ReleaseHeavyAttack() && player.GangQiStacks == 0,
+                "release consumes exactly the expected gangqi tier, including zero");
+            int waves = player.TotalSwordWaves;
+            while (player.TotalSwordWaves == waves) yield return null;
+        }
+
+        static IEnumerator ValidateIronZeroImpact()
+        {
+            yield return Frames();
+            var arena = UnityEngine.Object.FindAnyObjectByType<SlashArena>();
+            arena.Tuning.RestoreDefaults(); arena.Player.EquipTechnique(TechniqueCatalog.IronSword);
+            foreach (CultivationRealm realm in Enum.GetValues(typeof(CultivationRealm)))
+                foreach (float feedback in new[] { 0f, 1f, 2.5f })
+                    foreach (bool lethal in new[] { false, true })
+                    {
+                        Place(arena, realm); AimIronTest(arena); yield return Frames();
+                        var player = arena.Player; var target = arena.Enemies[0];
+                        player.CancelHeavyAttack();
+                        arena.Effects.hitStopMultiplier = feedback;
+                        if (lethal) target.TakeHit(target.Health - 33, Vector2.zero, 0, interrupt: false);
+                        arena.Effects.Clear();
+                        int before = target.Health;
+                        Debug.Log("IRON_ZERO_IMPACT_CASE: " + realm + " feedback=" + feedback + " lethal=" + lethal);
+                        Check(player.RequestHeavyAttack() && player.GangQiStacks == 0 && player.ReleaseHeavyAttack()
+                            && player.LastReleasedGangQi == 0, "immediate zero-tier release succeeds");
+                        pointer = new MouseState();
+                        double timeout = Time.realtimeSinceStartupAsDouble + 12;
+                        while ((target.Health == before || player.IsHeavyBusy || arena.Effects.ActiveSwordWaveCount > 0)
+                            && Time.realtimeSinceStartupAsDouble < timeout) yield return null;
+                        Check(target.Health == before - 33, "zero-tier sword wave hits once for exactly 60 percent damage");
+                        Check(!player.IsHeavyBusy && arena.Effects.ActiveSwordWaveCount == 0 && Time.timeScale == 1 && !arena.Effects.Frozen,
+                            "zero-tier hit completes recovery and projectile cleanup with simulation running"
+                            + " (busy=" + player.IsHeavyBusy + ", charge=" + player.IsCharging + ", waves=" + arena.Effects.ActiveSwordWaveCount
+                            + ", scale=" + Time.timeScale + ", frozen=" + arena.Effects.Frozen + ", paused=" + arena.Paused
+                            + ", dt=" + Time.deltaTime + ", releaseAge=" + ((HeavyReleaseState)typeof(SlashPlayer).GetField("heavyRelease",
+                                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player)).Age + ")");
+                        Check(player.RequestAttack(Vector2.right), "normal attack remains available after zero-tier impact");
+                        Check(player.TryDash(Vector2.up), "dash remains available after zero-tier impact");
+                        yield return Wait(0.3f);
+                    }
+        }
+
+        static IEnumerator RunIron()
+        {
+            yield return Frames();
+            var arena = UnityEngine.Object.FindAnyObjectByType<SlashArena>();
+            Check(arena != null && TechniqueCatalog.All.Count == 2, "both techniques register in the existing scene");
+            arena.Tuning.RestoreDefaults();
+            arena.Player.EquipTechnique(TechniqueCatalog.IronSword);
+            AimIronTest(arena); yield return Frames();
+            foreach (var enemy in arena.Enemies) enemy.gameObject.SetActive(false);
+            foreach (CultivationRealm realm in Enum.GetValues(typeof(CultivationRealm)))
+                for (int stacks = 0; stacks <= 6; stacks++)
+                {
+                    var player = arena.Player;
+                    player.CancelHeavyAttack(); arena.Effects.Clear(); player.SetRealm(realm);
+                    var expected = player.IronSword.Release(player.heavyAttack, stacks, realm);
+                    yield return EmitIron(arena, stacks);
+                    var live = (SlashTuningSettings.HeavyAttackSettings)typeof(SlashPlayer).GetField("chargedSettings",
+                        BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
+                    Check(JsonUtility.ToJson(live) == JsonUtility.ToJson(expected), "all four realms and seven tiers snapshot damage, width, range and recovery correctly");
+                    Check(arena.Effects.ActiveSwordScarCount == (realm >= CultivationRealm.GoldenCore && stacks >= 5 ? 1 : 0),
+                        "scar unlock requires Golden Core and at least five gangqi");
+                }
+            arena.Player.CancelHeavyAttack(); arena.Effects.Clear();
+
+            foreach (CultivationRealm realm in new[] { CultivationRealm.QiRefining, CultivationRealm.FoundationEstablishment })
+                foreach (bool body in new[] { false, true })
+                {
+                    var player = arena.Player;
+                    AimIronTest(arena); yield return Frames(2);
+                    player.SetRealm(realm); player.CancelHeavyAttack(); player.ResetTechniqueCooldown();
+                    if (body) Check(player.TryTechniqueSkill(Vector2.right), "Iron Body can activate before charging");
+                    float speed = 1 + (realm >= CultivationRealm.FoundationEstablishment ? 0.20f : 0) + (body ? 0.3f : 0);
+                    Check(player.RequestHeavyAttack(), "start timed native charge");
+                    float began = Time.time;
+                    double chargeDeadline = Time.realtimeSinceStartupAsDouble + 8;
+                    while (!player.HeavyReady && Time.realtimeSinceStartupAsDouble < chargeDeadline) yield return null;
+                    Check(player.HeavyReady, "timed charge reaches ready (realm=" + realm + ", body=" + body
+                        + ", charging=" + player.IsCharging + ", progress=" + player.ChargeProgress
+                        + ", scale=" + Time.timeScale + ", frozen=" + arena.Effects.Frozen + ", paused=" + arena.Paused + ")");
+                    Check(Mathf.Abs(Time.time - began - player.heavyAttack.chargeTime / speed) < 0.08f,
+                        "real charge speed obeys Foundation and Iron Body bonuses");
+                    player.CancelHeavyAttack();
+                    // Switching realm clears any remaining Iron Body before the next timing case.
+                    player.SetRealm(realm == CultivationRealm.QiRefining ? CultivationRealm.GoldenCore : CultivationRealm.QiRefining);
+                }
+
+            Place(arena, CultivationRealm.GoldenCore); AimIronTest(arena); yield return Frames();
+            arena.Player.CancelHeavyAttack();
+            var target = arena.Enemies[0];
+            var extraCollider = target.gameObject.AddComponent<CircleCollider2D>(); extraCollider.radius = target.Radius;
+            int health = target.Health, ticks = arena.Effects.TotalScarTicks, explosions = arena.Effects.TotalScarExplosions;
+            yield return EmitIron(arena, 6);
+            yield return Wait(0.25f); Capture("IronSword-Scar.png");
+            yield return Wait(1.4f);
+            Check(arena.Effects.TotalScarTicks - ticks == 6 && arena.Effects.TotalScarExplosions == explosions,
+                "Golden Core scar ticks six times without explosion and deduplicates multiple colliders");
+            Check(health - target.Health == 66 + 6 * 7, "Golden Core scar deals exactly one wave hit and six ten-percent ticks");
+            Check((float)typeof(SlashEnemy).GetField("timer", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(target) < 0,
+                "periodic scar damage does not repeatedly refresh normal hit stun");
+            Check(arena.Effects.ActiveSwordScarCount == 0, "expired scar cleans up completely");
+            UnityEngine.Object.Destroy(extraCollider);
+
+            Place(arena, CultivationRealm.NascentSoul); AimIronTest(arena); yield return Frames();
+            var nascent = arena.Player; nascent.CancelHeavyAttack(); target = arena.Enemies[0];
+            health = target.Health; ticks = arena.Effects.TotalScarTicks; explosions = arena.Effects.TotalScarExplosions;
+            yield return EmitIron(arena, 6);
+            yield return Wait(0.22f);
+            Check(arena.Effects.IsOnSwordScar(nascent, target.transform.position, target.Radius), "standing target is inside the actual traveled scar");
+            int prior = target.Health, priorTicks = arena.Effects.TotalScarTicks;
+            yield return EmitIron(arena, 0);
+            yield return Wait(0.25f);
+            Check(prior - target.Health == 50 + (arena.Effects.TotalScarTicks - priorTicks) * 7,
+                "zero-layer heavy hit on an existing scar receives exactly fifty percent extra damage");
+            yield return Wait(1.4f);
+            Check(arena.Effects.TotalScarExplosions == explosions + 1 && arena.Effects.TotalScarTicks == ticks + 6,
+                "Nascent Soul scar expires with one explosion after exactly six ticks");
+            Check(health - target.Health == 66 + 50 + 6 * 7 + 33, "wave, scar bonus, periodic damage and explosion resolve independently");
+
+            Place(arena, CultivationRealm.FoundationEstablishment); AimIronTest(arena); yield return Frames();
+            var guarded = arena.Player; guarded.CancelHeavyAttack();
+            Check(guarded.RequestHeavyAttack(), "begin charge for Iron Body protection");
+            IronCharge(guarded).Advance(0.25f);
+            int gangqi = guarded.GangQiStacks;
+            Check(guarded.TryTechniqueSkill(Vector2.right) && guarded.GangQiStacks == gangqi
+                && guarded.IronBodyActive && guarded.TechniqueCooldownLeft > 9.9f,
+                "Q activates during charge, consumes no gangqi and starts its ten-second cooldown");
+            health = guarded.Health;
+            Check(guarded.TakeDamage(50, Vector2.left) && guarded.Health == health - 25 && guarded.IsCharging,
+                "Iron Body reduces accepted damage fifty percent and preserves the ongoing charge");
+            yield return Wait(3.05f);
+            Check(!guarded.IronBodyActive && guarded.IsCharging && guarded.GangQiStacks == 6,
+                "Iron Body expiry removes protection while a held full charge keeps waiting");
+            health = guarded.Health;
+            Check(guarded.TakeDamage(10, Vector2.left) && guarded.Health == health - 10 && !guarded.IsCharging,
+                "ordinary incoming damage interrupts charging after Iron Body expires");
+            yield return Wait(0.9f);
+            Check(guarded.RequestHeavyAttack() && guarded.TryDash(Vector2.up) && !guarded.IsHeavyBusy,
+                "Foundation dash converts charge to an immediate wave without leaving a delayed release");
+            yield return Wait(0.3f);
+
+            Place(arena, CultivationRealm.NascentSoul); AimIronTest(arena); yield return Frames();
+            var exclusive = arena.Player; exclusive.CancelHeavyAttack();
+            exclusive.EquipTechnique(TechniqueCatalog.FlowingCloud); exclusive.FillTechniqueStacksForDebug();
+            Check(exclusive.ComboStacks == 5, "Flowing Cloud still builds its own passive layers");
+            exclusive.EquipTechnique(TechniqueCatalog.IronSword);
+            Check(exclusive.ComboStacks == 0 && exclusive.ComboDamageBonus == 0 && exclusive.NormalAttackSpeedMultiplier == 1,
+                "switching to Iron Sword removes all Flowing Cloud passives");
+            for (int i = 0; i < 4; i++)
+            {
+                Check(exclusive.RequestAttack(Vector2.right) && exclusive.ComboIndex == i % 3,
+                    "Iron Sword ordinary attacks remain a three-strike sequence without whirlwind");
+                yield return Idle(exclusive);
+            }
+            Check(exclusive.ComboStacks == 0 && exclusive.TotalPursuits == 0, "Iron Sword ordinary hits cannot build Tide layers or activate Flowing Cloud follow-ups");
+
+            Rect table = ManorCollisionLayout.FurnitureFootprint("Tea table");
+            exclusive.Teleport(new Vector2(table.center.x, table.yMin - 0.8f));
+            pointer = new MouseState(); yield return Frames();
+            Check(!arena.Codex.Equip(TechniqueCatalog.FlowingCloud), "equipment selection is unavailable outside the open desk codex");
+            Check(arena.Codex.Open() && arena.Codex.Equip(TechniqueCatalog.FlowingCloud)
+                && exclusive.Technique == TechniqueCatalog.FlowingCloud, "desk codex equips Flowing Cloud exclusively");
+            Check(arena.Codex.Equip(TechniqueCatalog.IronSword) && exclusive.Technique == TechniqueCatalog.IronSword,
+                "desk codex equips Iron Sword exclusively");
+            Check(PlayerPrefs.GetString(SlashPlayer.TechniqueSaveKey) == TechniqueCatalog.IronSword.id,
+                "equipped technique selection persists for later launches");
+            typeof(SlashHUD).GetField("codexIndex", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(arena.GetComponent<SlashHUD>(), 1);
+            yield return Frames(); Capture("IronSword-Codex.png");
+            arena.Codex.Close(); yield return Frames();
+            arena.Restart(); yield return Frames();
+            Check(arena.Player.HasIronSword && arena.Player.Realm == CultivationRealm.QiRefining,
+                "restart retains the equipped book while resetting realm normally");
+            arena.Player.ResetTechniqueCooldown();
+            Check(arena.Player.TryTechniqueSkill(Vector2.right), "Iron Body starts on the equipped skill slot");
+            float cooldown = arena.Player.TechniqueCooldownLeft;
+            arena.Player.EquipTechnique(TechniqueCatalog.FlowingCloud);
+            Check(!arena.Player.IronBodyActive, "switching books clears Iron Body");
+            arena.Player.EquipTechnique(TechniqueCatalog.IronSword);
+            Check(arena.Player.TechniqueCooldownLeft == cooldown, "switching books cannot refresh Iron Body cooldown");
+
+            var settings = arena.Tuning.Settings;
+            settings.ironSword.scarTickDamageRatio = 0.17f; settings.ironSword.bodyDuration = 2.1f;
+            settings.ironSword.bodyHeavyBonus = 0.47f;
+            arena.Tuning.ApplyAll();
+            var restored = JsonUtility.FromJson<SlashTuningSettings>(JsonUtility.ToJson(settings)); restored.Validate(new SlashTuningSettings());
+            Check(restored.ironSword.scarTickDamageRatio == 0.17f && restored.ironSword.bodyDuration == 2.1f
+                && arena.Player.IronSword.bodyDuration == 2.1f && restored.ironSword.bodyHeavyBonus == 0.47f
+                && arena.Player.IronSword.bodyHeavyBonus == 0.47f, "Iron Sword tuning applies and survives save serialization");
+            var legacy = JsonUtility.FromJson<SlashTuningSettings>(File.ReadAllText("Verification/Artifacts/SavedTuning-2026-10-27.json"));
+            legacy.Validate(new SlashTuningSettings());
+            Check(legacy.ironSword.bodyCooldown == 10 && legacy.ironSword.scarTickDamageRatio == 0.10f
+                && legacy.ironSword.bodyDuration == 3 && legacy.ironSword.bodyDamageReduction == 0.5f
+                && legacy.ironSword.bodyHeavyBonus == 0.3f,
+                "old tuning saves receive all Iron Sword defaults");
+            var existingIronSave = JsonUtility.FromJson<SlashTuningSettings>("{\"ironSword\":{\"bodyDuration\":2,\"bodyChargeBonus\":0.4}}");
+            existingIronSave.Validate(new SlashTuningSettings());
+            Check(existingIronSave.ironSword.bodyHeavyBonus == 0.3f && existingIronSave.ironSword.bodyDuration == 2
+                && existingIronSave.ironSword.bodyChargeBonus == 0.4f,
+                "existing Iron Sword saves receive the new heavy-bonus default while retaining their saved tuning");
+            arena.Tuning.RestoreDefaults();
+            yield return ValidateIronZeroImpact();
+            yield return ValidateIronDashRelease(arena);
+            yield return ValidateIronBodyDamage(arena);
+            yield return ValidateIronHud(arena);
+            yield return ValidateIronVisuals(arena);
+            keys = new KeyboardState(Key.F1); while (!arena.Tuning.IsOpen) yield return null;
+            keys = new KeyboardState();
+            typeof(SlashTuningPanel).GetField("page", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(arena.Tuning, 6);
+            yield return Frames(); Capture("IronSword-Tuning.png");
+            typeof(SlashTuningPanel).GetField("scroll", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(arena.Tuning, new Vector2(0, 1000));
+            yield return Frames(); Capture("IronSword-Tuning-Bottom.png");
+            typeof(SlashTuningPanel).GetField("page", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(arena.Tuning, 7);
+            typeof(SlashTuningPanel).GetField("scroll", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(arena.Tuning, Vector2.zero);
+            yield return Frames(); Capture("IronSword-Active-Tuning.png");
+        }
+
+        static IEnumerator ValidateIronDashRelease(SlashArena arena)
+        {
+            foreach (CultivationRealm realm in Enum.GetValues(typeof(CultivationRealm)))
+                for (int stacks = 0; stacks <= 6; stacks++)
+                {
+                    Place(arena, realm); AimIronTest(arena); yield return Frames();
+                    var player = arena.Player; var target = arena.Enemies[0];
+                    player.CancelHeavyAttack();
+                    Check(player.RequestHeavyAttack(), "begin charge for dash release");
+                    IronCharge(player).Advance(player.heavyAttack.chargeTime * (stacks == 6 ? 1 : (stacks + 0.03f) / 6));
+                    var expected = player.IronSword.Release(player.heavyAttack, stacks, realm);
+                    Vector2 origin = player.transform.position, aim = player.Aim;
+                    int waves = player.TotalSwordWaves, health = target.Health;
+                    bool unlocked = realm >= CultivationRealm.FoundationEstablishment;
+                    Check(player.TryDash(Vector2.up) && player.IsDashing && !player.IsHeavyBusy && player.GangQiStacks == 0,
+                        "dash clears charge and leaves movement free of heavy recovery");
+                    Check(player.TotalSwordWaves == waves + (unlocked ? 1 : 0),
+                        "dash releases immediately only from Foundation onward, including zero-tier charge");
+                    if (unlocked)
+                    {
+                        var live = (SlashTuningSettings.HeavyAttackSettings)typeof(SlashPlayer).GetField("chargedSettings",
+                            BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
+                        Check(player.LastReleasedGangQi == stacks && JsonUtility.ToJson(live) == JsonUtility.ToJson(expected),
+                            "dash snapshots the current tier damage, width, distance and recovery without extra charging");
+                        var active = (IList)typeof(SlashEffects).GetField("waves", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(arena.Effects);
+                        object wave = active[active.Count - 1];
+                        Check(Vector2.Distance((Vector2)wave.GetType().GetField("position").GetValue(wave), origin + aim * 0.4f) < 0.0001f
+                            && Vector2.Distance((Vector2)wave.GetType().GetField("direction").GetValue(wave), aim) < 0.0001f,
+                            "dash wave starts at departure point and follows charge aim independently of dash direction");
+                        double timeout = Time.realtimeSinceStartupAsDouble + 8;
+                        while (target.Health == health && Time.realtimeSinceStartupAsDouble < timeout) yield return null;
+                        Check(health - target.Health == expected.damage, "dash wave applies the snapshotted damage once on first contact");
+                    }
+                    Check(arena.Effects.ActiveSwordScarCount == (unlocked && realm >= CultivationRealm.GoldenCore && stacks >= 5 ? 1 : 0),
+                        "dash release retains the five-tier and realm gates for sword scars");
+                    pointer = new MouseState(); yield return Wait(0.60f);
+                    Check(player.TotalSwordWaves == waves + (unlocked ? 1 : 0) && !player.IsDashing && !player.IsHeavyBusy,
+                        "releasing the button after dash cannot emit a second wave or lock the player");
+                }
+
+            Place(arena, CultivationRealm.FoundationEstablishment); AimIronTest(arena); yield return Frames();
+            var inputPlayer = arena.Player; inputPlayer.CancelHeavyAttack(); inputPlayer.RequestHeavyAttack();
+            IronCharge(inputPlayer).Advance(inputPlayer.heavyAttack.chargeTime * 0.5f);
+            int before = inputPlayer.TotalSwordWaves;
+            pointer = new MouseState(); keys = new KeyboardState(Key.Space, Key.W);
+            yield return Frames(2);
+            Check(inputPlayer.TotalSwordWaves == before + 1 && !inputPlayer.IsCharging,
+                "real Space input and simultaneous mouse release fire only one dash heavy");
+            keys = new KeyboardState(); yield return Wait(0.20f);
+            Check(inputPlayer.RequestHeavyAttack(), "a new charge may begin while dash cooldown is running");
+            float progress = inputPlayer.ChargeProgress;
+            Check(!inputPlayer.TryDash(Vector2.up) && inputPlayer.IsCharging && inputPlayer.ChargeProgress == progress
+                && inputPlayer.TotalSwordWaves == before + 1,
+                "rejected dash during cooldown neither consumes charge nor fires a wave");
+            inputPlayer.CancelHeavyAttack();
+
+            Place(arena, CultivationRealm.NascentSoul);
+            arena.Player.EquipTechnique(TechniqueCatalog.FlowingCloud); AimIronTest(arena); yield return Frames();
+            var cloud = arena.Player; cloud.CancelHeavyAttack(); cloud.RequestHeavyAttack();
+            IronCharge(cloud).Advance(cloud.heavyAttack.chargeTime);
+            before = cloud.TotalSwordWaves;
+            Check(cloud.TryDash(Vector2.up) && !cloud.IsHeavyBusy && cloud.TotalSwordWaves == before,
+                "Flowing Cloud dash continues to cancel even a full charge without releasing it");
+            pointer = new MouseState(); yield return Wait(0.35f);
+            cloud.EquipTechnique(TechniqueCatalog.IronSword);
+        }
+
+        static IEnumerator ValidateIronBodyDamage(SlashArena arena)
+        {
+            foreach (CultivationRealm realm in new[] { CultivationRealm.FoundationEstablishment, CultivationRealm.NascentSoul })
+                foreach (int stacks in new[] { 0, 4, 5, 6 })
+                    foreach (bool dash in new[] { false, true })
+                    {
+                        Place(arena, realm); AimIronTest(arena); yield return Frames();
+                        var player = arena.Player; var target = arena.Enemies[0];
+                        player.CancelHeavyAttack(); player.ResetTechniqueCooldown();
+                        Check(player.RequestHeavyAttack(), "begin charge before activating protection damage bonus");
+                        IronCharge(player).Advance(player.heavyAttack.chargeTime * (stacks == 6 ? 1 : (stacks + 0.03f) / 6));
+                        Check(player.TryTechniqueSkill(Vector2.right) && player.GangQiStacks == stacks
+                            && player.IronBodyTimeLeft == 3, "protection activates mid-charge for three seconds without consuming Gangqi");
+                        int health = target.Health;
+                        int expected = stacks == 0 ? 43 : stacks == 4 ? 72 : stacks == 5 ? 79 : 86;
+                        Check(dash ? player.TryDash(Vector2.up) : player.ReleaseHeavyAttack(), "protected heavy can release normally or through dash");
+                        var live = (SlashTuningSettings.HeavyAttackSettings)typeof(SlashPlayer).GetField("chargedSettings",
+                            BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
+                        Check(live.damage == expected, "normal and dash release snapshot exactly thirty percent extra heavy damage");
+                        double timeout = Time.realtimeSinceStartupAsDouble + 8;
+                        while (target.Health == health && Time.realtimeSinceStartupAsDouble < timeout) yield return null;
+                        Check(health - target.Health == expected, "protected projectile applies the boosted heavy damage only once");
+                        if (realm == CultivationRealm.NascentSoul && stacks == 6 && !dash)
+                        {
+                            yield return Wait(1.65f);
+                            Check(health - target.Health == 86 + 6 * 9 + 43,
+                                "scar ticks and explosion inherit the boosted heavy without multiplying protection twice");
+                        }
+                    }
+
+            // A released wave keeps its damage if protection expires before the delayed emission or hit.
+            Place(arena, CultivationRealm.FoundationEstablishment); AimIronTest(arena); yield return Frames();
+            var snapshot = arena.Player; snapshot.CancelHeavyAttack(); snapshot.ResetTechniqueCooldown();
+            snapshot.RequestHeavyAttack(); IronCharge(snapshot).Advance(snapshot.heavyAttack.chargeTime);
+            snapshot.TryTechniqueSkill(Vector2.right); snapshot.ReleaseHeavyAttack();
+            typeof(SlashPlayer).GetField("ironBodyLeft", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(snapshot, 0.01f);
+            var enemy = arena.Enemies[0]; int before = enemy.Health;
+            yield return Wait(0.40f);
+            Check(!snapshot.IronBodyActive && before - enemy.Health == 86, "expiry after release cannot remove damage already snapshotted into the heavy");
+
+            Place(arena, CultivationRealm.FoundationEstablishment); AimIronTest(arena); yield return Frames();
+            snapshot = arena.Player; snapshot.CancelHeavyAttack(); snapshot.ResetTechniqueCooldown();
+            snapshot.RequestHeavyAttack(); snapshot.TryTechniqueSkill(Vector2.right);
+            typeof(SlashPlayer).GetField("ironBodyLeft", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(snapshot, 0f);
+            snapshot.ReleaseHeavyAttack();
+            var unprotected = (SlashTuningSettings.HeavyAttackSettings)typeof(SlashPlayer).GetField("chargedSettings",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(snapshot);
+            Check(unprotected.damage == 33, "protection that ended before release does not grant stale heavy damage");
+            snapshot.ResetTechniqueCooldown();
+            Check(snapshot.TryTechniqueSkill(Vector2.right), "protection can activate after an unboosted heavy was released");
+            yield return Wait(0.40f);
+            Check(!snapshot.IsHeavyBusy && arena.Enemies[0].maxHealth - arena.Enemies[0].Health == 33,
+                "activating protection after release cannot retroactively boost an existing heavy");
+        }
+
+        static IEnumerator ValidateIronHud(SlashArena arena)
+        {
+            Place(arena, CultivationRealm.NascentSoul); AimIronTest(arena); yield return Frames();
+            foreach (var enemy in arena.Enemies) enemy.gameObject.SetActive(false);
+            var player = arena.Player;
+            var hud = arena.GetComponent<SlashHUD>();
+            var gangqi = Resources.Load<Texture2D>("SlashDemo/IronSwordGangQiIcon");
+            var active = Resources.Load<Texture2D>("SlashDemo/IronSwordActiveIcon");
+            Check(gangqi != null && active != null && gangqi.width == gangqi.height && active.width == active.height,
+                "both supplied Iron Sword icon assets load at their original square dimensions");
+            Check(ReferenceEquals(active, typeof(SlashHUD).GetField("ironSkillIcon", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(hud))
+                && player.Technique.activeName == "剑罡护体",
+                "active slot uses the supplied round artwork and renamed Sword Gangqi Protection caption");
+            var importer = (TextureImporter)AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(active));
+            Check(importer.alphaIsTransparency && importer.DoesSourceTextureHaveAlpha(), "round active icon preserves its supplied transparent background");
+            player.CancelHeavyAttack(); player.ResetTechniqueCooldown();
+            Check(player.RequestHeavyAttack(), "begin charge for the Gangqi HUD preview");
+            IronCharge(player).Advance(player.heavyAttack.chargeTime * 0.5f);
+            Time.timeScale = 0;
+            yield return Frames(2);
+            Check(hud.VisibleBuffs.Count == 1 && hud.VisibleBuffs[0].id == "iron-sword-gangqi"
+                && hud.VisibleBuffs[0].iconResource == "SlashDemo/IronSwordGangQiIcon" && hud.VisibleBuffs[0].stacks == player.GangQiStacks,
+                "Gangqi uses the supplied square artwork and live stack badge in the shared buff bar");
+            Capture("IronSword-Icons-Charging.png");
+            Check(player.TryTechniqueSkill(Vector2.right), "activate Sword Gangqi Protection during the HUD charge preview");
+            IronCharge(player).Advance(player.heavyAttack.chargeTime);
+            yield return Frames(2);
+            Check(hud.VisibleBuffs.Count == 2 && hud.VisibleBuffs[0].stacks == 6
+                && hud.VisibleBuffs[1].name == "剑罡护体" && hud.VisibleBuffs[1].iconResource == "SlashDemo/IronSwordActiveIcon"
+                && hud.VisibleBuffs[1].duration == player.IronSword.bodyDuration,
+                "full Gangqi and timed protection share Flowing Cloud's stack, tooltip and countdown presentation");
+            Capture("IronSword-Icons-Protected.png");
+            float scale = Mathf.Min(Screen.width / 1600f, Screen.height / 900f);
+            Vector2 center = BuffBarLayout.Slot(0, new Rect(50, 141, 282, 0)).center;
+            pointer = new MouseState { position = new Vector2(center.x * scale, Screen.height - center.y * scale), buttons = 2 };
+            yield return Frames(3);
+            Check(hud.HoveredBuffId == "iron-sword-gangqi", "new Gangqi icon retains the shared effect tooltip");
+            Capture("IronSword-Icons-Gangqi-Tooltip.png");
+            player.CancelHeavyAttack();
+            Check(hud.VisibleBuffs.Count == 1 && hud.VisibleBuffs[0].id == "iron-sword-body", "ending charge removes Gangqi without hiding the active protection buff");
+            pointer = new MouseState(); Time.timeScale = 1;
+            yield return Wait(player.IronSword.bodyDuration + 0.05f);
+            Check(hud.VisibleBuffs.Count == 0 && player.TechniqueCooldownLeft > 0,
+                "protection expiry removes its buff while the active slot continues cooling down");
+        }
+
+        static object IronVisualState(SlashArena arena, bool burst)
+        {
+            var list = (IList)typeof(SlashEffects).GetField(burst ? "swordScarBursts" : "swordScars",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(arena.Effects);
+            return list[0];
+        }
+
+        static void CheckIronVisualMesh(SlashArena arena, bool burst)
+        {
+            object state = IronVisualState(arena, burst);
+            object visual = state.GetType().GetField("visual").GetValue(state);
+            var mesh = (Mesh)visual.GetType().GetField("mesh").GetValue(visual);
+            var renderer = (MeshRenderer)visual.GetType().GetField("renderer").GetValue(visual);
+            bool finite = mesh.vertexCount > 0;
+            foreach (var vertex in mesh.vertices)
+                finite &= !float.IsNaN(vertex.x) && !float.IsInfinity(vertex.x)
+                    && !float.IsNaN(vertex.y) && !float.IsInfinity(vertex.y) && !float.IsNaN(vertex.z) && !float.IsInfinity(vertex.z);
+            Check(finite && mesh.bounds.size.sqrMagnitude > 0 && renderer.sharedMaterial.shader.name == "SlashDemo/BladeTrailAdditive",
+                "scar and eruption use valid finite meshes with the ordinary blade's additive HDR shader");
+            bool cool = true;
+            foreach (var color in mesh.colors) cool &= color.b >= color.r && color.b >= color.g;
+            Check(cool, "scar and eruption retain white cores and ice-blue falloff");
+            if (!burst)
+            {
+                object dark = state.GetType().GetField("dark").GetValue(state);
+                var darkMesh = (Mesh)dark.GetType().GetField("mesh").GetValue(dark);
+                var darkRenderer = (MeshRenderer)dark.GetType().GetField("renderer").GetValue(dark);
+                Check(darkRenderer.sharedMaterial.shader.name == "SlashDemo/BladeTrail"
+                    && darkRenderer.sortingOrder == renderer.sortingOrder - 1 && darkMesh.vertexCount < mesh.vertexCount,
+                    "fracture has a matching alpha-blended dark bed beneath its additive core");
+                bool rangeEdges = true;
+                Vector2 origin = (Vector2)state.GetType().GetField("origin").GetValue(state);
+                Vector2 direction = (Vector2)state.GetType().GetField("direction").GetValue(state);
+                float width = (float)state.GetType().GetField("width").GetValue(state);
+                var root = (Transform)visual.GetType().GetField("root").GetValue(visual);
+                var allVertices = mesh.vertices;
+                int lineVertices = mesh.vertexCount - darkMesh.vertexCount;
+                int sections = lineVertices / 14;
+                for (int line = 0; line < 2; line++)
+                    for (int row = 0; row < sections; row++)
+                    {
+                        Vector2 delta = (Vector2)root.TransformPoint(allVertices[darkMesh.vertexCount + line * sections * 7 + row * 7 + 3]) - origin;
+                        float across = delta.x * -direction.y + delta.y * direction.x;
+                        rangeEdges &= Mathf.Abs(across - (line == 0 ? -1 : 1) * width * 0.5f) < 0.0001f;
+                    }
+                Check(sections > 1 && rangeEdges, "two parallel ground lines mark the actual scar damage width");
+                bool grounded = true;
+                foreach (var vertex in mesh.vertices) grounded &= Mathf.Abs(vertex.z) < 0.00001f;
+                foreach (var vertex in darkMesh.vertices) grounded &= Mathf.Abs(vertex.z) < 0.00001f;
+                Check(grounded, "both fracture layers lie on the ground plane, including at 30 degree elevation");
+                Check(mesh.vertexCount > 25 * 7, "main fracture includes revealed secondary branches");
+                var vertices = mesh.vertices;
+                typeof(SlashEffects).GetMethod("DrawSwordScar", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(arena.Effects, new[] { state });
+                var repeated = mesh.vertices;
+                bool stable = vertices.Length == repeated.Length;
+                for (int i = 0; stable && i < vertices.Length; i++) stable &= vertices[i] == repeated[i];
+                Check(stable, "fracture knots stay fixed across redraws instead of flickering randomly");
+            }
+        }
+
+        static IEnumerator ValidateIronVisuals(SlashArena arena)
+        {
+            foreach (int angle in new[] { 0, 45 })
+            {
+                Place(arena, CultivationRealm.NascentSoul);
+                float elevation = arena.View.elevation;
+                if (angle == 45) arena.View.elevation = 30;
+                foreach (var enemy in arena.Enemies) enemy.gameObject.SetActive(false);
+                Vector2 direction = DemoArt.Direction(angle), origin = arena.Player.transform.position;
+                Vector3 screen = arena.WorldCamera.WorldToScreenPoint(arena.View.LiftPoint(origin + direction * 12, arena.View.WeaponHeight));
+                pointer = new MouseState { position = new Vector2(screen.x, screen.y), buttons = 2 };
+                yield return Frames();
+                int explosions = arena.Effects.TotalScarExplosions;
+                yield return EmitIron(arena, 6);
+                yield return Wait(0.55f);
+                CheckIronVisualMesh(arena, false);
+                Capture("IronSword-VFX-Scar-" + angle + ".png");
+                pointer = new MouseState(); yield return Frames(2);
+                object scar = IronVisualState(arena, false);
+                float age = (float)scar.GetType().GetField("age").GetValue(scar);
+                object dark = scar.GetType().GetField("dark").GetValue(scar);
+                var darkRoot = (Transform)dark.GetType().GetField("root").GetValue(dark);
+                Time.timeScale = 0;
+                var drawScar = typeof(SlashEffects).GetMethod("DrawSwordScar", BindingFlags.Instance | BindingFlags.NonPublic);
+                float earlyAlpha = 0, lateAlpha = 0;
+                foreach (float sample in new[] { 0.18f, 1.30f })
+                {
+                    scar.GetType().GetField("age").SetValue(scar, sample);
+                    drawScar.Invoke(arena.Effects, new[] { scar });
+                    object light = scar.GetType().GetField("visual").GetValue(scar);
+                    var sampledMesh = (Mesh)light.GetType().GetField("mesh").GetValue(light);
+                    float peak = 0;
+                    foreach (var color in sampledMesh.colors) peak = Mathf.Max(peak, color.a);
+                    if (sample < 1) earlyAlpha = peak; else lateAlpha = peak;
+                    yield return Frames(2);
+                    Capture("IronSword-Fracture-" + (sample < 1 ? "Early-" : "Charged-") + angle + ".png");
+                }
+                Check(lateAlpha > earlyAlpha * 1.4f, "ground fracture visibly accumulates light before erupting");
+                scar.GetType().GetField("age").SetValue(scar, age);
+                drawScar.Invoke(arena.Effects, new[] { scar });
+                Time.timeScale = 1;
+                int ticks = arena.Effects.TotalScarTicks;
+                arena.TogglePause(); yield return Frames(6);
+                Check((float)scar.GetType().GetField("age").GetValue(scar) == age && arena.Effects.TotalScarTicks == ticks,
+                    "pause freezes scar animation and damage together");
+                arena.TogglePause();
+                while (arena.Effects.TotalScarExplosions == explosions) yield return null;
+                Check(arena.Effects.ActiveSwordScarCount == 0 && arena.Effects.ActiveSwordScarBurstCount == 1,
+                    "damage scar ends exactly once while the visual-only eruption begins");
+                yield return null;
+                Check(darkRoot == null, "dark fracture bed is destroyed with the damage scar");
+                CheckIronVisualMesh(arena, true);
+                object burst = IronVisualState(arena, true);
+                age = (float)burst.GetType().GetField("age").GetValue(burst);
+                arena.TogglePause(); yield return Frames(6);
+                Check((float)burst.GetType().GetField("age").GetValue(burst) == age,
+                    "pause freezes the eruption instead of aging its fade");
+                arena.TogglePause();
+                // Sample the brief impact at exact ages; screenshot rendering can span its entire lifetime.
+                Time.timeScale = 0;
+                yield return Frames(2);
+                var drawBurst = typeof(SlashEffects).GetMethod("DrawSwordScarBurst", BindingFlags.Instance | BindingFlags.NonPublic);
+                foreach (float sample in new[] { 0.025f, 0.08f, 0.17f })
+                {
+                    burst.GetType().GetField("age").SetValue(burst, sample);
+                    drawBurst.Invoke(arena.Effects, new[] { burst });
+                    yield return Frames(2);
+                    string stage = sample < 0.03f ? "Flash" : sample < 0.10f ? "Crescents" : "Splinters";
+                    Capture("IronSword-VFX-" + stage + "-" + angle + ".png");
+                }
+                Time.timeScale = 1; yield return Wait(0.35f);
+                Check(arena.Effects.ActiveSwordScarBurstCount == 0, "eruption meshes clean up after fading");
+                arena.View.elevation = elevation;
             }
         }
 

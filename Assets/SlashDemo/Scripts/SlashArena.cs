@@ -69,6 +69,7 @@ namespace SlashDemo
             Tuning = GetComponent<SlashTuningPanel>();
             if (Tuning == null) Tuning = gameObject.AddComponent<SlashTuningPanel>();
             Tuning.Initialize(this);
+            player.EquipTechnique(TechniqueCatalog.Find(PlayerPrefs.GetString(SlashPlayer.TechniqueSaveKey, TechniqueCatalog.FlowingCloud.id)));
             if (!practiceMode)
             {
                 RemoveEnemies();
@@ -148,6 +149,7 @@ namespace SlashDemo
 
         public void Restart()
         {
+            var equipped = player != null ? player.Technique : TechniqueCatalog.FlowingCloud;
             if (Codex != null) Codex.Close();
             if (CharacterPanel != null) CharacterPanel.Close();
             if (Travel != null) Travel.ResetForRestart();
@@ -161,6 +163,7 @@ namespace SlashDemo
             enemies.Clear();
             player = CreatePlayer(actors, ManorEnvironment.SpawnPoint);
             if (Tuning != null) Tuning.ApplyPlayer(player);
+            player.EquipTechnique(equipped);
             CameraRig.target = player.transform;
             if (practiceMode)
             {
@@ -193,6 +196,7 @@ namespace SlashDemo
             Defeated = true;
             nextWave = -1;
             effects.ClearSwordWaves();
+            effects.ClearSwordScars();
         }
 
         void RemoveEnemies()

@@ -103,6 +103,7 @@ namespace SlashDemo
         Font font;
         Texture2D paper;
         Texture2D skillIcon;
+        Texture2D ironSkillIcon;
         GUIStyle codexBody, codexHeading;
         int codexIndex;
         Vector2 techniqueScroll;
@@ -151,6 +152,7 @@ namespace SlashDemo
             codexBody = new GUIStyle(small) { fontSize = 17, wordWrap = true };
             codexHeading = new GUIStyle(codexBody) { fontSize = 22, fontStyle = FontStyle.Bold };
             skillIcon = Resources.Load<Texture2D>("SlashDemo/FlowingCloudActiveIcon");
+            ironSkillIcon = Resources.Load<Texture2D>("SlashDemo/IronSwordActiveIcon");
             paper = new Texture2D(64, 64, TextureFormat.RGBA32, false) {
                 name = "Manor HUD rice paper", wrapMode = TextureWrapMode.Repeat,
                 filterMode = FilterMode.Bilinear, hideFlags = HideFlags.HideAndDontSave };
@@ -331,7 +333,7 @@ namespace SlashDemo
             var icon = new Rect(60, height - 174, 108, 108);
             Color previous = GUI.color;
             GUI.color = player.TechniqueReady ? Color.white : new Color(0.48f, 0.52f, 0.51f);
-            GUI.DrawTexture(icon, skillIcon);
+            GUI.DrawTexture(icon, player.HasIronSword ? ironSkillIcon : skillIcon);
             GUI.color = previous;
             if (player.TechniqueCooldownLeft > 0)
                 Label(icon, player.TechniqueCooldownLeft.ToString("0.0"), damage, Color.white);
@@ -399,12 +401,16 @@ namespace SlashDemo
             for (int i = 0; i < TechniqueCatalog.All.Count; i++)
             {
                 var entry = TechniqueCatalog.All[i];
-                if (GUI.Button(new Rect(panel.x + 28, panel.y + 129 + i * 72, 205, 58), entry.name, travelButton))
+                if (GUI.Button(new Rect(panel.x + 28, panel.y + 129 + i * 72, 205, 58),
+                    entry.name + (arena.Player.Technique == entry ? " · 已修习" : ""), travelButton))
                 { codexIndex = i; codexScroll = Vector2.zero; }
             }
             Label(new Rect(panel.x + 28, panel.yMax - 116, 210, 70), "当前修习\n《" + arena.Player.Technique.name + "》\nF / Esc 返回", codexBody, Jade);
             Box(new Rect(panel.x + 252, panel.y + 128, 1, panel.height - 156), Bronze);
             var technique = TechniqueCatalog.All[Mathf.Clamp(codexIndex, 0, TechniqueCatalog.All.Count - 1)];
+            bool selected = arena.Player.Technique == technique;
+            if (GUI.Button(new Rect(panel.x + 28, panel.yMax - 184, 205, 46), selected ? "当前修习中" : "修习此功法", travelButton)
+                && !selected) arena.Codex.Equip(technique);
             DrawTechniqueDetails(new Rect(panel.x + 275, panel.y + 119, panel.width - 303, panel.height - 147),
                 technique, ref codexScroll);
             GUI.depth = previousDepth;

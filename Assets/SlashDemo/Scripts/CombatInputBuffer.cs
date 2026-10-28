@@ -9,16 +9,23 @@ namespace SlashDemo
         public bool Active { get; private set; }
         public float SweepProgress => Mathf.Clamp01((Age - Pause) / Sweep);
         public float RecoveryProgress => Mathf.Clamp01((Age - Pause - Sweep) / Mathf.Max(0.001f, recovery));
-        float recovery;
+        float recovery, totalDuration;
         bool emitted;
-        public void Begin(float duration) { Age = 0; recovery = Mathf.Max(0, duration); Active = true; emitted = false; }
+        public void Begin(float duration)
+        {
+            Age = 0; recovery = Mathf.Max(0, duration);
+            // Store the rounded float once: Mono may otherwise compare the clamped Age
+            // against an unrounded intermediate sum and leave short recoveries active forever.
+            totalDuration = Pause + Sweep + recovery;
+            Active = true; emitted = false;
+        }
         public bool Advance(float dt)
         {
             if (!Active || dt <= 0) return false;
-            Age = Mathf.Min(Age + dt, Pause + Sweep + recovery);
+            Age = Mathf.Min(Age + dt, totalDuration);
             bool fire = !emitted && Age >= Pause + Sweep * WavePoint;
             if (fire) emitted = true;
-            if (Age >= Pause + Sweep + recovery) Active = false;
+            if (Age >= totalDuration) Active = false;
             return fire;
         }
         public void Cancel() { Active = false; Age = 0; emitted = false; }
@@ -75,10 +82,10 @@ namespace SlashDemo
             if (Charging) chargeAge = Mathf.Min(requiredTime, chargeAge + dt);
             else recoveryLeft = Mathf.Max(0, recoveryLeft - dt);
         }
-        public bool Release()
+        public bool Release(bool allowPartial = false)
         {
             if (!Charging) return false;
-            bool fire = Ready;
+            bool fire = allowPartial || Ready;
             Charging = false;
             recoveryLeft = fire ? recoveryDuration : 0;
             chargeAge = 0;

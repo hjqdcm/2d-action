@@ -127,21 +127,25 @@ namespace SlashDemo
             body.linearVelocity = velocity;
         }
 
-        public void TakeHit(int amount, Vector2 direction, float force, bool heavy = false)
+        public void TakeHit(int amount, Vector2 direction, float force, bool heavy = false, bool interrupt = true)
         {
             if (!Alive) return;
             Health = Mathf.Max(0, Health - amount);
             flash = 0.10f;
-            knockback = direction * (trainingDummy ? force * 0.1f : force);
-            phase = Phase.Stunned;
-            timer = 0.32f;
-            warning.gameObject.SetActive(false); // A hit interrupts a telegraphed attack.
-            presentation.SetPose(Vector2.zero, 0, 0);
+            if (interrupt)
+            {
+                knockback = direction * (trainingDummy ? force * 0.1f : force);
+                phase = Phase.Stunned;
+                timer = 0.32f;
+                warning.gameObject.SetActive(false);
+                presentation.SetPose(Vector2.zero, 0, 0);
+            }
             arena.Effects.Burst(transform.position, trainingDummy ? DemoArt.Gold : DemoArt.Jade, 10);
             arena.Effects.Number(transform.position, amount.ToString(), amount >= 40 ? DemoArt.Gold : Color.white);
             arena.Effects.PlayHit(heavy, !Alive);
             arena.Effects.Impact(transform.position, heavy, !Alive);
             if (Alive) return;
+            warning.gameObject.SetActive(false);
             phase = Phase.Dead;
             GetComponent<Collider2D>().enabled = false;
             body.linearVelocity = Vector2.zero;

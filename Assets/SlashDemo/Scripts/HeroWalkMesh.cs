@@ -16,12 +16,12 @@ namespace SlashDemo
         }
         public struct Rig
         {
-            public Leg left, right; public bool reversePhase;
+            public Leg left, right; public bool reversePhase; public int direction;
             public Rig(Leg left, Leg right, bool reversePhase)
-            { this.left = left; this.right = right; this.reversePhase = reversePhase; }
+            { this.left = left; this.right = right; this.reversePhase = reversePhase; direction = 0; }
         }
         public struct LegPose { public Leg rest; public Vector2 knee, ankle, sole; public float roll, depth; }
-        public struct Frame { public LegPose left, right; public float phase, blend; public Vector2 motion; }
+        public struct Frame { public LegPose left, right; public float phase, blend, upperBlend; public Vector2 motion; public int direction; }
         public struct Binding { public float left, right; }
         static readonly Rig[] Rigs = {
             new Rig(L(-.045f,.44f,-.060f,.26f,-.070f,.10f,-.085f,0), L(.045f,.44f,.052f,.26f,.075f,.10f,.090f,0), false),
@@ -35,7 +35,20 @@ namespace SlashDemo
         };
         static Leg L(float hx,float hy,float kx,float ky,float ax,float ay,float fx,float fy)
             => new Leg(new Vector2(hx,hy),new Vector2(kx,ky),new Vector2(ax,ay),new Vector2(fx,fy));
-        public static Rig ForDirection(int direction) => Rigs[Mathf.Clamp(direction,0,7)];
+        // Narrow tail regions in the cropped v5 sprites: keep the painted face and hair crown out of the drag.
+        static readonly Vector2[] HairRoots = {
+            new Vector2(.50f,.94f), new Vector2(.49f,.94f), new Vector2(.52f,.94f), new Vector2(.52f,.94f),
+            new Vector2(.50f,.94f), new Vector2(.46f,.94f), new Vector2(.50f,.94f), new Vector2(.61f,.94f)
+        };
+        static readonly Vector2[] HairTips = {
+            new Vector2(.35f,.80f), new Vector2(.30f,.69f), new Vector2(.30f,.64f), new Vector2(.38f,.61f),
+            new Vector2(.50f,.61f), new Vector2(.57f,.61f), new Vector2(.72f,.65f), new Vector2(.79f,.68f)
+        };
+        public static Rig ForDirection(int direction)
+        {
+            int index = Mathf.Clamp(direction, 0, 7);
+            var rig = Rigs[index]; rig.direction = index; return rig;
+        }
         public static Footfall Sample(float phase, float strideScale = 1f)
         {
             float t = Mathf.Repeat(phase / (Mathf.PI * 2),1);
@@ -83,7 +96,7 @@ namespace SlashDemo
         public static Frame Prepare(Rig rig,float phase,float blend,Vector2 motion,float strideScale=1f)
         {
             float leftPhase = phase+(rig.reversePhase?Mathf.PI:0), bob = BodyBob(phase);
-            return new Frame { phase=phase, blend=Mathf.Clamp01(blend), motion=motion,
+            return new Frame { phase=phase, blend=Mathf.Clamp01(blend), upperBlend=Mathf.Clamp01(blend), motion=motion, direction=rig.direction,
                 left=PoseLeg(rig.left,Sample(leftPhase,strideScale),motion,bob),
                 right=PoseLeg(rig.right,Sample(leftPhase+Mathf.PI,strideScale),motion,bob) };
         }
@@ -159,16 +172,43 @@ namespace SlashDemo
             int corner=vertex%4;
             return new Vector2((corner%2==0?220f:236f)/2048,1-(corner<2?350f:455f)/1280);
         }
+        public static float PonytailWeight(Vector2 uv, int direction)
+        {
+            int index = Mathf.Clamp(direction, 0, 7);
+            Vector2 root = HairRoots[index], tail = HairTips[index] - root;
+            float along = Mathf.Clamp01(Vector2.Dot(uv - root, tail) / tail.sqrMagnitude);
+            float radius = index == 4 ? .14f : .075f;
+            float width = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(radius * .45f, radius,
+                Vector2.Distance(uv, root + tail * along)));
+            return width * Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.08f, .9f, along));
+        }
+        public static Vector3 UpperBodyDeform(Vector3 rest, Vector2 uv, Frame frame)
+        {
+            if (frame.upperBlend <= 0 || uv.y <= .46f) return rest;
+            float torso = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.59f, .72f, uv.y))
+                * (1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.70f, .82f, uv.y)));
+            Vector2 waist = new Vector2(0, .52f);
+            Vector2 delta = (Rotate((Vector2)rest - waist, -Mathf.Sin(frame.phase) * 1f)
+                - ((Vector2)rest - waist)) * torso;
+            // Cancel the root's vertical walking bob at the head, without rotating or stretching the face.
+            delta.y -= BodyBob(frame.phase) * Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.56f, .82f, uv.y));
+            float hair = PonytailWeight(uv, frame.direction);
+            delta += new Vector2(Mathf.Sin(frame.phase * 2 - .8f) * .009f,
+                Mathf.Sin(frame.phase * 2 - 1.1f) * .006f) * hair;
+            return rest + (Vector3)(delta * frame.upperBlend);
+        }
         public static Vector3 Deform(Vector3 rest,Vector2 uv,Binding binding,Frame frame,int part=0)
         {
-            if(frame.blend<=0 || uv.y>=.59f) return rest;
+            if(frame.blend<=0) return rest;
+            Vector3 upper = UpperBodyDeform(rest, uv, frame);
+            if(uv.y>=.59f) return upper;
             Vector2 point=rest;
             if(part==1) return rest+(Vector3)((SkinLeg(point,frame.left)-point)*frame.blend);
             if(part==2) return rest+(Vector3)((SkinLeg(point,frame.right)-point)*frame.blend);
             float cloth=(1-Mathf.Clamp01(binding.left+binding.right))*Mathf.Clamp01((.55f-uv.y)/.4f)
                 *Mathf.Clamp01((Mathf.Abs(uv.x-.5f)-.15f)*5);
             Vector2 delta=frame.motion*(Mathf.Sin(frame.phase*2-uv.y*5-.55f)*.018f*cloth);
-            return rest+(Vector3)(delta*frame.blend);
+            return upper+(Vector3)(delta*frame.blend);
         }
     }
 
@@ -261,6 +301,7 @@ namespace SlashDemo
         float characterScale=1;
         bool hasWalkHeading;
         float phase,blend,smoothedSpeed;
+        float upperBodyWeight = 1;
         // 普攻时：步幅 = 常态 2/3，步频 = 常态 3/4。
         // 相位按实际位移推进，而普攻移速是 SlashPlayer.AttackMoveMultiplier(0.5)，
         // 所以相位倍率 = (3/4) / 0.5 = 1.5。改普攻移速时必须同步改这里。
@@ -296,6 +337,7 @@ namespace SlashDemo
         public void Advance(Vector2 distance,float dt,bool dashing,ObliqueView view)
         {
             if(dt<=0) return;
+            upperBodyWeight = Mathf.MoveTowards(upperBodyWeight, Attacking || dashing ? 0 : 1, dt * 12);
             motionClock+=dt;characterScale=Mathf.Max(.1f,view.characterScale);
             float travel=distance.magnitude;
             if(travel>1.5f) travel=0;
@@ -351,11 +393,15 @@ namespace SlashDemo
 
         public Vector3 PosePoint(Vector3 position)
         {
-            if (!layeredMotion || source == null || source.sprite == null) return position;
+            if (source == null || source.sprite == null) return position;
+            if (sprite != source.sprite) BuildGrid();
             var bounds = source.sprite.bounds;
             Vector2 uv = new Vector2(Mathf.InverseLerp(bounds.min.x, bounds.max.x, position.x),
                 Mathf.InverseLerp(bounds.min.y, bounds.max.y, position.y));
-            return CombatPoint(position, uv, new Vector2(0, bounds.min.y + bounds.size.y * 0.52f));
+            var frame = new HeroGaitMath.Frame { phase = phase, upperBlend = Attacking ? 0 : blend * upperBodyWeight,
+                direction = legRig.direction };
+            position = HeroGaitMath.UpperBodyDeform(position, uv, frame);
+            return layeredMotion ? CombatPoint(position, uv, new Vector2(0, bounds.min.y + bounds.size.y * 0.52f)) : position;
         }
 
         void BuildGrid()
@@ -432,6 +478,7 @@ namespace SlashDemo
             if(properties==null) properties=new MaterialPropertyBlock();
             if(sprite!=source.sprite) BuildGrid();
             var frame=HeroGaitMath.Prepare(legRig,phase,blend,motion,strideScale);
+            frame.upperBlend = Attacking ? 0 : blend * upperBodyWeight;
             Vector2 waist=new Vector2(0,sprite.bounds.min.y+sprite.bounds.size.y*.52f);
             for(int i=0;i<vertices.Length;i++)
             {

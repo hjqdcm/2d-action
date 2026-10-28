@@ -1,4 +1,4 @@
-param([ValidateSet('ChecklistChecks', 'HeavyAttackChecks', 'KineticChecks', 'BladeFeedbackChecks', 'EquipChecks', 'HeavyMotionChecks', 'SingleHandChecks', 'Hero360Checks', 'GaitChecks', 'TechniqueChecks', 'BuffBarChecks')][string]$Suite = 'ChecklistChecks')
+param([ValidateSet('ChecklistChecks', 'HeavyAttackChecks', 'KineticChecks', 'BladeFeedbackChecks', 'EquipChecks', 'HeavyMotionChecks', 'SingleHandChecks', 'Hero360Checks', 'GaitChecks', 'TechniqueChecks', 'BuffBarChecks', 'IronSwordChecks')][string]$Suite = 'ChecklistChecks')
 $ErrorActionPreference = 'Stop'
 $projectPath = Split-Path -Parent $PSScriptRoot
 $unityData = 'D:\unity\6000.6.7f1\Editor\Data'

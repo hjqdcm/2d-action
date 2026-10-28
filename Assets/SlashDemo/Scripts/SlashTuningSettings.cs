@@ -23,6 +23,48 @@ namespace SlashDemo
         public HeavyAttackSettings heavyAttack = new HeavyAttackSettings();
         public BladeFeedbackSettings bladeFeedback = new BladeFeedbackSettings();
         public FlowingCloudSettings flowingCloud = new FlowingCloudSettings();
+        public IronSwordSettings ironSword = new IronSwordSettings();
+
+        [System.Serializable]
+        public sealed class IronSwordSettings
+        {
+            public float foundationChargeBonus = 0.20f, empoweredWidthBonus = 0.30f;
+            public float scarDuration = 1.5f, scarTickInterval = 0.25f, scarTickDamageRatio = 0.10f;
+            public float scarExplosionRatio = 0.50f, scarHeavyBonus = 0.50f;
+            public float bodyDuration = 3, bodyCooldown = 10, bodyDamageReduction = 0.50f, bodyChargeBonus = 0.30f;
+            public float bodyHeavyBonus = 0.30f;
+            public IronSwordSettings Clone() => (IronSwordSettings)MemberwiseClone();
+            public float ChargeSpeed(CultivationRealm realm, bool bodyActive)
+                => 1 + (realm >= CultivationRealm.FoundationEstablishment ? foundationChargeBonus : 0)
+                    + (bodyActive ? bodyChargeBonus : 0);
+            public HeavyAttackSettings Release(HeavyAttackSettings source, int stacks, CultivationRealm realm, bool bodyActive = false)
+            {
+                var wave = source.Clone();
+                wave.damage = Mathf.Max(1, Mathf.RoundToInt(wave.damage * IronSwordRules.DamageMultiplier(stacks)
+                    * (bodyActive ? 1 + bodyHeavyBonus : 1)));
+                wave.width *= IronSwordRules.RangeMultiplier(stacks);
+                wave.distance *= IronSwordRules.RangeMultiplier(stacks);
+                if (stacks >= IronSwordRules.EmpoweredStacks && realm >= CultivationRealm.FoundationEstablishment)
+                    wave.width *= 1 + empoweredWidthBonus;
+                wave.recoveryTime = IronSwordRules.Recovery(stacks);
+                return wave;
+            }
+            public void Validate(IronSwordSettings fallback)
+            {
+                foundationChargeBonus = Safe(foundationChargeBonus, 0, 2, fallback.foundationChargeBonus);
+                empoweredWidthBonus = Safe(empoweredWidthBonus, 0, 1, fallback.empoweredWidthBonus);
+                scarDuration = Safe(scarDuration, 0.25f, 5, fallback.scarDuration);
+                scarTickInterval = Safe(scarTickInterval, 0.05f, 1, fallback.scarTickInterval);
+                scarTickDamageRatio = Safe(scarTickDamageRatio, 0.01f, 1, fallback.scarTickDamageRatio);
+                scarExplosionRatio = Safe(scarExplosionRatio, 0, 3, fallback.scarExplosionRatio);
+                scarHeavyBonus = Safe(scarHeavyBonus, 0, 2, fallback.scarHeavyBonus);
+                bodyDuration = Safe(bodyDuration, 0.1f, 5, fallback.bodyDuration);
+                bodyCooldown = Safe(bodyCooldown, 0.2f, 30, fallback.bodyCooldown);
+                bodyDamageReduction = Safe(bodyDamageReduction, 0, 0.95f, fallback.bodyDamageReduction);
+                bodyChargeBonus = Safe(bodyChargeBonus, 0, 2, fallback.bodyChargeBonus);
+                bodyHeavyBonus = Safe(bodyHeavyBonus, 0, 2, fallback.bodyHeavyBonus);
+            }
+        }
 
         [System.Serializable]
         public sealed class FlowingCloudSettings
@@ -36,12 +78,29 @@ namespace SlashDemo
             public int activeDamagePerStack = 8;
             public float rushDistancePerStack = 0.25f, activeWidth = 1.1f, activeWidthPerStack = 0.18f;
             public float rushDistanceMultiplier = 2.4f, rushTrailLifetime = 0.8f;
+            // Missing in older saves: seed once from their third strike, then tune independently.
+            public SlashPlayer.Strike finisherStrike;
+            public SlashPlayer.Strike EnsureFinisher(SlashPlayer.Strike thirdStrike = null)
+            {
+                // JsonUtility can materialize an omitted inline object with all-zero fields.
+                if (finisherStrike == null || (finisherStrike.motionVersion == 0 && finisherStrike.damage == 0))
+                {
+                    finisherStrike = (thirdStrike ?? SwordMotion.Defaults()[2]).Clone();
+                    finisherStrike.damage *= 2;
+                }
+                return finisherStrike;
+            }
             public int ActiveDamage(CultivationRealm realm, int stacks = 0)
                 => activeBaseDamage + activeDamagePerRealm * (int)realm + activeDamagePerStack * Mathf.Clamp(stacks, 0, FlowingCloudRules.MaxStacks);
             public float RushDistance(int stacks) => (rushDistance + rushDistancePerStack * Mathf.Clamp(stacks, 0, FlowingCloudRules.MaxStacks)) * rushDistanceMultiplier;
             public float ActiveWidth(int stacks) => activeWidth + activeWidthPerStack * Mathf.Clamp(stacks, 0, FlowingCloudRules.MaxStacks);
-            public FlowingCloudSettings Clone() => (FlowingCloudSettings)MemberwiseClone();
-            public void Validate(FlowingCloudSettings fallback)
+            public FlowingCloudSettings Clone()
+            {
+                var copy = (FlowingCloudSettings)MemberwiseClone();
+                copy.finisherStrike = finisherStrike?.Clone();
+                return copy;
+            }
+            public void Validate(FlowingCloudSettings fallback, SlashPlayer.Strike thirdStrike = null)
             {
                 attackSpeedPerStack = Safe(attackSpeedPerStack, 0, 0.25f, fallback.attackSpeedPerStack);
                 stackBonus = Safe(stackBonus, 0, 0.25f, fallback.stackBonus);
@@ -64,6 +123,9 @@ namespace SlashDemo
                 activeWidthPerStack = Safe(activeWidthPerStack, 0.05f, 0.4f, fallback.activeWidthPerStack);
                 rushDistanceMultiplier = Safe(rushDistanceMultiplier, 1, 5, fallback.rushDistanceMultiplier);
                 rushTrailLifetime = Safe(rushTrailLifetime, 0.2f, 2, fallback.rushTrailLifetime);
+                var finisherDefault = (thirdStrike ?? SwordMotion.Defaults()[2]).Clone();
+                finisherDefault.damage *= 2;
+                ValidateStrike(EnsureFinisher(thirdStrike), finisherDefault, 2, 400);
             }
         }
 
@@ -110,6 +172,7 @@ namespace SlashDemo
             copy.heavyAttack = (heavyAttack ?? new HeavyAttackSettings()).Clone();
             copy.bladeFeedback = (bladeFeedback ?? new BladeFeedbackSettings()).Clone();
             copy.flowingCloud = (flowingCloud ?? new FlowingCloudSettings()).Clone();
+            copy.ironSword = (ironSword ?? new IronSwordSettings()).Clone();
             return copy;
         }
 
@@ -134,6 +197,7 @@ namespace SlashDemo
                 invincible = player.invincible, strikes = CopyStrikes(player.strikes),
                 heavyAttack = (player.heavyAttack ?? new HeavyAttackSettings()).Clone(),
                 flowingCloud = player.FlowingCloud.Clone(),
+                ironSword = player.IronSword.Clone(),
                 bladeFeedback = new BladeFeedbackSettings { glowWidth = player.trailGlowWidth,
                     crescentPower = player.trailCrescentPower, punchAmount = camera.punchAmount, hdrIntensity = player.trailHDRIntensity },
                 hitStopMultiplier = effects.hitStopMultiplier, shakeMultiplier = camera.shakeMultiplier,
@@ -147,12 +211,28 @@ namespace SlashDemo
             return float.IsNaN(value) || float.IsInfinity(value) ? fallback : Mathf.Clamp(value, min, max);
         }
 
+        static void ValidateStrike(SlashPlayer.Strike s, SlashPlayer.Strike f, int slot, int maxDamage = 200)
+        {
+            SwordMotion.UpgradeLegacy(s, slot);
+            s.action = (SwordAction)slot;
+            s.damage = Mathf.Clamp(s.damage, 1, maxDamage);
+            s.reach = Safe(s.reach, 0.5f, 4.5f, f.reach);
+            s.arc = Safe(s.arc, 30, 170, f.arc);
+            s.duration = Safe(s.duration, 0.2f, 1.2f, f.duration);
+            s.knockback = Safe(s.knockback, 0, 20, f.knockback);
+            s.windupRatio = Safe(s.windupRatio, 0.1f, 0.45f, f.windupRatio);
+            s.activeRatio = Safe(s.activeRatio, 0.15f, Mathf.Min(0.55f, 0.85f - s.windupRatio), f.activeRatio);
+            s.stepDistance = 0;
+            s.bladeWidth = Safe(s.bladeWidth, 0.04f, 0.4f, f.bladeWidth);
+        }
+
         // Saved values go through the same bounds as the sliders before touching live actors.
         public void Validate(SlashTuningSettings fallback)
         {
             // JsonUtility may omit this object in pre-technique v3 saves.
             if (flowingCloud == null) flowingCloud = (fallback.flowingCloud ?? new FlowingCloudSettings()).Clone();
-            flowingCloud.Validate(fallback.flowingCloud ?? new FlowingCloudSettings());
+            if (ironSword == null) ironSword = new IronSwordSettings();
+            ironSword.Validate(fallback.ironSword ?? new IronSwordSettings());
             if (heavyAttack == null) heavyAttack = new HeavyAttackSettings();
             heavyAttack.Validate(fallback.heavyAttack ?? new HeavyAttackSettings());
             if (bladeFeedback == null) bladeFeedback = new BladeFeedbackSettings();
@@ -168,19 +248,9 @@ namespace SlashDemo
             {
                 var f = fallback.strikes[i];
                 if (strikes[i] == null) strikes[i] = f.Clone();
-                var s = strikes[i];
-                SwordMotion.UpgradeLegacy(s, i);
-                s.action = (SwordAction)i;
-                s.damage = Mathf.Clamp(s.damage, 1, 200);
-                s.reach = Safe(s.reach, 0.5f, 4.5f, f.reach);
-                s.arc = Safe(s.arc, 30, 170, f.arc);
-                s.duration = Safe(s.duration, 0.2f, 1.2f, f.duration);
-                s.knockback = Safe(s.knockback, 0, 20, f.knockback);
-                s.windupRatio = Safe(s.windupRatio, 0.1f, 0.45f, f.windupRatio);
-                s.activeRatio = Safe(s.activeRatio, 0.15f, Mathf.Min(0.55f, 0.85f - s.windupRatio), f.activeRatio);
-                s.stepDistance = 0;
-                s.bladeWidth = Safe(s.bladeWidth, 0.04f, 0.4f, f.bladeWidth);
+                ValidateStrike(strikes[i], f, i);
             }
+            flowingCloud.Validate(fallback.flowingCloud ?? new FlowingCloudSettings(), strikes[2]);
             version = 3;
             enemySpeedMultiplier = Safe(enemySpeedMultiplier, 0, 3, fallback.enemySpeedMultiplier);
             enemyHealthMultiplier = Safe(enemyHealthMultiplier, 0.2f, 5, fallback.enemyHealthMultiplier);

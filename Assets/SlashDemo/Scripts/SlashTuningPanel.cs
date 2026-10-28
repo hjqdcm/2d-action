@@ -168,7 +168,8 @@ namespace SlashDemo
             int nextPage = GUI.SelectionGrid(new Rect(r.x + 18, r.y + 57, r.width - 36, 68), page, Pages, 4, button);
             if (nextPage != page) { page = nextPage; scroll = Vector2.zero; }
             var view = new Rect(r.x + 18, r.y + 140, r.width - 36, r.height - 250);
-            float contentHeight = page == 7 ? 1150 : page == 6 ? (techniquePage == 1 ? 1300 : 900)
+            float contentHeight = page == 7 ? (arena.Player.HasIronSword ? 630 : 1720)
+                : page == 6 ? (arena.Player.HasIronSword ? 880 : techniquePage == 1 ? 1900 : 900)
                 : page == 0 ? 560 : page == 1 ? 760 : page == 2 ? 430 : page == 5 ? 560 : page == 3 ? 600 : 330;
             scroll = GUI.BeginScrollView(view, scroll, new Rect(0, 0, view.width - 22, contentHeight));
             float y = 0;
@@ -287,17 +288,21 @@ namespace SlashDemo
         {
             var s = Settings.heavyAttack;
             s.chargeTime = Slider(ref y, width, "重击蓄力时长", s.chargeTime, 0.1f, 3, 0.05f, " s");
-            s.recoveryTime = Slider(ref y, width, "释放后摇时长", s.recoveryTime, 0, 1.5f, 0.01f, " s");
+            if (!arena.Player.HasIronSword)
+                s.recoveryTime = Slider(ref y, width, "释放后摇时长", s.recoveryTime, 0, 1.5f, 0.01f, " s");
             s.width = Slider(ref y, width, "剑气宽度", s.width, 0.25f, 5, 0.05f);
             s.distance = Slider(ref y, width, "剑气飞行距离", s.distance, 1, 18, 0.25f);
             s.speed = Slider(ref y, width, "剑气飞行速度", s.speed, 3, 30, 0.5f);
             s.damage = Mathf.RoundToInt(Slider(ref y, width, "剑气伤害", s.damage, 1, 200, 1));
             s.knockback = Slider(ref y, width, "剑气击退", s.knockback, 0, 20, 0.5f);
-            GUI.Label(new Rect(0, y, width, 80), "满蓄松手后停顿 0.033s，再横扫 0.17s；扫过前方时发出剑气，之后进入收势。全程锁定移动，空格可打断。参数从下一次蓄力生效。", note);
+            GUI.Label(new Rect(0, y, width, 100), arena.Player.HasIronSword
+                ? "玄铁剑罡：上述伤害为倍率前基础值，范围为满层基础值。松手始终释放，0–6 层伤害倍率为 60%–120%，后摇由 0.10s 增至 0.28s。聚锋 / 剑痕在「功法」页，剑罡护体在「主动技能」页调整。"
+                : "满蓄松手后停顿 0.033s，再横扫 0.17s；扫过前方时发出剑气，之后进入收势。全程锁定移动，空格可打断。参数从下一次蓄力生效。", note);
         }
 
         void DrawTechnique(ref float y, float width)
         {
+            if (arena.Player.HasIronSword) { DrawIronTechnique(ref y, width); return; }
             var s = Settings.flowingCloud;
             var player = arena.Player;
             GUI.Label(new Rect(0, y, width, 32), "《流云剑诀》 · 连段", heading);
@@ -346,6 +351,7 @@ namespace SlashDemo
 
         void DrawTechniqueActive(ref float y, float width)
         {
+            if (arena.Player.HasIronSword) { DrawIronActive(ref y, width); return; }
             var s = Settings.flowingCloud;
             var player = arena.Player;
             GUI.Label(new Rect(0, y, width, 32), "Q · 流云疾斩", heading); y += 38;
@@ -358,6 +364,7 @@ namespace SlashDemo
             if (GUI.Button(new Rect(cell + 6, y, cell, 34), "清空连击", button)) player.ResetTechniqueCombo();
             if (GUI.Button(new Rect((cell + 6) * 2, y, cell, 34), "刷新 Q 冷却", button)) player.ResetTechniqueCooldown();
             y += 44;
+            GUI.Label(new Rect(0, y, width, 52), "突进与满层收招均视为普攻伤害，按消耗的叠浪层数计算增伤；5 层包含额外 20% 增伤。", note); y += 60;
             s.activeCooldown = Slider(ref y, width, "Q 冷却", s.activeCooldown, 0.2f, 15, 0.1f, " s");
             s.rushDistanceMultiplier = Slider(ref y, width, "Q 突进距离倍率", s.rushDistanceMultiplier, 1, 5, 0.1f, " ×");
             s.rushDistance = Slider(ref y, width, "Q 基础距离（倍率前）", s.rushDistance, 0, 3, 0.05f);
@@ -371,13 +378,60 @@ namespace SlashDemo
             s.rushTrailLifetime = Slider(ref y, width, "Q 轨迹剑光消散时间", s.rushTrailLifetime, 0.2f, 2, 0.05f, " s");
             s.activeDuration = Slider(ref y, width, "Q 突进动作时长", s.activeDuration, 0.16f, 0.8f, 0.01f, " s");
             s.activeKnockback = Slider(ref y, width, "Q 沿途击退", s.activeKnockback, 0, 20, 0.5f);
-            var finisher = Settings.strikes[2];
-            GUI.Label(new Rect(0, y, width, 76), "5 层落点追加普攻第三段：伤害 " + finisher.damage
-                + "，范围 " + finisher.reach.ToString("0.##") + "，挥剑 " + finisher.arc.ToString("0")
-                + "°。动作与数值共用「连招 → 第三段」设置；此斩击属于 Q，不叠连击。", note);
-            y += 84;
-            if (GUI.Button(new Rect(0, y, width, 34), "调整满层收招：普攻第三段", button))
-            { page = 1; strikeIndex = 2; scroll = Vector2.zero; }
+            GUI.Label(new Rect(0, y, width, 32), "满层收招 · 独立斩击", heading); y += 40;
+            GUI.Label(new Rect(0, y, width, 70), "消耗 5 层叠浪时在落点追加一次斩击，不叠浪。\n初始伤害为原第三段的两倍，其余参数沿用第三段；以下设置独立保存，施放时生效。", note); y += 78;
+            var finisher = s.EnsureFinisher(Settings.strikes[2]);
+            finisher.damage = Mathf.RoundToInt(Slider(ref y, width, "收招基础伤害", finisher.damage, 1, 400, 1));
+            finisher.reach = Slider(ref y, width, "收招攻击距离", finisher.reach, 0.5f, 4.5f, 0.05f);
+            finisher.arc = Slider(ref y, width, "收招挥剑幅度", finisher.arc, 30, 170, 5, "°");
+            finisher.bladeWidth = Slider(ref y, width, "收招剑刃判定宽度", finisher.bladeWidth, 0.04f, 0.4f, 0.01f);
+            finisher.duration = Slider(ref y, width, "收招总时长", finisher.duration, 0.2f, 1.2f, 0.01f, " s");
+            finisher.windupRatio = Slider(ref y, width, "收招起手占比", finisher.windupRatio, 0.1f, 0.45f, 0.01f);
+            finisher.activeRatio = Slider(ref y, width, "收招发力占比", finisher.activeRatio, 0.15f, Mathf.Min(0.55f, 0.85f - finisher.windupRatio), 0.01f);
+            finisher.knockback = Slider(ref y, width, "收招击退力度", finisher.knockback, 0, 20, 0.5f);
+        }
+
+        void DrawIronTechnique(ref float y, float width)
+        {
+            var s = Settings.ironSword;
+            var player = arena.Player;
+            GUI.Label(new Rect(0, y, width, 32), "《玄铁剑罡》 · 重击 / 蓄力", heading); y += 40;
+            int realm = GUI.Toolbar(new Rect(0, y, width, 32), (int)player.Realm, RealmOptions, button); y += 42;
+            if (realm != (int)player.Realm) player.SetRealm((CultivationRealm)realm);
+            GUI.Label(new Rect(0, y, width, 70), "当前罡气 " + player.GangQiStacks + " / 6，蓄力速度 ×"
+                + player.IronChargeSpeed.ToString("0.00") + "\n满蓄需 "
+                + (Settings.heavyAttack.chargeTime / player.IronChargeSpeed).ToString("0.00")
+                + " 秒；松手释放，筑基起蓄力中冲刺按当前进度释放重击，练气冲刺取消。基础重击参数在「重击」页。", note); y += 78;
+            string tiers = "层数    伤害倍率    范围倍率    后摇";
+            for (int stacks = 0; stacks <= IronSwordRules.MaxStacks; stacks++)
+                tiers += "\n" + stacks + "          " + IronSwordRules.DamageMultiplier(stacks).ToString("0.00")
+                    + "          " + IronSwordRules.RangeMultiplier(stacks).ToString("0.00")
+                    + "         " + IronSwordRules.Recovery(stacks).ToString("0.00") + "s";
+            GUI.Label(new Rect(0, y, width, 160), tiers, note); y += 170;
+            s.foundationChargeBonus = Slider(ref y, width, "筑基 · 蓄力速度加成", s.foundationChargeBonus * 100, 0, 200, 1, "%") / 100;
+            s.empoweredWidthBonus = Slider(ref y, width, "筑基 · 5层额外加宽", s.empoweredWidthBonus * 100, 0, 100, 1, "%") / 100;
+            s.scarDuration = Slider(ref y, width, "剑痕持续时间", s.scarDuration, 0.25f, 5, 0.05f, " s");
+            s.scarTickInterval = Slider(ref y, width, "剑痕伤害间隔", s.scarTickInterval, 0.05f, 1, 0.05f, " s");
+            s.scarTickDamageRatio = Slider(ref y, width, "每跳占重击伤害", s.scarTickDamageRatio * 100, 1, 100, 1, "%") / 100;
+            s.scarExplosionRatio = Slider(ref y, width, "元婴 · 爆炸伤害比例", s.scarExplosionRatio * 100, 0, 300, 1, "%") / 100;
+            s.scarHeavyBonus = Slider(ref y, width, "元婴 · 剑痕上重击增伤", s.scarHeavyBonus * 100, 0, 200, 1, "%") / 100;
+            GUI.Label(new Rect(0, y, width, 70), "剑痕在金丹且释放至少5层时产生，沿剑气实际飞行轨迹延伸。元婴的爆炸与重击增伤按境界解锁。切换功法请回书桌图鉴。", note);
+        }
+
+        void DrawIronActive(ref float y, float width)
+        {
+            var s = Settings.ironSword;
+            var player = arena.Player;
+            GUI.Label(new Rect(0, y, width, 32), "Q · 剑罡护体", heading); y += 40;
+            GUI.Label(new Rect(0, y, width, 72), "剩余 " + player.IronBodyTimeLeft.ToString("0.00") + " s    冷却 "
+                + player.TechniqueCooldownLeft.ToString("0.0") + " s\n不消耗罡气，可在蓄力中开启。期间受击减伤且不打断蓄力；筑基起蓄力中冲刺会释放当前重击。", note); y += 80;
+            if (GUI.Button(new Rect(0, y, width, 34), "刷新剑罡护体冷却", button)) player.ResetTechniqueCooldown(); y += 44;
+            s.bodyDuration = Slider(ref y, width, "剑罡护体持续时间", s.bodyDuration, 0.1f, 5, 0.1f, " s");
+            s.bodyCooldown = Slider(ref y, width, "剑罡护体冷却", s.bodyCooldown, 0.2f, 30, 0.1f, " s");
+            s.bodyDamageReduction = Slider(ref y, width, "剑罡护体受到伤害减少", s.bodyDamageReduction * 100, 0, 95, 1, "%") / 100;
+            s.bodyChargeBonus = Slider(ref y, width, "剑罡护体蓄力速度加成", s.bodyChargeBonus * 100, 0, 200, 1, "%") / 100;
+            s.bodyHeavyBonus = Slider(ref y, width, "剑罡护体重击伤害加成", s.bodyHeavyBonus * 100, 0, 200, 1, "%") / 100;
+            GUI.Label(new Rect(0, y, width, 92), "聚锋与剑罡护体的蓄力速度加成相加，默认筑基护体速度 ×1.50。重击增伤按释放时护体状态结算；剑痕沿用这次重击伤害。护体结束后恢复原速度；两本功法冷却独立保留。", note);
         }
 
         void OnDisable() { pointerCaptured = false; }

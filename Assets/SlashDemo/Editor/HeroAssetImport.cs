@@ -187,16 +187,23 @@ namespace SlashDemo.Editor
                 gait.Refresh();
                 var walking = gait.DeformedMesh.vertices;
                 var walkingUV = gait.DeformedMesh.uv;
-                bool feetMoved = false;
+                bool feetMoved = false, walkingTorsoMoved = false;
                 for (int i = 0; i < walking.Length; i++)
                 {
                     if (idle[i].y < 0.2f && Vector3.Distance(idle[i], walking[i]) > 0.01f) feetMoved = true;
-                    if (regionUV[i].y >= 0.59f)
-                        Require(Vector3.Distance(idle[i], walking[i]) < 0.00001f, "Walking deformed the upper body.");
+                    if (regionUV[i].y > .60f && regionUV[i].y < .72f && Vector3.Distance(idle[i], walking[i]) > .002f)
+                        walkingTorsoMoved = true;
+                    if (regionUV[i].y >= .97f)
+                        Require(Vector3.Distance(idle[i], walking[i] + Vector3.up * (gait.Bob / (HeroAppearance.BodyHeight * view.characterScale))) < .00001f,
+                            "Walking did not stabilize the head against body bob.");
+                    if (regionUV[i].y > .59f)
+                        Require(Vector3.Distance(gait.PosePoint(idle[i]), walking[i]) < .00001f,
+                            "Walking shoulder anchors do not follow the same deformation as the body mesh.");
                     Require(Vector2.Distance(originalUV[i], walkingUV[i]) < 0.000001f,
                         "Walking moved texture coordinates instead of the painted leg geometry.");
                 }
                 Require(feetMoved, "Walking did not animate the boots.");
+                Require(walkingTorsoMoved, "Walking did not add subtle upper-body movement.");
                 float frozenPhase = gait.Phase;
                 gait.Advance(Vector2.one, 0, false, view);
                 Require(gait.Phase == frozenPhase, "Hit stop advanced the walk cycle.");

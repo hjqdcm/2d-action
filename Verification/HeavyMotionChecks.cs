@@ -25,6 +25,16 @@ static class HeavyMotionChecks
         Check(clock.Advance(2) && !clock.Active, "long frames emit once and complete the whole action");
         Check(!clock.Advance(1), "completed action cannot fire again");
         clock.Begin(0); Check(clock.Advance(1) && !clock.Active, "zero recovery still preserves pause and sweep");
+        for (int stacks = 0; stacks <= 6; stacks++)
+            foreach (float dt in new[] { 1f / 30, 1f / 60, 1f / 144, 0.005928302f, 1f })
+            {
+                clock.Begin(IronSwordRules.Recovery(stacks));
+                int emissions = 0;
+                for (int frame = 0; frame < 200; frame++)
+                    if (clock.Advance(dt)) emissions++;
+                Check(!clock.Active && emissions == 1, "every Gangqi recovery tier ends at its rounded time boundary and emits once: " + stacks + ", dt=" + dt);
+                Check(!clock.Advance(1), "finished partial-release recovery cannot emit or reactivate");
+            }
         var load = SwordMotion.HeavyPose(1, false, 0, 0, 0);
         Check(Near(load.angle, 100) && Near(load.torsoShear, -0.16f) && Near(load.bodyOffset.x, -0.06f)
             && Near(load.sink, -0.10f), "charge coils sword and torso behind the shoulder with weight pressed down");

@@ -83,19 +83,45 @@ namespace SlashDemo
         public int Health { get; private set; }
         public CultivationRealm Realm { get; private set; } = CultivationRealm.QiRefining;
         public string RealmDisplayName => GetRealmName(Realm);
-        public TechniqueDefinition Technique => TechniqueCatalog.FlowingCloud;
+        public const string TechniqueSaveKey = "SlashDemo.EquippedTechnique";
+        public TechniqueDefinition Technique { get; private set; } = TechniqueCatalog.FlowingCloud;
+        public bool HasIronSword => Technique == TechniqueCatalog.IronSword;
+        public bool HasFlowingCloud => Technique == TechniqueCatalog.FlowingCloud;
+        public SlashTuningSettings.IronSwordSettings IronSword { get; private set; } = new SlashTuningSettings.IronSwordSettings();
+        SlashTuningSettings.IronSwordSettings chargedIronSettings;
+        CultivationRealm chargedIronRealm;
+        bool ironHeavy;
+        float ironBodyLeft, ironCooldownLeft;
+        public int GangQiStacks => HasIronSword && IsCharging ? IronSwordRules.Stacks(ChargeProgress) : 0;
+        public int LastReleasedGangQi { get; private set; }
+        public bool IronBodyActive => HasIronSword && ironBodyLeft > 0;
+        public float IronBodyTimeLeft => IronBodyActive ? ironBodyLeft : 0;
+        public float IronChargeSpeed => IronSword.ChargeSpeed(Realm, IronBodyActive);
         public SlashTuningSettings.FlowingCloudSettings FlowingCloud { get; private set; } = new SlashTuningSettings.FlowingCloudSettings();
         readonly FlowingCloudCombo techniqueCombo = new FlowingCloudCombo();
         readonly FlowingCloudRebuildReward rebuildReward = new FlowingCloudRebuildReward();
         public bool RebuildCooldownRewardPending => rebuildReward.Pending;
         public int ComboStacks => techniqueCombo.Stacks;
         public float ComboStackTimeLeft => techniqueCombo.StackTimeLeft(Time.time);
-        public float ComboDamageBonus => techniqueCombo.DamageMultiplier(Realm) - 1;
-        public float NormalAttackSpeedMultiplier => techniqueCombo.AttackSpeedMultiplier(Realm);
+        public float ComboDamageBonus => HasFlowingCloud ? techniqueCombo.DamageMultiplier(Realm) - 1 : 0;
+        public float NormalAttackSpeedMultiplier => HasFlowingCloud ? techniqueCombo.AttackSpeedMultiplier(Realm) : 1;
         public void CollectBuffs(CombatBuffBar buffs)
         {
             buffs.Clear();
             if (!IsAlive) return;
+            if (GangQiStacks > 0)
+                buffs.AddOrUpdate(new CombatBuffView("iron-sword-gangqi", "罡气", GangQiStacks,
+                    iconResource: "SlashDemo/IronSwordGangQiIcon", description:
+                    "松手释放重击并清空罡气；当前伤害倍率 " + IronSwordRules.DamageMultiplier(GangQiStacks).ToString("0.00")
+                    + "，范围倍率 " + IronSwordRules.RangeMultiplier(GangQiStacks).ToString("0.00")
+                    + "，收招硬直 " + IronSwordRules.Recovery(GangQiStacks).ToString("0.00") + " 秒。"));
+            if (IronBodyActive)
+                buffs.AddOrUpdate(new CombatBuffView("iron-sword-body", "剑罡护体", 1,
+                    iconResource: "SlashDemo/IronSwordActiveIcon", description:
+                    "蓄力不被受击打断，受到伤害减少 " + (IronSword.bodyDamageReduction * 100).ToString("0")
+                    + "%，蓄力速度提升 " + (IronSword.bodyChargeBonus * 100).ToString("0")
+                    + "%，重击伤害提升 " + (IronSword.bodyHeavyBonus * 100).ToString("0") + "%。",
+                    timeLeft: ironBodyLeft, duration: IronSword.bodyDuration));
             if (ComboStacks > 0 && ComboStackTimeLeft > 0)
             {
                 string effects = "每层叠浪使普攻伤害提升" + (FlowingCloud.stackBonus * 100).ToString("0.#") + "%";
@@ -110,8 +136,8 @@ namespace SlashDemo
         float normalStrikeSpeed = 1;
         public bool IsTechniqueActive { get; private set; }
         public bool IsPursuit => IsAttacking && !IsTechniqueActive && ComboIndex == 3;
-        public float TechniqueCooldownLeft => techniqueCooldownLeft;
-        public bool TechniqueReady => IsAlive && techniqueCooldownLeft <= 0;
+        public float TechniqueCooldownLeft => HasIronSword ? ironCooldownLeft : techniqueCooldownLeft;
+        public bool TechniqueReady => IsAlive && TechniqueCooldownLeft <= 0;
         public int TotalTechniqueCasts { get; private set; }
         public int TotalPursuits { get; private set; }
         public int TechniqueConsumedStacks { get; private set; }
@@ -231,6 +257,8 @@ namespace SlashDemo
             flash = Mathf.Max(0, flash - dt);
             comboRecoveryLeft = Mathf.Max(0, comboRecoveryLeft - dt);
             techniqueCooldownLeft = Mathf.Max(0, techniqueCooldownLeft - dt);
+            ironCooldownLeft = Mathf.Max(0, ironCooldownLeft - dt);
+            ironBodyLeft = Mathf.Max(0, ironBodyLeft - dt);
             techniqueCombo.ExpireStacks(Time.time);
             if (!IsAttacking && Time.time - lastAttackEnd > comboResetTime)
             {
@@ -347,8 +375,9 @@ namespace SlashDemo
         {
             if (!IsAlive || IsDashing || IsHeavyBusy || IsTechniqueActive || arena.Paused || arena.InputBlocked || strikes.Length == 0) return false;
             if (pressedAt < 0) pressedAt = Time.time;
-            int next = techniqueCombo.NextSegment(ComboIndex,
-                !IsAttacking && pressedAt - lastAttackEnd > comboResetTime, Realm);
+            int next = HasFlowingCloud ? techniqueCombo.NextSegment(ComboIndex,
+                !IsAttacking && pressedAt - lastAttackEnd > comboResetTime, Realm)
+                : (!IsAttacking && pressedAt - lastAttackEnd > comboResetTime ? 0 : (ComboIndex + 1) % 3);
             if (IsComboRecovering)
             {
                 QueueAttack(direction, next, explicitPress);
@@ -377,10 +406,10 @@ namespace SlashDemo
             techniqueCombo.ExpireStacks(Time.time);
             if (Time.time - lastAttackEnd > comboResetTime && !IsAttacking) techniqueCombo.ResetSequence();
             // A buffered fourth input may precede contact. Resolve its hit prerequisite at execution.
-            if (ComboIndex == 2 && Realm >= CultivationRealm.GoldenCore)
+            if (HasFlowingCloud && ComboIndex == 2 && Realm >= CultivationRealm.GoldenCore)
                 segment = techniqueCombo.NextSegment(2, Time.time - lastAttackEnd > comboResetTime, Realm);
             else if (segment == 3) segment = 0;
-            ComboIndex = Mathf.Clamp(segment, 0, Realm >= CultivationRealm.GoldenCore ? 3 : 2);
+            ComboIndex = Mathf.Clamp(segment, 0, HasFlowingCloud && Realm >= CultivationRealm.GoldenCore ? 3 : 2);
             attackAim = direction.sqrMagnitude < 0.001f ? Aim : direction.normalized;
             attackAge = 0;
             activeStrike = ComboIndex == 3
@@ -408,6 +437,13 @@ namespace SlashDemo
         public bool TryDash(Vector2 direction)
         {
             if (!IsAlive || IsDashing || dashCooldownLeft > 0 || arena.Paused || arena.InputBlocked) return false;
+            if (HasIronSword && ironHeavy && IsCharging && chargedIronRealm >= CultivationRealm.FoundationEstablishment)
+            {
+                // Snapshot the current charge before dashing clears it. Fire at the departure point,
+                // without leaving a delayed sweep that would run after the dash or emit twice.
+                if (!ReleaseHeavyAttack()) return false;
+                EmitHeavyWave();
+            }
             CancelHeavyAttack();
             InterruptCombo(dodging: true);
             dashDirection = direction.sqrMagnitude > 0.001f ? direction.normalized : Aim;
@@ -425,20 +461,33 @@ namespace SlashDemo
 
         public bool TryTechniqueSkill(Vector2 direction)
         {
+            if (HasIronSword)
+            {
+                if (!TechniqueReady || IsDashing || arena.Paused || arena.InputBlocked) return false;
+                ironBodyLeft = IronSword.bodyDuration;
+                ironCooldownLeft = IronSword.bodyCooldown;
+                TotalTechniqueCasts++;
+                arena.Effects.Burst(body.position, DemoArt.Gold, 12, 0.7f);
+                return true;
+            }
             if (!TechniqueReady || IsTechniqueActive || IsDashing || IsHeavyBusy || arena.Paused || arena.InputBlocked) return false;
             rebuildReward.Clear();
             arena.Effects.CancelWhirlwinds(this);
             IgnoreRushEnemyCollisions();
+            // Snapshot normal-attack damage before consumption clears the passive buff.
+            techniqueCombo.ExpireStacks(Time.time);
+            float damageMultiplier = techniqueCombo.DamageMultiplier(Realm);
             TechniqueConsumedStacks = techniqueCombo.ConsumeStacks(Time.time);
             skillSettings = FlowingCloud.Clone();
-            skillFinisherStrike = strikes[Mathf.Min(2, strikes.Length - 1)].Clone();
+            skillFinisherStrike = skillSettings.EnsureFinisher(strikes[Mathf.Min(2, strikes.Length - 1)]).Clone();
+            skillFinisherStrike.damage = Mathf.RoundToInt(skillFinisherStrike.damage * damageMultiplier);
             IsTechniqueFinisher = false;
             skillWidth = skillSettings.ActiveWidth(TechniqueConsumedStacks);
             skillRushFinished = false;
             ComboIndex = -1;
             lastAttackEnd = -10;
             attackAim = direction.sqrMagnitude > 0.001f ? direction.normalized : Aim;
-            activeStrike = new Strike(skillSettings.ActiveDamage(Realm, TechniqueConsumedStacks), skillSettings.activeReach, 115,
+            activeStrike = new Strike(Mathf.RoundToInt(skillSettings.ActiveDamage(Realm, TechniqueConsumedStacks) * damageMultiplier), skillSettings.activeReach, 115,
                 Mathf.Max(skillSettings.activeDuration, skillSettings.rushDuration), skillSettings.activeKnockback,
                 SwordAction.Cleave, 0.10f, 0.50f, 0, 0.12f);
             attackAge = 0; previousAttackOrigin = body.position;
@@ -486,7 +535,7 @@ namespace SlashDemo
             body.linearVelocity = Vector2.zero;
             RestoreRushEnemyCollisions();
             if (TechniqueConsumedStacks < FlowingCloudRules.MaxStacks) return;
-            // Run the actual third normal strike, including its animation, sword trail and swept hit timing.
+            // Use independently tuned finisher data with the third strike's motion and swept hit timing.
             // Keep it inside Q so it cannot rebuild stacks or unlock a passive follow-up.
             TotalTechniqueFinishers++;
             IsTechniqueFinisher = true;
@@ -537,9 +586,11 @@ namespace SlashDemo
         }
 
         public void ResetTechniqueCombo() => InterruptCombo();
-        public void ResetTechniqueCooldown() => techniqueCooldownLeft = 0;
+        public void ResetTechniqueCooldown()
+        { if (HasIronSword) ironCooldownLeft = 0; else techniqueCooldownLeft = 0; }
         public void FillTechniqueStacksForDebug()
         {
+            if (!HasFlowingCloud) return;
             InterruptCombo();
             for (int i = 0; i < FlowingCloud.maxStacks; i++)
             {
@@ -555,6 +606,9 @@ namespace SlashDemo
             InterruptCombo();
             chargedSettings = (heavyAttack ?? new SlashTuningSettings.HeavyAttackSettings()).Clone();
             chargedSettings.Validate(new SlashTuningSettings.HeavyAttackSettings());
+            ironHeavy = HasIronSword;
+            chargedIronSettings = IronSword.Clone();
+            chargedIronRealm = Realm;
             if (!heavyState.Begin(chargedSettings.chargeTime, chargedSettings.recoveryTime)) return false;
             chargeReadyFeedback = false;
             queued = false;
@@ -568,8 +622,17 @@ namespace SlashDemo
         {
             if (!IsAlive || arena.Paused || arena.Effects.Frozen || !IsCharging) return false;
             arena.Effects.StopChargeGather();
-            if (!equipment.Ready) { heavyState.Cancel(); return false; }
-            bool fire = heavyState.Release();
+            if (!equipment.Ready)
+            {
+                if (ironHeavy) equipment.Advance(drawDuration, true, drawDuration, sheathDuration, sheathDelay);
+                else { heavyState.Cancel(); return false; }
+            }
+            if (ironHeavy)
+            {
+                LastReleasedGangQi = IronSwordRules.Stacks(ChargeProgress);
+                chargedSettings = chargedIronSettings.Release(chargedSettings, LastReleasedGangQi, chargedIronRealm, IronBodyActive);
+            }
+            bool fire = heavyState.Release(ironHeavy);
             if (fire)
             {
                 heavyAim = Aim;
@@ -598,7 +661,9 @@ namespace SlashDemo
                 heavyPressedQueued = false;
                 handled |= RequestHeavyAttack();
             }
-            heavyState.Advance(dt);
+            float chargeSpeed = ironHeavy && IsCharging
+                ? chargedIronSettings.ChargeSpeed(chargedIronRealm, IronBodyActive) : 1;
+            heavyState.Advance(dt * chargeSpeed);
             if (heavyRelease.Active)
             {
                 float previous = heavyRelease.Age;
@@ -616,12 +681,7 @@ namespace SlashDemo
                         AddHeavyTrail(SwordMotion.HeavyPose(1, true, s, 0, born), heavyAim, born, 0.18f, 1, s);
                     }
                 }
-                if (emit)
-                {
-                    arena.Effects.LaunchSwordWave(body.position + heavyAim * 0.4f, heavyAim, chargedSettings);
-                    arena.Effects.PlaySwing(true);
-                    TotalSwordWaves++;
-                }
+                if (emit) EmitHeavyWave();
             }
             if (IsCharging)
             {
@@ -635,6 +695,19 @@ namespace SlashDemo
             }
             heavyReleaseQueued = false;
             return handled;
+        }
+
+        void EmitHeavyWave()
+        {
+            Vector2 origin = body.position + heavyAim * 0.4f;
+            bool scar = ironHeavy && LastReleasedGangQi >= IronSwordRules.EmpoweredStacks
+                && chargedIronRealm >= CultivationRealm.GoldenCore;
+            bool crushing = ironHeavy && chargedIronRealm >= CultivationRealm.NascentSoul;
+            arena.Effects.LaunchSwordWave(origin, heavyAim, chargedSettings, heavyOwner: ironHeavy ? this : null,
+                scarHeavyBonus: crushing ? chargedIronSettings.scarHeavyBonus : 0,
+                scarSettings: scar ? chargedIronSettings : null, scarExplodes: crushing);
+            arena.Effects.PlaySwing(true);
+            TotalSwordWaves++;
         }
 
         public static bool InsideArc(Vector2 origin, Vector2 facing, Vector2 target, float reach, float arc, float targetRadius)
@@ -698,7 +771,7 @@ namespace SlashDemo
 
         public void OnSwordTideHit()
         {
-            if (!IsAlive) return;
+            if (!IsAlive || !HasFlowingCloud) return;
             int previous = ComboStacks;
             techniqueCombo.RegisterSwordTideHit(Time.time, Realm);
             ApplyRebuildReward(previous);
@@ -707,6 +780,7 @@ namespace SlashDemo
 
         void RegisterTechniqueHit(int segment)
         {
+            if (!HasFlowingCloud) return;
             int previous = ComboStacks;
             if (techniqueCombo.RegisterHit(segment, Time.time, Realm)) ApplyRebuildReward(previous);
         }
@@ -735,17 +809,19 @@ namespace SlashDemo
         public bool TakeDamage(int damage, Vector2 direction)
         {
             if (!IsAlive || invincible || invulnerability > 0 || IsDashing) return false;
+            bool protectedCharge = IronBodyActive && IsCharging;
+            if (IronBodyActive) damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1 - IronSword.bodyDamageReduction)));
             Health = Mathf.Max(0, Health - damage);
-            InterruptCombo();
-            CancelHeavyAttack();
+            if (!protectedCharge) { InterruptCombo(); CancelHeavyAttack(); }
             invulnerability = 0.8f;
             flash = 0.1f;
-            recoil = direction.normalized * 5;
+            recoil = protectedCharge ? Vector2.zero : direction.normalized * 5;
             arena.Effects.Burst(transform.position, DemoArt.Red, 12);
             arena.Effects.Number(transform.position, "-" + damage, DemoArt.Red);
             arena.CameraRig.Shake(0.16f);
             if (!IsAlive)
             {
+                ironBodyLeft = 0;
                 IsAttacking = false;
                 comboRecoveryLeft = 0;
                 CancelHeavyAttack();
@@ -761,6 +837,8 @@ namespace SlashDemo
 
         public void Teleport(Vector2 position)
         {
+            ironBodyLeft = 0;
+            if (arena != null && arena.Effects != null) arena.Effects.ClearSwordScars(this);
             InterruptCombo();
             CancelHeavyAttack();
             IsAttacking = false;
@@ -790,11 +868,30 @@ namespace SlashDemo
         {
             var next = (CultivationRealm)Mathf.Clamp((int)realm,
                 (int)CultivationRealm.QiRefining, (int)CultivationRealm.NascentSoul);
-            if (Realm != next) { rebuildReward.Clear(); InterruptCombo(); }
+            if (Realm != next)
+            {
+                rebuildReward.Clear(); InterruptCombo(); CancelHeavyAttack(); ironBodyLeft = 0;
+                if (arena != null && arena.Effects != null) arena.Effects.ClearSwordScars(this);
+            }
             Realm = next;
         }
 
         public void ResetRealm() => SetRealm(CultivationRealm.QiRefining);
+
+        public bool EquipTechnique(TechniqueDefinition technique, bool save = false)
+        {
+            if (technique != TechniqueCatalog.FlowingCloud && technique != TechniqueCatalog.IronSword) return false;
+            if (Technique != technique)
+            {
+                InterruptCombo(); CancelHeavyAttack(); rebuildReward.Clear();
+                ironBodyLeft = 0; LastReleasedGangQi = 0;
+                if (arena != null && arena.Effects != null)
+                { arena.Effects.ClearSwordWaves(); arena.Effects.ClearSwordScars(this); }
+                Technique = technique;
+            }
+            if (save) { PlayerPrefs.SetString(TechniqueSaveKey, technique.id); PlayerPrefs.Save(); }
+            return true;
+        }
 
         public void Heal(int amount) { if (IsAlive) Health = Mathf.Min(maxHealth, Health + amount); }
 
@@ -819,6 +916,9 @@ namespace SlashDemo
             strikes = SlashTuningSettings.CopyStrikes(settings.strikes);
             heavyAttack = settings.heavyAttack.Clone();
             FlowingCloud = (settings.flowingCloud ?? new SlashTuningSettings.FlowingCloudSettings()).Clone();
+            FlowingCloud.EnsureFinisher(strikes[2]);
+            IronSword = (settings.ironSword ?? new SlashTuningSettings.IronSwordSettings()).Clone();
+            ironCooldownLeft = Mathf.Min(ironCooldownLeft, IronSword.bodyCooldown);
             techniqueCombo.Configure(FlowingCloud);
             techniqueCooldownLeft = Mathf.Min(techniqueCooldownLeft, FlowingCloud.activeCooldown);
         }

@@ -13,6 +13,37 @@ static class TechniqueChecks
     static void Near(float value, float expected, string message) => Check(Math.Abs(value - expected) < 0.0001f, message);
     static void Main()
     {
+        var defaults = new SlashTuningSettings();
+        defaults.Validate(new SlashTuningSettings());
+        var finisher = defaults.flowingCloud.finisherStrike;
+        Check(finisher.damage == 80 && defaults.strikes[2].damage == 40,
+            "full-stack finisher doubles damage without changing the normal third strike");
+        foreach (var field in typeof(SlashPlayer.Strike).GetFields())
+            if (field.Name != "damage")
+                Check(Equals(field.GetValue(finisher), field.GetValue(defaults.strikes[2])),
+                    "finisher initially preserves third-strike " + field.Name);
+        var migrated = new SlashTuningSettings();
+        migrated.strikes[2].damage = 73; migrated.strikes[2].reach = 3.1f;
+        migrated.strikes[2].duration = 0.64f;
+        migrated.Validate(defaults);
+        Check(migrated.flowingCloud.finisherStrike.damage == 146
+            && migrated.flowingCloud.finisherStrike.reach == 3.1f
+            && migrated.flowingCloud.finisherStrike.duration == 0.64f,
+            "missing finisher settings migrate from the saved third strike with doubled damage");
+        var cloned = migrated.Clone();
+        cloned.flowingCloud.finisherStrike.damage = 117;
+        cloned.flowingCloud.finisherStrike.reach = 1.7f;
+        Check(migrated.flowingCloud.finisherStrike.damage == 146 && migrated.flowingCloud.finisherStrike.reach == 3.1f,
+            "tuning snapshots deeply copy finisher data");
+        cloned.strikes[2].damage = 9; cloned.strikes[2].reach = 4;
+        cloned.Validate(defaults);
+        Check(cloned.flowingCloud.finisherStrike.damage == 117 && cloned.flowingCloud.finisherStrike.reach == 1.7f,
+            "later normal tuning cannot overwrite independent finisher settings or double damage again");
+        cloned.flowingCloud.finisherStrike.damage = 999;
+        cloned.flowingCloud.finisherStrike.duration = float.NaN;
+        cloned.Validate(defaults);
+        Check(cloned.flowingCloud.finisherStrike.damage == 400
+            && !float.IsNaN(cloned.flowingCloud.finisherStrike.duration), "finisher tuning validates damage and invalid timing");
         var combo = new FlowingCloudCombo();
         var rebuild = new FlowingCloudRebuildReward();
         foreach (CultivationRealm realm in Enum.GetValues(typeof(CultivationRealm)))
@@ -120,18 +151,25 @@ static class TechniqueChecks
             {
                 combo.Clear();
                 for (int i = 0; i < stacks; i++) { combo.BeginStrike(); combo.RegisterHit(2, 10 + i * 0.1f, realm); }
+                combo.ExpireStacks(10.6f);
+                float castMultiplier = combo.DamageMultiplier(realm);
+                Near(castMultiplier, 1 + stacks * 0.08f + (stacks == 5 ? 0.2f : 0),
+                    "Q snapshots the consumed layers' normal damage multiplier including the five-stack bonus");
                 Check(combo.ConsumeStacks(10.6f) == stacks, "rush snapshots every live damage-bonus layer");
                 Check(combo.Stacks == 0 && combo.StackTimeLeft(10.6f) == 0 && combo.AttackSpeedMultiplier(realm) == 1
                     && combo.DamageMultiplier(realm) == 1,
                     "Q consumption clears layers, duration and normal attack speed");
                 Check(combo.ConsumeStacks(10.6f) == 0, "the same layers cannot be spent twice");
                 Check(rush.ActiveDamage(realm, stacks) == 28 + (int)realm * 6 + stacks * 8,
-                    "every consumed stack adds damage without multiplying the passive bonus again");
+                    "every consumed stack adds flat base damage before the snapshotted normal damage multiplier");
                 Near(rush.RushDistance(stacks), (1.4f + 0.25f * stacks) * 2.4f, "all layers use the synchronized saved distance settings");
                 Near(rush.ActiveWidth(stacks), 1.1f + 0.18f * stacks, "every stack widens the sword light");
             }
         combo.BeginStrike(); combo.RegisterHit(0, 20, CultivationRealm.QiRefining);
         Check(combo.ConsumeStacks(22) == 0, "layers expiring exactly at cast time cannot power a rush");
+        Near(combo.DamageMultiplier(CultivationRealm.QiRefining), 1, "expired layers grant Q no normal damage bonus");
+        Check(TechniqueCatalog.FlowingCloud.activeEffect.EndsWith("该技能伤害视为普攻伤害。"),
+            "active description states normal attack damage classification");
         Near(rush.RushDistance(100), rush.RushDistance(5), "rush scaling is capped at five layers");
         Near(rush.ActiveWidth(-1), rush.ActiveWidth(0), "invalid negative layers cannot narrow the base attack");
         foreach (CultivationRealm realm in Enum.GetValues(typeof(CultivationRealm)))
