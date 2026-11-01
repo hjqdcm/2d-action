@@ -97,8 +97,11 @@ static class TechniqueChecks
             combo.BeginStrike(); combo.RegisterHit(2, 10, realm); combo.Clear();
             Check(combo.Stacks == 0 && !combo.StrikeHit, "interruption removes all passive state");
             Near(combo.AttackSpeedMultiplier(realm), 1, "interruption removes attack speed with the layers");
+            Near(combo.AttackMoveSpeedMultiplier(realm), 1, "interruption removes attack movement speed with the layers");
             for (int stack = 0; stack <= 5; stack++)
             {
+                Near(combo.AttackMoveSpeedMultiplier(realm), 1 + stack * 0.03f,
+                    "each live stack grants three percent attack movement speed starting at Qi Refining");
                 Near(combo.AttackSpeedMultiplier(realm), realm >= CultivationRealm.FoundationEstablishment ? 1 + stack * 0.05f : 1,
                     "each live stack grants exactly five percent speed starting at Foundation Establishment");
                 Near(combo.DamageMultiplier(realm), 1 + stack * 0.08f + (stack == 5 ? 0.20f : 0),
@@ -121,15 +124,18 @@ static class TechniqueChecks
                 for (int i = 0; i < initial; i++) { combo.BeginStrike(); combo.RegisterHit(0, 10, realm); }
                 float deadline = combo.StackUntil;
                 combo.ApplyDodge(10.5f);
-                int remaining = Math.Max(0, initial - 2);
-                Check(combo.Stacks == remaining && !combo.StrikeHit, "dodge subtracts two layers without going negative and resets hit confirmation");
+                int remaining = Math.Max(0, initial - 1);
+                Check(combo.Stacks == remaining && !combo.StrikeHit, "dodge subtracts one layer without going negative and resets hit confirmation");
                 Check(remaining == 0 ? float.IsNegativeInfinity(combo.StackUntil) : combo.StackUntil == deadline,
                     "dodge preserves the original deadline of surviving layers and clears an empty buff timer");
                 Near(combo.DamageMultiplier(realm), 1 + remaining * 0.08f, "dodge immediately reduces damage bonus to the remaining layers");
+                Near(combo.AttackMoveSpeedMultiplier(realm), 1 + remaining * 0.03f,
+                    "dodge immediately reduces attack movement speed to the remaining layers");
                 Near(combo.AttackSpeedMultiplier(realm), realm >= CultivationRealm.FoundationEstablishment ? 1 + remaining * 0.05f : 1,
                     "dodge immediately reduces Foundation speed to the remaining layers");
                 combo.ApplyDodge(12);
                 Check(combo.Stacks == 0 && combo.StackTimeLeft(12) == 0, "dodging at expiry never preserves or revives expired layers");
+                Near(combo.AttackMoveSpeedMultiplier(realm), 1, "expired stacks grant no attack movement speed");
             }
         var rush = new SlashTuningSettings.FlowingCloudSettings();
         foreach (CultivationRealm realm in new[] { CultivationRealm.GoldenCore, CultivationRealm.NascentSoul })

@@ -96,6 +96,19 @@ namespace SlashDemo
         readonly List<Vector2> scarUVs = new List<Vector2>(1800);
         readonly List<int> scarTriangles = new List<int>(9000);
         Material scarMaterial, scarDarkMaterial;
+        sealed class OrbitShield
+        {
+            public BladeLightVisual body, light;
+        }
+        const int ProtectionShieldCount = 3;
+        readonly List<OrbitShield> orbitShields = new List<OrbitShield>(ProtectionShieldCount);
+        SlashPlayer shieldOwner;
+        float shieldAge;
+        public int ActiveProtectionShieldCount => orbitShields.Count;
+        static readonly Vector2[] ShieldOutline = {
+            new Vector2(-0.30f, 0.27f), new Vector2(-0.16f, 0.37f), new Vector2(0.16f, 0.37f),
+            new Vector2(0.30f, 0.27f), new Vector2(0.25f, -0.16f), new Vector2(0, -0.40f), new Vector2(-0.25f, -0.16f)
+        };
         int scarSequence;
         public int ActiveSwordScarBurstCount => swordScarBursts.Count;
         sealed class CloudLight
@@ -192,6 +205,7 @@ namespace SlashDemo
         public void Clear()
         {
             RestoreTime();
+            ClearProtectionShields();
             foreach (var particle in particles)
                 if (particle.renderer != null) Destroy(particle.renderer.gameObject);
             particles.Clear();
@@ -1043,6 +1057,93 @@ namespace SlashDemo
             }
             for (int i = texts.Count - 1; i >= 0; i--)
                 if (Time.time - texts[i].born > 0.65f) texts.RemoveAt(i);
+        }
+
+        void ClearProtectionShields()
+        {
+            foreach (var shield in orbitShields)
+            { DisposeBladeLight(shield.body); DisposeBladeLight(shield.light); }
+            orbitShields.Clear(); shieldOwner = null; shieldAge = 0;
+        }
+
+        // Read the actual buff after player updates, so visuals follow its lifecycle and scaled clock.
+        void LateUpdate()
+        {
+            var owner = GetComponentInParent<SlashArena>().Player;
+            if (owner == null || !owner.isActiveAndEnabled || !owner.IsAlive || !owner.IronBodyActive)
+            { if (orbitShields.Count > 0) ClearProtectionShields(); return; }
+            if (shieldOwner != owner) ClearProtectionShields();
+            if (orbitShields.Count == 0)
+            {
+                shieldOwner = owner;
+                for (int i = 0; i < ProtectionShieldCount; i++)
+                {
+                    var shield = new OrbitShield { body = CreateBladeLight(owner, "剑罡护体 · 琥珀盾面", true),
+                        light = CreateBladeLight(owner, "剑罡护体 · 金纹盾光") };
+                    shield.light.properties.SetFloat("_Intensity", 1.6f);
+                    shield.light.renderer.SetPropertyBlock(shield.light.properties);
+                    orbitShields.Add(shield);
+                }
+            }
+            shieldAge += Time.deltaTime;
+            float fade = Mathf.Min(1, Mathf.Min(shieldAge / 0.12f, owner.IronBodyTimeLeft / 0.25f));
+            for (int i = 0; i < orbitShields.Count; i++) DrawProtectionShield(orbitShields[i], i, fade);
+        }
+
+        void DrawProtectionShield(OrbitShield shield, int index, float fade)
+        {
+            float angle = shieldAge * 2.8f + index * (Mathf.PI * 2 / ProtectionShieldCount) + 0.35f;
+            Vector2 radial = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+            float scale = View.characterScale;
+            Vector2 ground = (Vector2)shieldOwner.transform.position + radial * (0.54f * scale);
+            Vector3 center = View.LiftPoint(ground, (0.95f + 0.035f * Mathf.Sin(angle * 2)) * scale);
+            var rotation = View.Rotation * Quaternion.Euler(0, 0, -radial.x * 8);
+            float turn = 0.65f + 0.35f * Mathf.Abs(radial.y);
+            PlaceShieldVisual(shield.body, center, rotation, scale * 0.64f, turn);
+            PlaceShieldVisual(shield.light, center, rotation, scale * 0.64f, turn);
+            int order = ObliqueProjection.DepthOrder(ground.y);
+            BeginScarMesh();
+            scarVertices.Add(Vector3.zero); scarColors.Add(new Color(0.30f, 0.15f, 0.04f, 0.52f * fade)); scarUVs.Add(Vector2.zero);
+            for (int i = 0; i < ShieldOutline.Length; i++)
+            {
+                scarVertices.Add(ShieldOutline[i]); scarColors.Add(new Color(0.95f, 0.52f, 0.12f, 0.22f * fade)); scarUVs.Add(Vector2.zero);
+                scarTriangles.Add(0); scarTriangles.Add(i + 1); scarTriangles.Add((i + 1) % ShieldOutline.Length + 1);
+            }
+            EndScarMesh(shield.body, order);
+            BeginScarMesh();
+            Color gold = new Color(1, 0.65f, 0.18f, fade);
+            for (int i = 0; i < ShieldOutline.Length; i++)
+            {
+                Vector2 a = ShieldOutline[i], b = ShieldOutline[(i + 1) % ShieldOutline.Length];
+                AddShieldStroke(a, b, 0.055f, new Color(1, 0.52f, 0.08f, fade * 0.10f));
+                AddShieldStroke(a, b, 0.014f, gold);
+                AddShieldStroke(a * 0.78f, b * 0.78f, 0.007f, new Color(1, 0.77f, 0.32f, fade * 0.50f));
+            }
+            Color core = new Color(1, 0.88f, 0.48f, fade * 0.9f);
+            // A sword-like central crest and four facets keep each orbiting form readable as a shield.
+            AddShieldStroke(new Vector2(0, -0.22f), new Vector2(0, 0.23f), 0.018f, core);
+            AddShieldStroke(new Vector2(-0.10f, 0.04f), new Vector2(0, 0.19f), 0.012f, gold);
+            AddShieldStroke(new Vector2(0, 0.19f), new Vector2(0.10f, 0.04f), 0.012f, gold);
+            AddShieldStroke(new Vector2(0.10f, 0.04f), new Vector2(0, -0.10f), 0.012f, gold);
+            AddShieldStroke(new Vector2(0, -0.10f), new Vector2(-0.10f, 0.04f), 0.012f, gold);
+            EndScarMesh(shield.light, order + 1);
+        }
+
+        void AddShieldStroke(Vector2 a, Vector2 b, float width, Color color)
+        {
+            Vector2 axis = (b - a).normalized;
+            Vector2 side = new Vector2(-axis.y, axis.x) * (width * 0.5f);
+            int first = scarVertices.Count;
+            scarVertices.Add(a - side); scarVertices.Add(a + side); scarVertices.Add(b - side); scarVertices.Add(b + side);
+            for (int i = 0; i < 4; i++) { scarColors.Add(color); scarUVs.Add(Vector2.right); }
+            scarTriangles.Add(first); scarTriangles.Add(first + 2); scarTriangles.Add(first + 1);
+            scarTriangles.Add(first + 1); scarTriangles.Add(first + 2); scarTriangles.Add(first + 3);
+        }
+
+        static void PlaceShieldVisual(BladeLightVisual visual, Vector3 center, Quaternion rotation, float scale, float turn)
+        {
+            visual.root.position = center; visual.root.rotation = rotation;
+            visual.root.localScale = new Vector3(scale * turn, scale, scale);
         }
 
         void OnDisable() { Clear(); }

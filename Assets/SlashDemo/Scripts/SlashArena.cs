@@ -40,11 +40,11 @@ namespace SlashDemo
         public SceneTravel Travel { get; private set; }
         public TechniqueCodex Codex { get; private set; }
         public CharacterPanel CharacterPanel { get; private set; }
-        public bool InputBlocked => Paused || waitingForMenuRelease || (Tuning != null && Tuning.BlocksGameplayInput)
+        public bool InputBlocked => Defeated || Paused || waitingForMenuRelease || (Tuning != null && Tuning.BlocksGameplayInput)
             || (Travel != null && Travel.BlocksGameplayInput);
         public IReadOnlyList<SlashEnemy> Enemies => enemies;
         public bool Paused { get; private set; }
-        public bool PauseMenuOpen => Paused && (Travel == null || !Travel.IsSelectionOpen)
+        public bool PauseMenuOpen => Paused && !Defeated && (Travel == null || !Travel.IsSelectionOpen)
             && (Codex == null || !Codex.IsOpen) && (CharacterPanel == null || !CharacterPanel.IsOpen);
         public bool Defeated { get; private set; }
         public int Wave { get; private set; }
@@ -179,6 +179,8 @@ namespace SlashDemo
         {
             enemies.Remove(enemy);
             Kills++;
+            if (Travel != null) Travel.EnemyDefeated(enemy);
+            if (Travel != null && Travel.Current != TravelDestination.Manor) return;
             if (practiceMode)
             {
                 if (enemies.Count == 0)
@@ -193,10 +195,41 @@ namespace SlashDemo
 
         public void PlayerDied()
         {
+            if (Defeated) return;
             Defeated = true;
             nextWave = -1;
             effects.ClearSwordWaves();
             effects.ClearSwordScars();
+            effects.RestoreTime();
+            Paused = true;
+            Time.timeScale = 0;
+            player.GetComponent<Rigidbody2D>().linearVelocity = Vector2.zero;
+        }
+
+        public void ReviveAtHome()
+        {
+            if (!Defeated || player == null) return;
+            bool continuous3D = player.useContinuous3D;
+            if (Codex != null) Codex.Close();
+            if (CharacterPanel != null) CharacterPanel.Close();
+            effects.Clear();
+            if (Travel != null) Travel.ReturnHome();
+            var defeatedPlayer = player;
+            defeatedPlayer.gameObject.SetActive(false);
+            player = CreatePlayer(actors, ManorEnvironment.SpawnPoint, continuous3D);
+            if (Tuning != null) Tuning.ApplyPlayer(player);
+            // Death resets progression and possessions unless an explicit retention rule is added.
+            player.EquipTechnique(TechniqueCatalog.FlowingCloud, true);
+            player.ResetRealm();
+            player.Heal(player.maxHealth);
+            Destroy(defeatedPlayer.gameObject);
+            CameraRig.target = player.transform;
+            CameraRig.ResetFeedback();
+            Defeated = Paused = false;
+            Time.timeScale = 1;
+            // The resurrection click must be released before it can start a sword attack.
+            waitingForMenuRelease = true;
+            menuReleaseFrame = Time.frameCount;
         }
 
         void RemoveEnemies()
@@ -209,6 +242,13 @@ namespace SlashDemo
             }
             enemies.Clear();
         }
+
+        public void RegisterEnemy(SlashEnemy enemy)
+        {
+            if (enemy != null && !enemies.Contains(enemy)) enemies.Add(enemy);
+        }
+
+        public void UnregisterEnemy(SlashEnemy enemy) => enemies.Remove(enemy);
 
         void SpawnDummies()
         {
@@ -281,7 +321,7 @@ namespace SlashDemo
             gameObject.AddComponent<SlashHUD>();
         }
 
-        public static SlashPlayer CreatePlayer(Transform parent, Vector2 position)
+        public static SlashPlayer CreatePlayer(Transform parent, Vector2 position, bool continuous3D = false)
         {
             var go = new GameObject("Player - Swordsman");
             go.SetActive(false);
@@ -295,6 +335,7 @@ namespace SlashDemo
             DemoArt.Shape("Guard", pivot, "Square", new Vector2(0.55f, 0), new Vector2(0.065f, 0.29f), DemoArt.Gold, 321);
             DemoArt.Shape("Blade", pivot, "Blade", new Vector2(1.03f, 0), new Vector2(0.95f, 0.13f), new Color(0.89f, 1, 0.95f), 322);
             var player = go.AddComponent<SlashPlayer>();
+            player.useContinuous3D = continuous3D;
             go.AddComponent<ObliqueActor>().Initialize(parent.GetComponentInParent<SlashArena>());
             go.SetActive(true);
             return player;
@@ -316,7 +357,7 @@ namespace SlashDemo
             points[0] = Vector3.zero;
             for (int i = 1; i < points.Length - 1; i++) points[i] = DemoArt.Direction(Mathf.Lerp(-52.5f, 52.5f, (i - 1) / 21f)) * 1.15f;
             points[23] = Vector3.zero;
-            DemoArt.Line("DangerArc", warning, points, new Color(1, 0.3f, 0.3f, 0.85f), 0.045f, 10);
+            DemoArt.Line("DangerArc", warning, points, DemoArt.AttackWarningColor, .045f * DemoArt.AttackWarningWidthScale, 10);
             warning.gameObject.SetActive(false);
             var enemy = go.AddComponent<SlashEnemy>();
             enemy.trainingDummy = dummy;

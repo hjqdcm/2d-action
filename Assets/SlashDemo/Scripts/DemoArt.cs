@@ -8,6 +8,13 @@ namespace SlashDemo
         public static readonly Color Jade = new Color(0.39f, 0.94f, 0.83f);
         public static readonly Color Gold = new Color(1f, 0.73f, 0.35f);
         public static readonly Color Red = new Color(0.97f, 0.35f, 0.37f);
+        public static readonly Color AttackWarningColor = new Color(1, .06f, .08f, .70f);
+        public const float AttackWarningWidthScale = .4f;
+        public static void StyleAttackWarning(LineRenderer line, float originalWidth)
+        {
+            line.startColor = line.endColor = AttackWarningColor;
+            line.startWidth = line.endWidth = originalWidth * AttackWarningWidthScale;
+        }
         static Material material;
         static Material lineMaterial;
         public static Material LineMaterial

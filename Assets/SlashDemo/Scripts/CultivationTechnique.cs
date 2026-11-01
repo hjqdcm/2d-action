@@ -28,9 +28,9 @@ namespace SlashDemo
     {
         public static readonly TechniqueDefinition FlowingCloud = new TechniqueDefinition(
             "flowing-cloud-sword", "流云剑诀", "连段", "以快打慢，连而不绝。",
-            "流云疾斩", "消耗全部叠浪，向前突进并造成伤害，每层叠浪会额外增加伤害和突进距离，若消耗了五层叠浪，则会额外释放一次斩击，该斩击不会叠加叠浪层数。该技能伤害视为普攻伤害。",
-            "闪避扣除两层叠浪，最低为0层；受击、改用重击或传送时清空连击层数；普攻未命中不叠层、不刷新时间，叠浪到期后清空。",
-            new TechniqueStage(CultivationRealm.QiRefining, "一式·叠浪", "每次普攻命中后会叠加一层叠浪，每层叠浪会使普攻伤害提升8%，最多叠加5层，持续2秒，普攻命中后重置该时间，当叠浪层数为5层时，额外使普攻伤害提升20%。受击、重击都会清空叠浪层数；闪避会扣除2层叠浪。"),
+            "流云疾斩", "消耗全部叠浪，向前突进并造成伤害，每层叠浪会额外增加伤害和突进距离，若消耗了五层叠浪，则会额外释放一次斩击，该斩击不会叠加叠浪层数。释放期间无敌，包含满层追加斩击，技能结束或取消后解除。该技能伤害视为普攻伤害。",
+            "闪避扣除一层叠浪，最低为0层；受击、改用重击或传送时清空连击层数；普攻未命中不叠层、不刷新时间，叠浪到期后清空。",
+            new TechniqueStage(CultivationRealm.QiRefining, "一式·叠浪", "每次普攻命中后会叠加一层叠浪，每层叠浪使普攻伤害提高8%、普攻移速提高3%，最多叠加5层，持续2秒，当叠浪层数为5层时，额外使普攻伤害提升20%。受击、重击都会清空叠浪层数；闪避会扣除1层叠浪。"),
             new TechniqueStage(CultivationRealm.FoundationEstablishment, "二式·起风", "每层叠浪会额外提升5%的普攻攻速。释放完流云疾斩后，首次达到满层叠浪时，减少1秒流云疾斩的冷却时间，每次释放仅触发一次。"),
             new TechniqueStage(CultivationRealm.GoldenCore, "三式·风舞", "第3段普攻命中后继续普攻可以释放第4段普攻——旋风斩，该次普攻会对周围360度的敌人造成一次伤害，如果旋风斩命中了敌人，则可以叠加两次叠浪。"),
             new TechniqueStage(CultivationRealm.NascentSoul, "四式·剑潮", "旋风斩命中会额外释放一道剑气，剑气伤害视为普攻伤害，若剑气命中敌人，则会减少1秒流云疾斩的冷却时间。"));
@@ -56,23 +56,28 @@ namespace SlashDemo
     public static class IronSwordRules
     {
         public const int MaxStacks = 6, EmpoweredStacks = 5;
-        static readonly float[] Damages = { 0.60f, 0.70f, 0.80f, 0.90f, 1, 1.10f, 1.20f };
         static readonly float[] Ranges = { 0.60f, 0.67f, 0.73f, 0.80f, 0.87f, 0.93f, 1 };
         public static int Stacks(float progress) => UnityEngine.Mathf.Clamp(UnityEngine.Mathf.FloorToInt(
             UnityEngine.Mathf.Clamp01(progress) * MaxStacks + 0.00001f), 0, MaxStacks);
-        public static float DamageMultiplier(int stacks) => Damages[Math.Max(0, Math.Min(stacks, MaxStacks))];
+        public static float DamageMultiplier(int stacks)
+        {
+            int layers = Math.Max(0, Math.Min(stacks, MaxStacks));
+            float multiplier = 0.20f + 0.135f * layers;
+            return layers == MaxStacks ? multiplier * 1.35f : multiplier;
+        }
         public static float RangeMultiplier(int stacks) => Ranges[Math.Max(0, Math.Min(stacks, MaxStacks))];
-        public static float Recovery(int stacks) => 0.10f + 0.03f * Math.Max(0, Math.Min(stacks, MaxStacks));
+        public static float Recovery(int stacks) => 0.24f;
     }
 
     public static class FlowingCloudRules
     {
         public const float AttackSpeedPerStack = 0.05f, StackBonus = 0.08f, StackDuration = 2, ActiveCooldown = 6;
+        public const float AttackMoveSpeedPerStack = 0.03f;
         public const float SwordTideCooldownReduction = 1;
         public const float RebuildCooldownReduction = 1;
         public const float FullStackDamageBonus = 0.20f;
         public const float RushDistance = 1.4f, RushDuration = 0.12f;
-        public const int MaxStacks = 5, PursuitDamage = 48, DodgeStackCost = 2;
+        public const int MaxStacks = 5, PursuitDamage = 48, DodgeStackCost = 1;
         public static int ActiveDamage(CultivationRealm realm) => 28 + 6 * (int)realm;
     }
 
@@ -138,6 +143,9 @@ namespace SlashDemo
 
         public float AttackSpeedMultiplier(CultivationRealm realm)
             => realm >= CultivationRealm.FoundationEstablishment ? 1 + attackSpeed * Stacks : 1;
+
+        public float AttackMoveSpeedMultiplier(CultivationRealm realm)
+            => realm >= CultivationRealm.QiRefining ? 1 + FlowingCloudRules.AttackMoveSpeedPerStack * Stacks : 1;
 
         public float DamageMultiplier(CultivationRealm realm)
             => realm >= CultivationRealm.QiRefining

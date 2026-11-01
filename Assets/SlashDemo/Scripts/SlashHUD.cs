@@ -116,6 +116,9 @@ namespace SlashDemo
         CombatBuffView hoveredBuff;
         Rect hoveredBuffSlot;
         public string HoveredBuffId { get; private set; }
+        public bool HeavyChargeBarVisible => arena != null && arena.Player != null && arena.Player.IsAlive
+            && arena.Player.IsCharging && !arena.Paused && !arena.Defeated;
+        public bool DefeatPanelVisible => arena != null && arena.Defeated;
         readonly CombatBuffBar buffBar = new CombatBuffBar();
         public IReadOnlyList<CombatBuffView> VisibleBuffs
         {
@@ -251,6 +254,12 @@ namespace SlashDemo
             DrawGauge(new Rect(width / 2 - 105, height - 28, 210, 3), player.DashReady, Jade);
             Label(new Rect(width / 2 - 105, height - 58, 210, 30), player.DashReady >= 1 ? "冲刺就绪" : "冲刺冷却中", status, player.DashReady >= 1 ? Jade : Muted);
             DrawActiveSkill(width, height);
+            if (arena.Travel != null && arena.Travel.ShowPortalPrompt)
+            {
+                var prompt = new Rect(width / 2 - 175, height / 2 + 80, 350, 50);
+                DrawFrame(prompt);
+                Label(prompt, "F 开启传送阵", status, Ink);
+            }
             if (arena.Codex != null && arena.Codex.ShowPrompt)
             {
                 var prompt = new Rect(width / 2 - 175, height / 2 - 25, 350, 50);
@@ -260,16 +269,48 @@ namespace SlashDemo
 
             if (!arena.Paused && !arena.Defeated)
             {
+                DrawHeavyChargeBar(scale);
                 DrawWorldHealth(scale);
                 DrawDamageNumbers(scale);
                 DrawPointer(scale);
             }
             DrawBuffTooltip(new Rect(0, 0, width, height));
-            if (arena.Codex != null && arena.Codex.IsOpen) DrawTechniqueCodex(width, height);
+            if (DefeatPanelVisible) DrawDefeatPanel(width, height);
+            else if (arena.Codex != null && arena.Codex.IsOpen) DrawTechniqueCodex(width, height);
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsOpen) DrawCharacterPanel(width, height);
             else if (arena.Travel != null && arena.Travel.IsSelectionOpen) DrawTravelSelection(width, height);
             else if (arena.PauseMenuOpen) DrawPauseMenu(width, height);
             GUI.matrix = previous;
+        }
+
+        bool TryGetHeavyChargeBarRect(float scale, out Rect rect)
+        {
+            rect = default;
+            if (!HeavyChargeBarVisible || scale <= 0 || arena.WorldCamera == null) return false;
+            Vector3 head = arena.View.LiftPoint(arena.Player.transform.position,
+                (HeroAppearance.BodyHeight + 0.30f) * arena.View.characterScale);
+            Vector3 screen = arena.WorldCamera.WorldToScreenPoint(head);
+            if (screen.z <= 0 || screen.x < 0 || screen.x > Screen.width || screen.y < 0 || screen.y > Screen.height) return false;
+            rect = new Rect(screen.x / scale - 42, (Screen.height - screen.y) / scale - 4, 84, 8);
+            return true;
+        }
+
+        void DrawHeavyChargeBar(float scale)
+        {
+            if (!TryGetHeavyChargeBarRect(scale, out Rect rect)) return;
+            var player = arena.Player;
+            float progress = Mathf.Clamp01(player.ChargeProgress);
+            bool ready = progress >= 1;
+            Color edge = ready ? new Color(1, 0.81f, 0.38f, 0.46f) : new Color(0.76f, 0.80f, 0.65f, 0.26f);
+            Box(new Rect(rect.x - 1, rect.y - 1, rect.width + 2, rect.height + 2), new Color(0.01f, 0.03f, 0.04f, 0.10f));
+            Box(rect, new Color(0.025f, 0.06f, 0.07f, 0.28f));
+            Outline(rect, edge);
+            float fill = (rect.width - 4) * progress;
+            if (fill <= 0) return;
+            Color color = ready ? new Color(1, 0.77f, 0.27f, 0.46f + 0.05f * Mathf.Sin(Time.time * 7))
+                : new Color(0.38f, 0.84f, 0.79f, 0.40f);
+            Box(new Rect(rect.x + 2, rect.y + 2, fill, rect.height - 4), color);
+            Box(new Rect(rect.x + 2, rect.y + 2, fill, 1), new Color(1, 0.97f, 0.78f, 0.20f));
         }
 
         void DrawBuffBar(Rect area, float scale)
@@ -443,6 +484,24 @@ namespace SlashDemo
             Label(new Rect(x, y + 1, w, 30), "主动·" + technique.activeName + "[Q]", codexHeading, Jade);
             Label(new Rect(x, y + 37, w, activeHeight), technique.activeEffect, codexBody, Ink);
             GUI.EndScrollView();
+        }
+
+        internal static Rect ReviveButtonRect(float width, float height)
+            => new Rect(width / 2 - 160, height / 2 + 40, 320, 56);
+
+        void DrawDefeatPanel(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -40;
+            Box(new Rect(0, 0, width, height), new Color(0.08f, 0.10f, 0.09f, 0.72f));
+            var panel = new Rect(width / 2 - 250, height / 2 - 150, 500, 300);
+            Box(panel, new Color(0.88f, 0.83f, 0.70f, 0.98f));
+            DrawFrame(panel);
+            Label(new Rect(panel.x, panel.y + 32, panel.width, 48), "你已被击败", travelTitle, Cinnabar);
+            Label(new Rect(panel.x + 30, panel.y + 105, panel.width - 60, 36), "返回洞府，恢复全部气血。", status, Ink);
+            if (GUI.Button(ReviveButtonRect(width, height), "在洞府中复活", travelButton))
+                arena.ReviveAtHome();
+            GUI.depth = previousDepth;
         }
 
         void DrawPauseMenu(float width, float height)

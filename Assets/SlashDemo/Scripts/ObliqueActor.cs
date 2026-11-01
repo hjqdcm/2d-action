@@ -18,8 +18,10 @@ namespace SlashDemo
         float bob, lean;
         bool dummy;
         float deathProgress;
+        public float CreatureHeight { get; set; }
+        public float ShadowScale { get; set; } = 1;
         public Transform GroundWarning => groundWarning;
-        public float LabelHeight => (dummy ? 1.13f : 1.48f) * view.characterScale;
+        public float LabelHeight => (CreatureHeight > 0 ? CreatureHeight + 0.28f : dummy ? 1.13f : 1.48f) * view.characterScale;
 
         public void Initialize(SlashArena arena, bool isDummy = false)
         {
@@ -83,6 +85,7 @@ namespace SlashDemo
             float scale = view.characterScale;
             sortingGroup.sortingOrder = ObliqueProjection.DepthOrder(transform.position.y);
             float lift = (dummy ? 0.50f : 0.44f) * scale;
+            if (CreatureHeight > 0) lift = 0;
             model.localPosition = (Vector3)poseOffset + view.Up * (lift + bob);
             model.localRotation = view.Rotation * Quaternion.Euler(0, 0, lean);
             model.localScale = Vector3.one * scale * (1 - deathProgress * 0.45f);
@@ -91,6 +94,8 @@ namespace SlashDemo
                 groundShadow.transform.position = new Vector3(transform.position.x, transform.position.y, -0.015f);
                 groundShadow.transform.rotation = Quaternion.identity;
                 groundShadow.transform.localScale = new Vector3(0.92f * scale, 0.52f * scale, 1);
+                if (CreatureHeight > 0) groundShadow.transform.localScale *= 1.9f;
+                groundShadow.transform.localScale *= ShadowScale;
                 groundShadow.enabled = enemy == null || !Application.isPlaying || enemy.Alive;
             }
             if (groundWarning != null) groundWarning.position = new Vector3(transform.position.x, transform.position.y, -0.025f);
@@ -98,6 +103,7 @@ namespace SlashDemo
             {
                 float hp = enemy != null && Application.isPlaying ? enemy.Health / (float)Mathf.Max(1, enemy.maxHealth) : 1;
                 Vector3 height = view.Up * ((dummy ? 0.95f : 1.30f) * scale);
+                if (CreatureHeight > 0) height = view.Up * ((CreatureHeight + 0.1f) * scale);
                 healthBack.localPosition = height;
                 healthFill.localPosition = height + Vector3.right * ((hp - 1) * 0.4f * scale);
                 healthBack.localRotation = healthFill.localRotation = view.Rotation;

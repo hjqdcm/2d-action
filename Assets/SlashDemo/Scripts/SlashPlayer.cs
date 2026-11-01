@@ -105,6 +105,8 @@ namespace SlashDemo
         public float ComboStackTimeLeft => techniqueCombo.StackTimeLeft(Time.time);
         public float ComboDamageBonus => HasFlowingCloud ? techniqueCombo.DamageMultiplier(Realm) - 1 : 0;
         public float NormalAttackSpeedMultiplier => HasFlowingCloud ? techniqueCombo.AttackSpeedMultiplier(Realm) : 1;
+        public float NormalAttackMoveSpeedMultiplier => AttackMoveMultiplier
+            * (HasFlowingCloud ? techniqueCombo.AttackMoveSpeedMultiplier(Realm) : 1);
         public void CollectBuffs(CombatBuffBar buffs)
         {
             buffs.Clear();
@@ -124,7 +126,8 @@ namespace SlashDemo
                     timeLeft: ironBodyLeft, duration: IronSword.bodyDuration));
             if (ComboStacks > 0 && ComboStackTimeLeft > 0)
             {
-                string effects = "每层叠浪使普攻伤害提升" + (FlowingCloud.stackBonus * 100).ToString("0.#") + "%";
+                string effects = "每层叠浪使普攻伤害提高" + (FlowingCloud.stackBonus * 100).ToString("0.#")
+                    + "%、普攻移速提高" + (FlowingCloudRules.AttackMoveSpeedPerStack * 100).ToString("0.#") + "%";
                 if (Realm >= CultivationRealm.FoundationEstablishment)
                     effects += "、普攻攻速提升" + (FlowingCloud.attackSpeedPerStack * 100).ToString("0.#") + "%";
                 effects += "，叠满5层时，额外提升" + (FlowingCloudRules.FullStackDamageBonus * 100).ToString("0.#") + "%的普攻伤害";
@@ -190,6 +193,7 @@ namespace SlashDemo
         readonly List<Collider2D> overlaps = new List<Collider2D>(24);
         readonly HashSet<SlashEnemy> hitThisSwing = new HashSet<SlashEnemy>();
         readonly List<Collider2D> rushIgnoredColliders = new List<Collider2D>(24);
+        readonly List<Collider2D> dashIgnoredColliders = new List<Collider2D>(24);
         Vector2 move, dashDirection, recoil, attackAim;
         float attackAge, lastAttackEnd = -10, dashRemaining, dashCooldownLeft, invulnerability, flash, ghostTimer;
         bool queued;
@@ -426,7 +430,7 @@ namespace SlashDemo
             if (ComboIndex == 3) TotalPursuits++;
             previousAttackOrigin = body.position;
             // Apply the attack slowdown immediately, including between physics ticks.
-            body.linearVelocity = move * moveSpeed * AttackMoveMultiplier + recoil;
+            body.linearVelocity = move * moveSpeed * NormalAttackMoveSpeedMultiplier + recoil;
             swingSoundPlayed = false;
             ClearTrail();
             IsAttacking = true;
@@ -448,6 +452,7 @@ namespace SlashDemo
             InterruptCombo(dodging: true);
             dashDirection = direction.sqrMagnitude > 0.001f ? direction.normalized : Aim;
             dashRemaining = dashDuration;
+            IgnoreDashEnemyCollisions();
             dashCooldownLeft = dashCooldown;
             invulnerability = Mathf.Max(invulnerability, dashDuration);
             IsAttacking = false;
@@ -473,6 +478,7 @@ namespace SlashDemo
             if (!TechniqueReady || IsTechniqueActive || IsDashing || IsHeavyBusy || arena.Paused || arena.InputBlocked) return false;
             rebuildReward.Clear();
             arena.Effects.CancelWhirlwinds(this);
+            RestoreDashEnemyCollisions(true);
             IgnoreRushEnemyCollisions();
             // Snapshot normal-attack damage before consumption clears the passive buff.
             techniqueCombo.ExpireStacks(Time.time);
@@ -544,6 +550,39 @@ namespace SlashDemo
             swingSoundPlayed = false;
             hitThisSwing.Clear();
             ClearTrail();
+        }
+
+        void IgnoreDashEnemyCollisions()
+        {
+            var playerCollider = GetComponent<CircleCollider2D>();
+            foreach (var enemy in arena.Enemies)
+            {
+                if (enemy == null || !enemy.Alive || !enemy.gameObject.activeInHierarchy) continue;
+                foreach (var collider in enemy.GetComponentsInChildren<Collider2D>())
+                {
+                    if (!collider.enabled || collider.isTrigger || Physics2D.GetIgnoreCollision(playerCollider, collider)) continue;
+                    Physics2D.IgnoreCollision(playerCollider, collider, true);
+                    dashIgnoredColliders.Add(collider);
+                }
+            }
+        }
+
+        void RestoreDashEnemyCollisions(bool force = false)
+        {
+            var playerCollider = GetComponent<CircleCollider2D>();
+            for (int i = dashIgnoredColliders.Count - 1; i >= 0; i--)
+            {
+                var collider = dashIgnoredColliders[i];
+                if (collider != null)
+                {
+                    // Finish a short dash inside a large creature without ejecting or trapping the player.
+                    // Only that overlapping pair stays ignored until the player walks clear of it.
+                    if (!force && collider.enabled && collider.gameObject.activeInHierarchy
+                        && playerCollider.Distance(collider).distance < .025f) continue;
+                    Physics2D.IgnoreCollision(playerCollider, collider, false);
+                }
+                dashIgnoredColliders.RemoveAt(i);
+            }
         }
 
         void IgnoreRushEnemyCollisions()
@@ -793,10 +832,13 @@ namespace SlashDemo
 
         void FixedUpdate()
         {
+            if (!IsAlive) RestoreDashEnemyCollisions(true);
+            else if (IsDashing) IgnoreDashEnemyCollisions();
+            else RestoreDashEnemyCollisions();
             if (!IsAlive || arena == null || arena.Paused) { body.linearVelocity = Vector2.zero; return; }
             recoil *= Mathf.Exp(-14 * Time.fixedDeltaTime);
             Vector2 velocity = IsDashing ? dashDirection * dashSpeed : IsHeavyBusy ? Vector2.zero
-                : move * moveSpeed * (IsAttacking || IsComboRecovering ? AttackMoveMultiplier : 1) + recoil;
+                : move * moveSpeed * (IsAttacking || IsComboRecovering ? NormalAttackMoveSpeedMultiplier : 1) + recoil;
             if (IsTechniqueActive)
             {
                 float step = Mathf.Min(skillRushRemaining, Time.fixedDeltaTime);
@@ -807,13 +849,20 @@ namespace SlashDemo
         }
 
         public bool TakeDamage(int damage, Vector2 direction)
+            => ApplyDamage(damage, direction, false);
+
+        public bool TakePoisonDamage(int damage)
+            => ApplyDamage(damage, Vector2.zero, true);
+
+        bool ApplyDamage(int damage, Vector2 direction, bool poison)
         {
-            if (!IsAlive || invincible || invulnerability > 0 || IsDashing) return false;
+            if (!IsAlive || invincible || (!poison && invulnerability > 0) || IsDashing
+                || (HasFlowingCloud && IsTechniqueActive)) return false;
             bool protectedCharge = IronBodyActive && IsCharging;
             if (IronBodyActive) damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1 - IronSword.bodyDamageReduction)));
             Health = Mathf.Max(0, Health - damage);
             if (!protectedCharge) { InterruptCombo(); CancelHeavyAttack(); }
-            invulnerability = 0.8f;
+            if (!poison) invulnerability = 0.8f;
             flash = 0.1f;
             recoil = protectedCharge ? Vector2.zero : direction.normalized * 5;
             arena.Effects.Burst(transform.position, DemoArt.Red, 12);
@@ -837,6 +886,7 @@ namespace SlashDemo
 
         public void Teleport(Vector2 position)
         {
+            RestoreDashEnemyCollisions(true);
             ironBodyLeft = 0;
             if (arena != null && arena.Effects != null) arena.Effects.ClearSwordScars(this);
             InterruptCombo();
@@ -1275,9 +1325,10 @@ namespace SlashDemo
                 heavyPressedQueued = heavyReleaseQueued = false;
             }
         }
-        void OnDisable() { rebuildReward.Clear(); InterruptCombo(); CancelHeavyAttack(); }
+        void OnDisable() { dashRemaining = 0; RestoreDashEnemyCollisions(true); rebuildReward.Clear(); InterruptCombo(); CancelHeavyAttack(); }
         void OnDestroy()
         {
+            RestoreDashEnemyCollisions(true);
             if (scabbardSprite != null) Destroy(scabbardSprite);
             if (trailMesh != null) Destroy(trailMesh);
             if (trailMaterial != null) Destroy(trailMaterial);

@@ -22,7 +22,16 @@ namespace SlashDemo
             this.entry = entry; this.reservedExit = reservedExit;
             this.boundary = boundary; this.obstacles = obstacles;
         }
-        public Vector2 Entry => ManorEnvironment.Ground(entry.x, entry.y);
+        public Vector2 WorldSize => destination == TravelDestination.Wilderness
+            ? new Vector2(36, 24) : ManorEnvironment.WorldSize;
+        public Vector2 Ground(float x, float y)
+            => new Vector2((x / 1536f - .5f) * WorldSize.x, (.5f - y / 1024f) * WorldSize.y);
+        public Rect GroundRect(Rect pixels)
+        {
+            Vector2 min = Ground(pixels.xMin, pixels.yMax), max = Ground(pixels.xMax, pixels.yMin);
+            return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
+        }
+        public Vector2 Entry => Ground(entry.x, entry.y);
         public Color MistColor => destination == TravelDestination.Wilderness
             ? new Color(0.48f, 0.53f, 0.44f) : new Color(0.70f, 0.74f, 0.70f);
     }
@@ -95,9 +104,12 @@ namespace SlashDemo
             root.transform.SetParent(parent, false);
             root.Definition = definition;
             root.paint = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height),
-                Vector2.one * 0.5f, texture.width / ManorEnvironment.WorldSize.x, 0, SpriteMeshType.FullRect);
+                Vector2.one * 0.5f, texture.width / definition.WorldSize.x, 0, SpriteMeshType.FullRect);
             var renderer = root.gameObject.AddComponent<SpriteRenderer>();
             renderer.sprite = root.paint;
+            // Stretch the borderless image to the map size without scaling child colliders.
+            renderer.drawMode = SpriteDrawMode.Sliced;
+            renderer.size = definition.WorldSize;
             renderer.sortingOrder = -10000;
             var shader = Resources.Load<Shader>("SlashDemo/ManorSurface");
             if (shader != null)
@@ -110,18 +122,18 @@ namespace SlashDemo
             renderer.sharedMaterial = root.material != null ? root.material : DemoArt.Material;
             var edge = new GameObject("Walkable boundary").AddComponent<EdgeCollider2D>();
             edge.transform.SetParent(root.transform, false);
-            edge.points = ToGround(definition.boundary);
+            edge.points = root.ToGround(definition.boundary);
             edge.edgeRadius = 0.03f;
             foreach (var obstacle in definition.obstacles)
             {
                 var collider = new GameObject("Furniture footprint").AddComponent<PolygonCollider2D>();
                 collider.transform.SetParent(root.transform, false);
-                collider.points = ToGround(obstacle);
+                collider.points = root.ToGround(obstacle);
             }
             // A reserved, deliberately unlinked exit. No handler or destination is attached.
             var exit = new GameObject("Reserved exit - unlinked").AddComponent<BoxCollider2D>();
             exit.transform.SetParent(root.transform, false);
-            var bounds = ManorEnvironment.GroundRect(definition.reservedExit);
+            var bounds = definition.GroundRect(definition.reservedExit);
             exit.transform.localPosition = bounds.center;
             exit.size = bounds.size;
             exit.isTrigger = true;
@@ -163,10 +175,10 @@ namespace SlashDemo
             roof.sortingOrder = 10000;
         }
 
-        static Vector2[] ToGround(Vector2[] reference)
+        Vector2[] ToGround(Vector2[] reference)
         {
             var points = new Vector2[reference.Length];
-            for (int i = 0; i < points.Length; i++) points[i] = ManorEnvironment.Ground(reference[i].x, reference[i].y);
+            for (int i = 0; i < points.Length; i++) points[i] = Definition.Ground(reference[i].x, reference[i].y);
             return points;
         }
 

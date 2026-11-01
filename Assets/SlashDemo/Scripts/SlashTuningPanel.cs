@@ -296,7 +296,7 @@ namespace SlashDemo
             s.damage = Mathf.RoundToInt(Slider(ref y, width, "剑气伤害", s.damage, 1, 200, 1));
             s.knockback = Slider(ref y, width, "剑气击退", s.knockback, 0, 20, 0.5f);
             GUI.Label(new Rect(0, y, width, 100), arena.Player.HasIronSword
-                ? "玄铁剑罡：上述伤害为倍率前基础值，范围为满层基础值。松手始终释放，0–6 层伤害倍率为 60%–120%，后摇由 0.10s 增至 0.28s。聚锋 / 剑痕在「功法」页，剑罡护体在「主动技能」页调整。"
+                ? "玄铁剑罡：上述伤害为倍率前基础值，范围为满层基础值。伤害倍率 = 0.20 + 0.135 × 层数，满6层再 ×1.35；收招后摇恒定0.24s。聚锋 / 剑痕在「功法」页，剑罡护体在「主动技能」页调整。"
                 : "满蓄松手后停顿 0.033s，再横扫 0.17s；扫过前方时发出剑气，之后进入收势。全程锁定移动，空格可打断。参数从下一次蓄力生效。", note);
         }
 
@@ -404,7 +404,7 @@ namespace SlashDemo
                 + " 秒；松手释放，筑基起蓄力中冲刺按当前进度释放重击，练气冲刺取消。基础重击参数在「重击」页。", note); y += 78;
             string tiers = "层数    伤害倍率    范围倍率    后摇";
             for (int stacks = 0; stacks <= IronSwordRules.MaxStacks; stacks++)
-                tiers += "\n" + stacks + "          " + IronSwordRules.DamageMultiplier(stacks).ToString("0.00")
+                tiers += "\n" + stacks + "          " + IronSwordRules.DamageMultiplier(stacks).ToString("0.####")
                     + "          " + IronSwordRules.RangeMultiplier(stacks).ToString("0.00")
                     + "         " + IronSwordRules.Recovery(stacks).ToString("0.00") + "s";
             GUI.Label(new Rect(0, y, width, 160), tiers, note); y += 170;

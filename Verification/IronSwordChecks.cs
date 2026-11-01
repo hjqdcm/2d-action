@@ -12,14 +12,15 @@ static class IronSwordChecks
         var iron = new SlashTuningSettings.IronSwordSettings();
         var basis = new SlashTuningSettings.HeavyAttackSettings();
         float[] ranges = { 0.60f, 0.67f, 0.73f, 0.80f, 0.87f, 0.93f, 1 };
-        int[] damages = { 33, 38, 44, 50, 55, 60, 66 };
-        int[] protectedDamages = { 43, 50, 57, 64, 72, 79, 86 };
+        float[] multipliers = { 0.20f, 0.335f, 0.470f, 0.605f, 0.740f, 0.875f, 1.3635f };
+        int[] damages = { 11, 18, 26, 33, 41, 48, 75 };
+        int[] protectedDamages = { 14, 24, 34, 43, 53, 63, 97 };
         foreach (CultivationRealm realm in Enum.GetValues(typeof(CultivationRealm)))
             for (int stacks = 0; stacks <= 6; stacks++)
             {
-                Near(IronSwordRules.DamageMultiplier(stacks), 0.6f + stacks * 0.1f, "seven damage tiers gain twenty percentage points");
+                Near(IronSwordRules.DamageMultiplier(stacks), multipliers[stacks], "linear damage scaling grants the extra multiplier only at six layers");
                 Near(IronSwordRules.RangeMultiplier(stacks), ranges[stacks], "seven range tiers match the table exactly");
-                Near(IronSwordRules.Recovery(stacks), 0.10f + 0.03f * stacks, "seven recovery tiers match the spec");
+                Near(IronSwordRules.Recovery(stacks), 0.24f, "all Gangqi tiers have fixed recovery");
                 Check(IronSwordRules.Stacks(stacks / 6f) == stacks, "layer boundaries follow charge progress");
                 if (stacks > 0) Check(IronSwordRules.Stacks(stacks / 6f - 0.0001f) == stacks - 1, "layers cannot unlock before their threshold");
                 var wave = iron.Release(basis, stacks, realm);
@@ -27,8 +28,9 @@ static class IronSwordChecks
                 Near(wave.distance, 6 * ranges[stacks], "range scales flight distance");
                 Near(wave.width, 3.4f * ranges[stacks] * (realm >= CultivationRealm.FoundationEstablishment && stacks >= 5 ? 1.3f : 1),
                     "Foundation width bonus unlocks only at five layers");
-                Near(wave.recoveryTime, 0.10f + 0.03f * stacks, "release snapshots the tier recovery");
-                Check(basis.damage == 55 && basis.width == 3.4f && basis.distance == 6, "release never mutates base tuning");
+                Near(wave.recoveryTime, 0.24f, "Iron Sword release uses its fixed recovery");
+                Check(basis.damage == 55 && basis.width == 3.4f && basis.distance == 6 && basis.recoveryTime == 0.25f,
+                    "Iron Sword scaling never mutates other techniques' base damage or recovery");
                 var protectedWave = iron.Release(basis, stacks, realm, true);
                 Check(protectedWave.damage == protectedDamages[stacks], "protection adds thirty percent heavy damage with one final rounding");
                 Check(protectedWave.width == wave.width && protectedWave.distance == wave.distance

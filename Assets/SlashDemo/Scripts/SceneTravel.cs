@@ -16,6 +16,11 @@ namespace SlashDemo
         readonly List<(SlashEnemy enemy, bool active)> manorEnemies = new List<(SlashEnemy, bool)>();
         public TravelDestination Current { get; private set; } = TravelDestination.Manor;
         public TravelMapEnvironment ActiveMap { get; private set; }
+        public TeleportFormation Portal { get; private set; }
+        public bool ShowPortalPrompt => Portal != null && arena != null && arena.Player != null
+            && arena.Player.IsAlive && !arena.Defeated && !arena.InputBlocked
+            && (arena.Tuning == null || !arena.Tuning.IsOpen)
+            && Vector2.Distance(arena.Player.transform.position, Portal.transform.position) <= TeleportFormation.InteractionRadius;
         public bool IsSelectionOpen { get; private set; }
         public string Error => error;
         public bool BlocksGameplayInput => IsSelectionOpen || waitingForRelease;
@@ -34,7 +39,12 @@ namespace SlashDemo
             if (waitingForRelease && Time.frameCount > releaseAfterFrame
                 && !DemoInput.GameplayHeld)
                 waitingForRelease = false;
-            if (Current != TravelDestination.Manor || IsSelectionOpen) return;
+            if (Current != TravelDestination.Manor)
+            {
+                if (DemoInput.InteractPressed) TryOpenPortal();
+                return;
+            }
+            if (IsSelectionOpen) return;
             Vector2 position = arena.Player.transform.position;
             if (!ManorGate.Contains(position))
             {
@@ -47,11 +57,36 @@ namespace SlashDemo
             if (!gateArmed || arena.Paused || !arena.Player.IsAlive
                 || (arena.Tuning != null && arena.Tuning.IsOpen)) return;
             gateArmed = false;
+            OpenSelection();
+        }
+
+        void OpenSelection()
+        {
             error = null;
             IsSelectionOpen = true;
             arena.Player.CancelHeavyAttack();
             arena.Player.GetComponent<Rigidbody2D>().linearVelocity = Vector2.zero;
             arena.TogglePause();
+        }
+
+        public bool TryOpenPortal()
+        {
+            if (!ShowPortalPrompt || IsSelectionOpen) return false;
+            if ((arena.Codex != null && arena.Codex.ConsumedInputThisFrame)
+                || (arena.CharacterPanel != null && arena.CharacterPanel.ConsumedInputThisFrame)) return false;
+            OpenSelection();
+            return true;
+        }
+
+        public void EnemyDefeated(SlashEnemy defeated)
+        {
+            if (Current == TravelDestination.Manor || ActiveMap == null || Portal != null
+                || defeated.trainingDummy || !defeated.transform.IsChildOf(ActiveMap.transform)) return;
+            foreach (var enemy in arena.Enemies)
+                if (enemy != null && enemy.Alive && !enemy.trainingDummy && enemy.gameObject.activeInHierarchy) return;
+            var venom=ActiveMap.GetComponent<SerpentVenomField>();
+            if(venom!=null) venom.Clear();
+            Portal = TeleportFormation.Spawn(ActiveMap, defeated.transform.position);
         }
 
         public void CancelSelection()
@@ -77,18 +112,25 @@ namespace SlashDemo
             // Preserve the player object, health, tuning and camera; only transient motion is cleared.
             arena.Effects.Clear();
             manor.gameObject.SetActive(false);
-            manorEnemies.Clear();
-            foreach (var enemy in arena.Enemies)
-                if (enemy != null)
-                {
-                    manorEnemies.Add((enemy, enemy.gameObject.activeSelf));
-                    enemy.gameObject.SetActive(false);
-                }
+            if (Current == TravelDestination.Manor)
+            {
+                manorEnemies.Clear();
+                foreach (var enemy in arena.Enemies)
+                    if (enemy != null)
+                    {
+                        manorEnemies.Add((enemy, enemy.gameObject.activeSelf));
+                        enemy.gameObject.SetActive(false);
+                    }
+                foreach (var entry in manorEnemies) arena.UnregisterEnemy(entry.enemy);
+            }
+            else UnloadMap();
             Current = destination;
             ActiveMap = map;
             arena.WorldCamera.backgroundColor = map.Definition.MistColor;
             arena.Player.Teleport(map.Definition.Entry);
             Physics2D.SyncTransforms();
+            if (destination == TravelDestination.Wilderness)
+                WildernessEncounter.SpawnPack(arena, map);
             CloseSelection();
             arena.CameraRig.ResetFeedback();
         }
@@ -121,17 +163,27 @@ namespace SlashDemo
         void RestoreManor()
         {
             if (IsSelectionOpen) CloseSelection();
-            if (ActiveMap != null)
-            {
-                ActiveMap.gameObject.SetActive(false);
-                Destroy(ActiveMap.gameObject);
-            }
-            ActiveMap = null;
+            UnloadMap();
+            foreach (var entry in manorEnemies)
+                if (entry.enemy != null) arena.RegisterEnemy(entry.enemy);
             Current = TravelDestination.Manor;
             arena.Player.ResetRealm();
             manor.gameObject.SetActive(true);
             arena.WorldCamera.backgroundColor = manorBackground;
             gateArmed = true;
+        }
+
+        void UnloadMap()
+        {
+            if (ActiveMap != null)
+            {
+                foreach (var enemy in ActiveMap.GetComponentsInChildren<SlashEnemy>(true))
+                    arena.UnregisterEnemy(enemy);
+                ActiveMap.gameObject.SetActive(false);
+                Destroy(ActiveMap.gameObject);
+            }
+            ActiveMap = null;
+            Portal = null;
         }
     }
 }
