@@ -17,8 +17,9 @@ namespace SlashDemo
         public struct Rig
         {
             public Leg left, right; public bool reversePhase; public int direction;
+            internal bool keepFeetLevel;
             public Rig(Leg left, Leg right, bool reversePhase)
-            { this.left = left; this.right = right; this.reversePhase = reversePhase; direction = 0; }
+            { this.left = left; this.right = right; this.reversePhase = reversePhase; direction = 0; keepFeetLevel = false; }
         }
         public struct LegPose { public Leg rest; public Vector2 knee, ankle, sole; public float roll, depth; }
         public struct Frame { public LegPose left, right; public float phase, blend, upperBlend; public Vector2 motion; public int direction; }
@@ -78,7 +79,7 @@ namespace SlashDemo
             float bend = Mathf.Sqrt(Mathf.Max(0,upper*upper-along*along));
             return hip+axis*along+new Vector2(-axis.y,axis.x)*bend;
         }
-        static LegPose PoseLeg(Leg leg,Footfall step,Vector2 motion,float bob)
+        static LegPose PoseLeg(Leg leg,Footfall step,Vector2 motion,float bob,float rollDirection)
         {
             float height = leg.hip.y-leg.ankle.y;
             float upper = Mathf.Max(.12f,leg.hip.y-leg.knee.y)*1.65f;
@@ -87,7 +88,7 @@ namespace SlashDemo
             Vector2 baseKnee = SolveKnee(hip,Vector2.zero,upper,lower);
             Vector2 knee = SolveKnee(hip,new Vector2(step.travel,step.lift-bob),upper,lower);
             Vector2 offset = motion*step.travel+Vector2.up*(step.lift-bob);
-            var pose = new LegPose { rest=leg, sole=leg.sole+offset, roll=step.roll*motion.x,
+            var pose = new LegPose { rest=leg, sole=leg.sole+offset, roll=step.roll*rollDirection,
                 depth=leg.sole.y+motion.y*step.travel };
             pose.ankle = pose.sole+Rotate(leg.ankle-leg.sole,pose.roll);
             pose.knee = leg.knee+motion*(knee.x-baseKnee.x)+Vector2.up*(knee.y-baseKnee.y);
@@ -96,9 +97,10 @@ namespace SlashDemo
         public static Frame Prepare(Rig rig,float phase,float blend,Vector2 motion,float strideScale=1f)
         {
             float leftPhase = phase+(rig.reversePhase?Mathf.PI:0), bob = BodyBob(phase);
+            float rollDirection = rig.keepFeetLevel ? 0 : motion.x;
             return new Frame { phase=phase, blend=Mathf.Clamp01(blend), upperBlend=Mathf.Clamp01(blend), motion=motion, direction=rig.direction,
-                left=PoseLeg(rig.left,Sample(leftPhase,strideScale),motion,bob),
-                right=PoseLeg(rig.right,Sample(leftPhase+Mathf.PI,strideScale),motion,bob) };
+                left=PoseLeg(rig.left,Sample(leftPhase,strideScale),motion,bob,rollDirection),
+                right=PoseLeg(rig.right,Sample(leftPhase+Mathf.PI,strideScale),motion,bob,rollDirection) };
         }
         static Vector2 Rotate(Vector2 vector,float degrees)
         {
@@ -139,10 +141,29 @@ namespace SlashDemo
             float inner=Mathf.Lerp(.055f,.085f,boot),outer=Mathf.Lerp(.085f,.12f,boot);
             return (1-Mathf.SmoothStep(0,1,Mathf.InverseLerp(inner,outer,width)))*top*bottom;
         }
+
+        static float PaintedLegWeight(float height, float distance, Leg leg)
+        {
+            float towardHip = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(leg.ankle.y + .05f, leg.hip.y, height));
+            float awayFromLeg = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.12f, .26f, distance));
+            return (1 - towardHip) * (1 - awayFromLeg);
+        }
+
         public static Binding Bind(Vector2 point,Rig rig)
         {
             float leftDistance=Mathf.Abs(point.x-CenterX(rig.left,point.y));
             float rightDistance=Mathf.Abs(point.x-CenterX(rig.right,point.y));
+            if (rig.keepFeetLevel)
+            {
+                // Keep each shoe rigid and blend the two legs broadly where the painted fabric joins.
+                float width = Mathf.Lerp(.085f, .28f, Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.095f, .34f, point.y)));
+                float rightWeight = Mathf.InverseLerp(-width, width, leftDistance - rightDistance);
+                return new Binding
+                {
+                    left = (1 - rightWeight) * PaintedLegWeight(point.y, leftDistance, rig.left),
+                    right = rightWeight * PaintedLegWeight(point.y, rightDistance, rig.right)
+                };
+            }
             if(point.y<rig.left.sole.y-.005f) leftDistance+=1;
             if(point.y<rig.right.sole.y-.005f) rightDistance+=1;
             float right=Mathf.SmoothStep(0,1,Mathf.InverseLerp(-.012f,.012f,leftDistance-rightDistance));
@@ -209,6 +230,14 @@ namespace SlashDemo
                 *Mathf.Clamp01((Mathf.Abs(uv.x-.5f)-.15f)*5);
             Vector2 delta=frame.motion*(Mathf.Sin(frame.phase*2-uv.y*5-.55f)*.018f*cloth);
             return upper+(Vector3)(delta*frame.blend);
+        }
+
+        internal static Vector3 DeformPainted(Vector3 rest, Vector2 uv, Binding binding, Frame frame,
+            Vector2 leftStep, Vector2 rightStep)
+        {
+            Vector3 cloth = Deform(rest, uv, binding, frame);
+            Vector2 offset = leftStep * binding.left + rightStep * binding.right;
+            return cloth + (Vector3)(offset * frame.blend);
         }
     }
 
@@ -283,6 +312,26 @@ namespace SlashDemo
     [DisallowMultipleComponent]
     public sealed class HeroWalkMesh : MonoBehaviour
     {
+        internal readonly struct PaintedGesture
+        {
+            public readonly Vector2 Grip;
+            readonly Vector2 end;
+            readonly float solidRadius, falloffRadius;
+
+            public PaintedGesture(Vector2 grip, Vector2 end, float solidRadius, float falloffRadius)
+            {
+                Grip = grip; this.end = end; this.solidRadius = solidRadius; this.falloffRadius = falloffRadius;
+            }
+
+            public float Weight(Vector2 point)
+            {
+                Vector2 axis = end - Grip;
+                float along = Mathf.Clamp01(Vector2.Dot(point - Grip, axis) / Mathf.Max(.0001f, axis.sqrMagnitude));
+                float distance = Vector2.Distance(point, Grip + axis * along);
+                return 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(solidRadius, falloffRadius, distance));
+            }
+        }
+
         const int Columns=40, Rows=56;
         SpriteRenderer source;
         Sprite sprite;
@@ -294,6 +343,11 @@ namespace SlashDemo
         Vector2[] weights;
         HeroGaitMath.Binding[] legBindings;
         HeroGaitMath.Rig legRig;
+        HeroGaitMath.Rig? paintedRig;
+        PaintedGesture paintedGesture;
+        float[] gestureWeights;
+        Vector2 castTorso, castHand;
+        float castAngle;
         int gridVertexCount;
         int[] leftFootInFront,rightFootInFront;
         bool leftInFront;
@@ -307,6 +361,8 @@ namespace SlashDemo
         // 所以相位倍率 = (3/4) / 0.5 = 1.5。改普攻移速时必须同步改这里。
         const float AttackStrideScale = 2f/3f, AttackCadenceScale = 1.5f;
         public bool Attacking { get; set; }
+        float walkStrideScale = 1, walkCadenceScale = 1;
+        float stanceInset;
         float strideScale=1, cadenceScale=1;
         float torsoTurn,clothFollow,compression,motionClock;
         float combatShear,combatSquash;
@@ -319,10 +375,15 @@ namespace SlashDemo
         public Mesh DeformedMesh=>mesh;
         public MeshRenderer WalkingRenderer=>meshRenderer;
         public int LayerCount=>mesh!=null?mesh.subMeshCount:0;
-        public float Bob=>HeroGaitMath.BodyBob(phase)*HeroAppearance.BodyHeight*characterScale*blend;
-        public void Initialize(SpriteRenderer body)
+        float BodyHeight => paintedRig.HasValue ? transform.localScale.y : HeroAppearance.BodyHeight;
+        public float Bob=>HeroGaitMath.BodyBob(phase)*BodyHeight*characterScale*blend;
+        public void Initialize(SpriteRenderer body) => Initialize(body, null, default);
+
+        internal void Initialize(SpriteRenderer body, HeroGaitMath.Rig? painted, PaintedGesture gesture)
         {
             source=body;
+            paintedRig = painted;
+            paintedGesture = gesture;
             mesh=new Mesh { name="Hero walking legs and robe",hideFlags=HideFlags.DontSave };
             mesh.MarkDynamic();
             var renderObject=new GameObject("Walking mesh");
@@ -331,7 +392,23 @@ namespace SlashDemo
             meshRenderer=renderObject.AddComponent<MeshRenderer>();
             var shader=Resources.Load<Shader>("SlashDemo/HeroCloth");
             material=new Material(shader!=null?shader:Shader.Find("Sprites/Default")) { hideFlags=HideFlags.DontSave };
-            meshRenderer.sharedMaterials=new[]{material,material,material};
+            if (paintedRig is HeroGaitMath.Rig rig)
+            {
+                // Fit to the hero's heel-strike spacing before shortening the painted stride.
+                var hero = HeroGaitMath.ForDirection(0);
+                float stanceWidth = rig.right.sole.x - rig.left.sole.x;
+                float stanceDifference = stanceWidth - (hero.right.sole.x - hero.left.sole.x);
+                float heelStrikeTravel = HeroGaitMath.StrideDistance / (2 * HeroAppearance.BodyHeight);
+                float fittedStride = Mathf.Clamp(1 - stanceDifference / heelStrikeTravel, .5f, 1);
+                walkStrideScale = fittedStride * .6f;
+                walkCadenceScale = 1 / fittedStride;
+                strideScale = walkStrideScale;
+                cadenceScale = walkCadenceScale;
+                stanceInset = stanceWidth * .10f;
+                material.SetFloat("_PaintedPortrait", 1);
+                meshRenderer.sharedMaterial = material;
+            }
+            else meshRenderer.sharedMaterials = new[] { material, material, material };
             properties=new MaterialPropertyBlock();source.forceRenderingOff=true;Refresh();
         }
         public void Advance(Vector2 distance,float dt,bool dashing,ObliqueView view)
@@ -348,9 +425,9 @@ namespace SlashDemo
             if(blend==0) hasWalkHeading=false;
             // 步幅与步频在普攻进出时平滑过渡，避免收招瞬间双脚被拉开。
             float ease=1-Mathf.Exp(-14*dt);
-            strideScale=Mathf.Lerp(strideScale,Attacking?AttackStrideScale:1f,ease);
-            cadenceScale=Mathf.Lerp(cadenceScale,Attacking?AttackCadenceScale:1f,ease);
-            phase=HeroGaitMath.AdvancePhase(phase,travel,characterScale,dashing,dt,cadenceScale);
+            strideScale=Mathf.Lerp(strideScale,Attacking?AttackStrideScale:walkStrideScale,ease);
+            cadenceScale=Mathf.Lerp(cadenceScale,Attacking?AttackCadenceScale:walkCadenceScale,ease);
+            phase=HeroGaitMath.AdvancePhase(phase,travel,characterScale * (BodyHeight / HeroAppearance.BodyHeight),dashing,dt,cadenceScale);
             if(!dashing && travel>.00001f)
             {
                 Vector2 projected=ObliqueProjection.ProjectGround(distance/distance.magnitude,view.elevation);
@@ -358,6 +435,22 @@ namespace SlashDemo
                 hasWalkHeading=true;
             }
         }
+
+        internal void ResetWalk()
+        {
+            phase = blend = smoothedSpeed = 0;
+            hasWalkHeading = false;
+        }
+
+        internal void SetPaintedCastPose(Vector2 torso, Vector2 hand, float angle)
+        {
+            castTorso = torso;
+            castHand = hand;
+            castAngle = angle * Mathf.Deg2Rad;
+        }
+
+        static float CastTorsoWeight(float height)
+            => Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.40f, .78f, height));
 
         public void SetCombatPose(float lean, float extension, bool dashing, float dt)
         {
@@ -407,27 +500,48 @@ namespace SlashDemo
         void BuildGrid()
         {
             sprite=source.sprite;gridVertexCount=(Columns+1)*(Rows+1);
-            int count=gridVertexCount*3+16;
+            int parts = paintedRig.HasValue ? 1 : 3;
+            int count = paintedRig.HasValue ? gridVertexCount : gridVertexCount * parts + 16;
             rest=new Vector3[count];vertices=new Vector3[count];weights=new Vector2[count];
             legBindings=new HeroGaitMath.Binding[count];
+            if (paintedRig.HasValue) gestureWeights = new float[count];
             int direction=sprite.name=="Hero back"?4:0;
             string[] names={"Hero S","Hero SE","Hero E","Hero NE","Hero N","Hero NW","Hero W","Hero SW"};
             for(int i=0;i<names.Length;i++) if(sprite.name==names[i]) direction=i;
-            legRig=HeroGaitMath.ForDirection(direction);
-            var uv=new Vector2[count];var colors=new Color[count];
+            legRig=paintedRig ?? HeroGaitMath.ForDirection(direction);
+            legRig.keepFeetLevel = paintedRig.HasValue;
+            var uv=new Vector2[count];var colors=paintedRig.HasValue ? null : new Color[count];
             var rect=sprite.rect;var bounds=sprite.bounds;
             for(int y=0;y<=Rows;y++) for(int x=0;x<=Columns;x++)
             {
                 int gridIndex=y*(Columns+1)+x;
                 float u=x/(float)Columns,v=y/(float)Rows;
-                for(int part=0;part<3;part++)
+                for(int part=0;part<parts;part++)
                 {
                     int i=gridIndex+part*gridVertexCount;
                     rest[i]=new Vector3(bounds.min.x+bounds.size.x*u,bounds.min.y+bounds.size.y*v);
                     weights[i]=new Vector2(u,v);legBindings[i]=HeroGaitMath.Bind(rest[i],legRig);
+                    if (gestureWeights != null) gestureWeights[i] = paintedGesture.Weight(rest[i]);
                     uv[i]=new Vector2((rect.x+rect.width*u)/sprite.texture.width,(rect.y+rect.height*v)/sprite.texture.height);
-                    colors[i]=new Color(legBindings[i].left,legBindings[i].right,part*.5f,HeroGaitMath.SoleMask(rest[i],legBindings[i],legRig));
+                    if (colors != null)
+                        colors[i]=new Color(legBindings[i].left,legBindings[i].right,part*.5f,HeroGaitMath.SoleMask(rest[i],legBindings[i],legRig));
                 }
+            }
+            if (paintedRig.HasValue)
+            {
+                var paintedTriangles = new List<int>(Columns * Rows * 6);
+                for (int y = 0; y < Rows; y++)
+                    for (int x = 0; x < Columns; x++)
+                    {
+                        int a = y * (Columns + 1) + x;
+                        AddLegQuad(paintedTriangles, a, a + Columns + 1);
+                    }
+                mesh.Clear();
+                mesh.vertices = rest;
+                mesh.uv = uv;
+                mesh.SetTriangles(paintedTriangles, 0);
+                material.mainTexture = sprite.texture;
+                return;
             }
             var standing=HeroGaitMath.Prepare(legRig,0,0,Vector2.zero);
             for(int leg=0;leg<2;leg++) for(int vertex=0;vertex<8;vertex++)
@@ -477,12 +591,45 @@ namespace SlashDemo
             if(mesh==null || meshRenderer==null || material==null) { UseStaticBody();return; }
             if(properties==null) properties=new MaterialPropertyBlock();
             if(sprite!=source.sprite) BuildGrid();
-            var frame=HeroGaitMath.Prepare(legRig,phase,blend,motion,strideScale);
+            float mirror = source.flipX ? -1 : 1;
+            Vector2 heading = paintedRig.HasValue ? new Vector2(motion.x * mirror, motion.y) : motion;
+            var frame=HeroGaitMath.Prepare(legRig,phase,blend,heading,strideScale);
             frame.upperBlend = Attacking ? 0 : blend * upperBodyWeight;
+            Vector2 leftStep = frame.left.sole - frame.left.rest.sole;
+            Vector2 rightStep = frame.right.sole - frame.right.rest.sole;
+            if (paintedRig.HasValue)
+            {
+                // The gap between the boots is part of the same painted surface.
+                float closing = Mathf.Max(0, leftStep.x - rightStep.x) * .5f;
+                leftStep.x -= closing;
+                rightStep.x += closing;
+            }
             Vector2 waist=new Vector2(0,sprite.bounds.min.y+sprite.bounds.size.y*.52f);
+            bool posing = castAngle != 0 || castTorso != Vector2.zero || castHand != Vector2.zero;
+            float sine = Mathf.Sin(castAngle), cosine = Mathf.Cos(castAngle);
+            float gripTorsoWeight = CastTorsoWeight(paintedGesture.Grip.y - sprite.bounds.min.y);
             for(int i=0;i<vertices.Length;i++)
             {
-                var p=rest[i];if(source.flipX) p.x=-p.x;
+                var p=rest[i];
+                if (paintedRig.HasValue)
+                {
+                    var binding = legBindings[i];
+                    vertices[i] = HeroGaitMath.DeformPainted(p, weights[i], binding, frame, leftStep, rightStep);
+                    if (posing)
+                    {
+                        float handWeight = gestureWeights[i];
+                        float torsoWeight = Mathf.Lerp(CastTorsoWeight(weights[i].y), gripTorsoWeight, handWeight);
+                        Vector2 fromGrip = (Vector2)p - paintedGesture.Grip;
+                        Vector2 rotated = new Vector2(cosine * fromGrip.x - sine * fromGrip.y,
+                            sine * fromGrip.x + cosine * fromGrip.y);
+                        Vector2 gesture = (castHand + rotated - fromGrip) * handWeight;
+                        vertices[i] += (Vector3)(castTorso * torsoWeight + gesture);
+                    }
+                    // Shift each boot inward, fading the offset into the painted hips.
+                    vertices[i].x = (vertices[i].x + stanceInset * (binding.left - binding.right)) * mirror;
+                    continue;
+                }
+                if(source.flipX) p.x=-p.x;
                 if(i>=gridVertexCount*3)
                 {
                     int pants=i-gridVertexCount*3;
@@ -493,7 +640,7 @@ namespace SlashDemo
             }
             mesh.vertices=vertices;
             bool nearerLeft=frame.left.depth<frame.right.depth;
-            if(nearerLeft!=leftInFront)
+            if(!paintedRig.HasValue && nearerLeft!=leftInFront)
             {
                 leftInFront=nearerLeft;mesh.SetTriangles(leftInFront?leftFootInFront:rightFootInFront,0,false);
             }

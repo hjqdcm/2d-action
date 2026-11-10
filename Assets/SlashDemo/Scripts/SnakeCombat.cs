@@ -73,7 +73,6 @@ namespace SlashDemo
                 case State.VenomWindup:
                     Progress=Mathf.Clamp01(age/VenomWindupDuration);
                     animationMesh.SetAttackPose(Mathf.SmoothStep(0,1,Progress),0,LockedAim);
-                    venom.Charge(this,Progress);
                     if(Progress>=1) { Current=State.VenomSpit; age=Progress=0; hit=false; }
                     break;
                 case State.VenomSpit:

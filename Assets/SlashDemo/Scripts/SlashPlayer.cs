@@ -851,10 +851,13 @@ namespace SlashDemo
         public bool TakeDamage(int damage, Vector2 direction)
             => ApplyDamage(damage, direction, false);
 
+        internal bool TakeChallengeDamage(int damage, Vector2 direction, SlashEnemy opponent)
+            => ApplyDamage(damage, direction, false, opponent);
+
         public bool TakePoisonDamage(int damage)
             => ApplyDamage(damage, Vector2.zero, true);
 
-        bool ApplyDamage(int damage, Vector2 direction, bool poison)
+        bool ApplyDamage(int damage, Vector2 direction, bool poison, SlashEnemy challenger = null)
         {
             if (!IsAlive || invincible || (!poison && invulnerability > 0) || IsDashing
                 || (HasFlowingCloud && IsTechniqueActive)) return false;
@@ -870,6 +873,12 @@ namespace SlashDemo
             arena.CameraRig.Shake(0.16f);
             if (!IsAlive)
             {
+                if (challenger != null && arena.Travel != null && arena.Travel.TrySettleChallengeDefeat(challenger))
+                {
+                    Health = Mathf.CeilToInt(maxHealth * .5f);
+                    Teleport(body.position);
+                    return true;
+                }
                 ironBodyLeft = 0;
                 IsAttacking = false;
                 comboRecoveryLeft = 0;

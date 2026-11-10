@@ -13,6 +13,8 @@ namespace SlashDemo
         bool gateArmed = true, waitingForRelease;
         int releaseAfterFrame;
         string error;
+        WildernessEncounter wildernessEncounter;
+        AscensionChallenge ascension;
         readonly List<(SlashEnemy enemy, bool active)> manorEnemies = new List<(SlashEnemy, bool)>();
         public TravelDestination Current { get; private set; } = TravelDestination.Manor;
         public TravelMapEnvironment ActiveMap { get; private set; }
@@ -22,8 +24,15 @@ namespace SlashDemo
             && (arena.Tuning == null || !arena.Tuning.IsOpen)
             && Vector2.Distance(arena.Player.transform.position, Portal.transform.position) <= TeleportFormation.InteractionRadius;
         public bool IsSelectionOpen { get; private set; }
+        public bool IsChallengeDecisionOpen { get; private set; }
+        public bool CanContinueChallenge => IsChallengeDecisionOpen && ascension.HasNext;
+        public int ChallengeRound => ascension?.Round ?? 0;
+        public int ChallengeCompletedRounds => ascension?.CompletedRounds ?? 0;
+        public bool ChallengeEndedByDefeat => ascension != null && Portal != null && ascension.CompletedRounds < ascension.Round;
+        public string DefeatedChallenger { get; private set; }
+        public bool HasModal => IsSelectionOpen || IsChallengeDecisionOpen;
         public string Error => error;
-        public bool BlocksGameplayInput => IsSelectionOpen || waitingForRelease;
+        public bool BlocksGameplayInput => HasModal || waitingForRelease;
         public static Rect ManorGate => ManorEnvironment.GroundRect(new Rect(630, 770, 100, 75));
 
         public void Initialize(SlashArena owner)
@@ -64,9 +73,13 @@ namespace SlashDemo
         {
             error = null;
             IsSelectionOpen = true;
+            PauseForModal();
+        }
+
+        void PauseForModal()
+        {
             arena.Player.CancelHeavyAttack();
-            arena.Player.GetComponent<Rigidbody2D>().linearVelocity = Vector2.zero;
-            arena.TogglePause();
+            if (!arena.Paused) arena.TogglePause();
         }
 
         public bool TryOpenPortal()
@@ -82,6 +95,15 @@ namespace SlashDemo
         {
             if (Current == TravelDestination.Manor || ActiveMap == null || Portal != null
                 || defeated.trainingDummy || !defeated.transform.IsChildOf(ActiveMap.transform)) return;
+            if (ascension != null)
+            {
+                if (IsChallengeDecisionOpen || !arena.Player.IsAlive || !ascension.RecordVictory(defeated)) return;
+                if (!ascension.HasNext) HealChallengeVictory();
+                DefeatedChallenger = defeated.name;
+                IsChallengeDecisionOpen = true;
+                PauseForModal();
+                return;
+            }
             foreach (var enemy in arena.Enemies)
                 if (enemy != null && enemy.Alive && !enemy.trainingDummy && enemy.gameObject.activeInHierarchy) return;
             var venom=ActiveMap.GetComponent<SerpentVenomField>();
@@ -89,18 +111,55 @@ namespace SlashDemo
             Portal = TeleportFormation.Spawn(ActiveMap, defeated.transform.position);
         }
 
+        public void ResolveChallenge(bool continueChallenge)
+        {
+            if (!IsChallengeDecisionOpen || !arena.Player.IsAlive || arena.Defeated
+                || (continueChallenge && !ascension.HasNext)) return;
+
+            if (continueChallenge)
+            {
+                arena.Effects.Clear();
+                ascension.SpawnNext(arena, ActiveMap);
+                HealChallengeVictory();
+            }
+            else
+            {
+                Portal = TeleportFormation.Spawn(ActiveMap, ascension.Opponent.transform.position);
+            }
+            CloseModal();
+        }
+
+        void HealChallengeVictory()
+        {
+            var player = arena.Player;
+            player.Heal(Mathf.CeilToInt(player.maxHealth * .5f));
+        }
+
+        internal bool TrySettleChallengeDefeat(SlashEnemy opponent)
+        {
+            if (ascension == null || Portal != null || HasModal || opponent == null || ascension.Opponent != opponent || !opponent.Alive)
+                return false;
+
+            Portal = TeleportFormation.Spawn(ActiveMap, arena.Player.transform.position);
+            ascension.RemoveOpponent(arena);
+            arena.Effects.Clear();
+            return true;
+        }
+
         public void CancelSelection()
         {
             if (!IsSelectionOpen) return;
-            CloseSelection();
+            CloseModal();
         }
 
         public void SelectDestination(TravelDestination destination)
         {
             if (!IsSelectionOpen || destination == TravelDestination.Manor) return;
             TravelMapEnvironment map;
+            AscensionChallenge nextChallenge = null;
             try
             {
+                if (destination == TravelDestination.AscensionPlatform) nextChallenge = new AscensionChallenge();
                 map = TravelMapEnvironment.Build(manor.parent, TravelMaps.Get(destination));
             }
             catch (System.Exception exception)
@@ -126,18 +185,22 @@ namespace SlashDemo
             else UnloadMap();
             Current = destination;
             ActiveMap = map;
+            ascension = nextChallenge;
             arena.WorldCamera.backgroundColor = map.Definition.MistColor;
             arena.Player.Teleport(map.Definition.Entry);
             Physics2D.SyncTransforms();
             if (destination == TravelDestination.Wilderness)
-                WildernessEncounter.SpawnPack(arena, map);
-            CloseSelection();
+                (wildernessEncounter ??= new WildernessEncounter()).SpawnPack(arena, map);
+            if (ascension != null) ascension.SpawnNext(arena, map);
+            CloseModal();
             arena.CameraRig.ResetFeedback();
         }
 
-        void CloseSelection()
+        void CloseModal()
         {
             IsSelectionOpen = false;
+            IsChallengeDecisionOpen = false;
+            DefeatedChallenger = null;
             error = null;
             waitingForRelease = true;
             releaseAfterFrame = Time.frameCount;
@@ -162,7 +225,7 @@ namespace SlashDemo
 
         void RestoreManor()
         {
-            if (IsSelectionOpen) CloseSelection();
+            if (HasModal) CloseModal();
             UnloadMap();
             foreach (var entry in manorEnemies)
                 if (entry.enemy != null) arena.RegisterEnemy(entry.enemy);
@@ -184,6 +247,7 @@ namespace SlashDemo
             }
             ActiveMap = null;
             Portal = null;
+            ascension = null;
         }
     }
 }

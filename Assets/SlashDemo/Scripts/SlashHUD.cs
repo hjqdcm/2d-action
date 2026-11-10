@@ -254,6 +254,27 @@ namespace SlashDemo
             DrawGauge(new Rect(width / 2 - 105, height - 28, 210, 3), player.DashReady, Jade);
             Label(new Rect(width / 2 - 105, height - 58, 210, 30), player.DashReady >= 1 ? "冲刺就绪" : "冲刺冷却中", status, player.DashReady >= 1 ? Jade : Muted);
             DrawActiveSkill(width, height);
+            if (arena.Travel != null && arena.Travel.ChallengeRound > 0 && arena.Enemies.Count > 0)
+            {
+                var challenger = arena.Enemies[0].GetComponent<AscensionCultivator>();
+                string skill = challenger != null ? challenger.CastingSkill : null;
+                var round = new Rect(width / 2 - 190, 25, 380, skill == null ? 44 : 69);
+                DrawFrame(round);
+                Label(new Rect(round.x, round.y, round.width, 44),
+                    "升仙台 · 第 " + arena.Travel.ChallengeRound + " / " + AscensionCultivator.PathCount
+                    + " 战 · " + arena.Enemies[0].name, status, Ink);
+                if (skill != null)
+                    Label(new Rect(round.x, round.y + 39, round.width, 24),
+                        challenger.CastingUltimate ? "大招 · " + skill : skill, status, Cinnabar);
+            }
+            else if (arena.Travel != null && arena.Travel.ChallengeEndedByDefeat)
+            {
+                var result = new Rect(width / 2 - 220, 25, 440, 72);
+                DrawFrame(result);
+                Label(new Rect(result.x, result.y + 5, result.width, 28),
+                    "升仙台 · 本轮完成 " + arena.Travel.ChallengeCompletedRounds + " 战", status, Ink);
+                Label(new Rect(result.x, result.y + 35, result.width, 28), "已恢复一半气血 · 可使用传送阵离开", status, Jade);
+            }
             if (arena.Travel != null && arena.Travel.ShowPortalPrompt)
             {
                 var prompt = new Rect(width / 2 - 175, height / 2 + 80, 350, 50);
@@ -278,6 +299,7 @@ namespace SlashDemo
             if (DefeatPanelVisible) DrawDefeatPanel(width, height);
             else if (arena.Codex != null && arena.Codex.IsOpen) DrawTechniqueCodex(width, height);
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsOpen) DrawCharacterPanel(width, height);
+            else if (arena.Travel != null && arena.Travel.IsChallengeDecisionOpen) DrawChallengeDecision(width, height);
             else if (arena.Travel != null && arena.Travel.IsSelectionOpen) DrawTravelSelection(width, height);
             else if (arena.PauseMenuOpen) DrawPauseMenu(width, height);
             GUI.matrix = previous;
@@ -320,7 +342,7 @@ namespace SlashDemo
             Vector2 pointer = new Vector2(DemoInput.Pointer.x / scale, (Screen.height - DemoInput.Pointer.y) / scale);
             bool canHover = DemoInput.MouseAvailable && !arena.PauseMenuOpen
                 && (arena.CharacterPanel == null || !arena.CharacterPanel.IsOpen)
-                && (arena.Codex == null || !arena.Codex.IsOpen) && (arena.Travel == null || !arena.Travel.IsSelectionOpen);
+                && (arena.Codex == null || !arena.Codex.IsOpen) && (arena.Travel == null || !arena.Travel.HasModal);
             for (int i = 0; i < buffs.Count; i++)
             {
                 var slot = BuffBarLayout.Slot(i, area);
@@ -522,6 +544,38 @@ namespace SlashDemo
             GUI.enabled = previousEnabled;
             if (GUI.Button(new Rect(panel.x + 60, panel.y + 335, 320, 54), "返回家园", travelButton))
                 arena.ReturnHome();
+            GUI.depth = previousDepth;
+        }
+
+        void DrawChallengeDecision(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -30;
+            Box(new Rect(0, 0, width, height), new Color(.08f, .12f, .10f, .65f));
+            var panel = new Rect(width / 2 - 280, height / 2 - 142, 560, 284);
+            Box(panel, new Color(.88f, .83f, .70f, .98f));
+            DrawFrame(panel);
+            var travel = arena.Travel;
+            bool canContinue = travel.CanContinueChallenge;
+            Label(new Rect(panel.x, panel.y + 24, panel.width, 48),
+                canContinue ? "是否继续挑战？" : "升仙台挑战完成", travelTitle, Ink);
+            Label(new Rect(panel.x, panel.y + 88, panel.width, 30),
+                "第 " + travel.ChallengeRound + " / " + AscensionCultivator.PathCount + " 战 · 已击败" + travel.DefeatedChallenger, status, Jade);
+            if (canContinue)
+            {
+                Label(new Rect(panel.x, panel.y + 119, panel.width, 28), "回复最大气血的 50%，至多回满", status, Ink);
+                Label(new Rect(panel.x, panel.y + 148, panel.width, 28), "下一战对手气血与伤害再提升 10%", status, Ink);
+                if (GUI.Button(new Rect(panel.x + 38, panel.y + 189, 232, 50), "继续挑战", travelButton))
+                    travel.ResolveChallenge(true);
+                else if (GUI.Button(new Rect(panel.x + 290, panel.y + 189, 232, 50), "结束挑战 · 开启传送阵", travelButton))
+                    travel.ResolveChallenge(false);
+            }
+            else
+            {
+                Label(new Rect(panel.x, panel.y + 123, panel.width, 30), "通关回复 · 最大气血的 50%，至多回满", status, Ink);
+                if (GUI.Button(new Rect(panel.center.x - 120, panel.y + 189, 240, 50), "开启传送阵", travelButton))
+                    travel.ResolveChallenge(false);
+            }
             GUI.depth = previousDepth;
         }
 

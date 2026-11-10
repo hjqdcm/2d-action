@@ -51,7 +51,7 @@ namespace SlashDemo
             bear = GetComponent<BearDemon>(); mesh = GetComponent<BearWalkMesh>(); body = GetComponent<Rigidbody2D>();
             steering = GetComponent<BearPackSteering>();
             arc = warning.GetComponentInChildren<LineRenderer>(true);
-            lane = DemoArt.Line("Charge corridor", warning, new Vector3[5], DemoArt.AttackWarningColor, .055f * DemoArt.AttackWarningWidthScale, -69);
+            lane = DemoArt.Line("Charge corridor", warning, new Vector3[5], DemoArt.AttackWarningColor, DemoArt.BeastAttackWarningWidth, -69);
             lane.loop = true;
             swipe = DemoArt.Line("Three claw trails", warning, new Vector3[2], new Color(1,.85f,.5f,.9f), .065f, -68);
             warning.gameObject.SetActive(false);

@@ -56,18 +56,10 @@ namespace SlashDemo
             foreach(var z in zones) if(z.caster==caster && z.phase==Phase.Charge) return false;
             var root=new GameObject("Venom locked landing zone").transform; root.SetParent(transform,false);
             root.position=new Vector3(target.x,target.y,-.035f);
-            var warning=DemoArt.Ring("Venom landing warning",root,Radius,DemoArt.AttackWarningColor,.035f*DemoArt.AttackWarningWidthScale,-64);
+            var warning=DemoArt.Ring("Venom landing warning",root,Radius,DemoArt.AttackWarningColor,DemoArt.BeastAttackWarningWidth,-64);
             zones.Add(new Zone { caster=caster,target=target,root=root,warning=warning });
             nextReservation=clock+GroupInterval;
             return true;
-        }
-        public void Charge(SnakeCombat caster,float progress)
-        {
-            foreach(var z in zones) if(z.caster==caster && z.phase==Phase.Charge)
-            {
-                z.warning.startColor=z.warning.endColor=new Color(1,.06f,.08f,Mathf.Lerp(.4f,.9f,progress));
-                return;
-            }
         }
         public bool Launch(SnakeCombat caster,Vector3 mouth)
         {

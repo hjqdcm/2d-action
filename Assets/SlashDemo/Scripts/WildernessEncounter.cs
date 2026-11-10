@@ -4,19 +4,32 @@ namespace SlashDemo
 {
     public enum WildernessCreature { Bear, Snake, Ape }
 
-    public static class WildernessEncounter
+    public sealed class WildernessEncounter
     {
-        public static WildernessCreature Choose(float roll)
-            => roll < 1f / 3 ? WildernessCreature.Bear : roll < 2f / 3 ? WildernessCreature.Snake : WildernessCreature.Ape;
+        readonly WildernessCreature[] order = { WildernessCreature.Bear, WildernessCreature.Snake, WildernessCreature.Ape };
+        int next;
 
-        public static void SpawnPack(SlashArena arena, TravelMapEnvironment map)
+        public WildernessCreature NextCreature => order[next];
+
+        public WildernessEncounter()
         {
-            switch (Choose(Random.value))
+            // Shuffle once so windows that cross the end of the rotation also contain all three kinds.
+            for (int i = order.Length - 1; i > 0; i--)
+            {
+                int j = Random.Range(0, i + 1);
+                (order[i], order[j]) = (order[j], order[i]);
+            }
+        }
+
+        public void SpawnPack(SlashArena arena, TravelMapEnvironment map)
+        {
+            switch (NextCreature)
             {
                 case WildernessCreature.Bear: BearDemon.SpawnPack(arena, map); break;
                 case WildernessCreature.Snake: SnakeDemon.SpawnPack(arena, map); break;
                 case WildernessCreature.Ape: ApeDemon.SpawnPack(arena, map); break;
             }
+            next = (next + 1) % order.Length;
         }
     }
 }

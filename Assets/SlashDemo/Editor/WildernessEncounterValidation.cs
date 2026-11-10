@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -11,10 +12,12 @@ namespace SlashDemo.Editor
     public static class WildernessEncounterValidation
     {
         const string Key = "SlashDemo.WildernessEncounterValidation";
+        static readonly FieldInfo EncounterField = typeof(SceneTravel).GetField("wildernessEncounter", BindingFlags.Instance | BindingFlags.NonPublic);
+        static readonly WildernessCreature[] encounters = new WildernessCreature[7];
         static SlashArena arena;
         static SlashEnemy[] pack;
         static Vector2[] initial;
-        static int stage, health;
+        static int stage, health, encounterCount;
         static double next, deadline;
         static void Check(bool value, string message) { if (!value) throw new Exception(message); }
         static void Advance(int value, double delay = .3) { stage = value; next = EditorApplication.timeSinceStartup + delay; }
@@ -23,25 +26,40 @@ namespace SlashDemo.Editor
         public static void Enter(SlashArena owner, WildernessCreature kind)
         {
             var saved = Random.state;
+            var savedEncounter = EncounterField.GetValue(owner.Travel);
             try
             {
-                int seed = 0;
-                for (; seed < 1000; seed++)
+                Random.InitState(0);
+                for (int attempt = 0; attempt < 100; attempt++)
                 {
-                    Random.InitState(seed);
-                    if (WildernessEncounter.Choose(Random.value) == kind) break;
+                    var encounter = new WildernessEncounter();
+                    if (encounter.NextCreature != kind) continue;
+                    EncounterField.SetValue(owner.Travel, encounter);
+                    owner.Travel.SelectDestination(TravelDestination.Wilderness);
+                    CheckPack(owner, kind);
+                    return;
                 }
-                Random.InitState(seed);
-                owner.Travel.SelectDestination(TravelDestination.Wilderness);
-                Check(owner.Enemies.Count == (kind == WildernessCreature.Bear ? BearDemon.WildernessCount
-                    : kind == WildernessCreature.Snake ? SnakeDemon.WildernessCount : ApeDemon.WildernessCount), "Entry created an incorrect pack size.");
-                foreach (var enemy in owner.Enemies)
-                    Check(kind == WildernessCreature.Bear ? enemy.rockBear : kind == WildernessCreature.Snake
-                        ? enemy.GetComponent<SnakeDemon>() != null : enemy.GetComponent<ApeDemon>() != null,
-                        "Random entry selected an unexpected creature.");
+                throw new Exception("Could not start a rotation with " + kind + ".");
             }
-            finally { Random.state = saved; }
+            finally
+            {
+                EncounterField.SetValue(owner.Travel, savedEncounter);
+                Random.state = saved;
+            }
         }
+
+        static void CheckPack(SlashArena owner, WildernessCreature kind)
+        {
+            Check(owner.Enemies.Count == (kind == WildernessCreature.Bear ? BearDemon.WildernessCount
+                : kind == WildernessCreature.Snake ? SnakeDemon.WildernessCount : ApeDemon.WildernessCount), "Entry created an incorrect pack size.");
+            foreach (var enemy in owner.Enemies)
+                Check(PackKind(enemy) == kind, "Entry created an unexpected creature.");
+        }
+
+        static WildernessCreature PackKind(SlashEnemy enemy) => enemy.rockBear ? WildernessCreature.Bear
+            : enemy.GetComponent<SnakeDemon>() != null ? WildernessCreature.Snake
+            : enemy.GetComponent<ApeDemon>() != null ? WildernessCreature.Ape
+            : throw new Exception("Unexpected enemy in the wilderness.");
 
         public static void RunBatch()
         {
@@ -76,12 +94,6 @@ namespace SlashDemo.Editor
                     case 0:
                         arena = UnityEngine.Object.FindAnyObjectByType<SlashArena>();
                         if (arena == null || arena.Travel == null) return;
-                        Check(WildernessEncounter.Choose(0) == WildernessCreature.Bear
-                            && WildernessEncounter.Choose(1f / 3 - .0001f) == WildernessCreature.Bear
-                            && WildernessEncounter.Choose(1f / 3) == WildernessCreature.Snake
-                            && WildernessEncounter.Choose(2f / 3 - .0001f) == WildernessCreature.Snake
-                            && WildernessEncounter.Choose(2f / 3) == WildernessCreature.Ape
-                            && WildernessEncounter.Choose(1) == WildernessCreature.Ape, "Incorrect probability boundary.");
                         arena.Player.invincible = false;
                         arena.Player.Teleport(SceneTravel.ManorGate.center); Advance(1); break;
                     case 1:
@@ -145,15 +157,34 @@ namespace SlashDemo.Editor
                         arena.TogglePause(); arena.ReturnHome();
                         arena.Player.Teleport(SceneTravel.ManorGate.center); Advance(7); break;
                     case 7:
-                        Enter(arena, WildernessCreature.Snake);
-                        Check(arena.Travel.ActiveMap.GetComponentsInChildren<SlashEnemy>().Length == SnakeDemon.WildernessCount, "Reentry duplicated enemies.");
+                        Check(arena.Travel.IsSelectionOpen, "Gate did not open for a rotation entry.");
+                        arena.Travel.SelectDestination(TravelDestination.Wilderness);
+                        Check(arena.Enemies.Count > 0, "Wilderness entry did not spawn a pack.");
+                        var kind = PackKind(arena.Enemies[0]);
+                        CheckPack(arena, kind);
+                        Check(arena.Travel.ActiveMap.GetComponentsInChildren<SlashEnemy>().Length == arena.Enemies.Count, "Reentry duplicated enemies.");
+                        if (encounterCount > 0) Check(kind != encounters[encounterCount - 1], "Two consecutive visits spawned the same creature.");
+                        if (encounterCount > 1) Check(kind != encounters[encounterCount - 2], "Three consecutive visits repeated a creature.");
+                        encounters[encounterCount++] = kind;
                         var old = arena.Travel.ActiveMap;
-                        arena.Restart();
+                        if (encounterCount == 3 || encounterCount == encounters.Length) arena.Restart();
+                        else { arena.TogglePause(); arena.ReturnHome(); }
                         Check(!old.gameObject.activeInHierarchy && arena.Travel.Current == TravelDestination.Manor && arena.Enemies.Count == 3,
-                            "Restart leaked wilderness enemies.");
+                            "Returning to the manor leaked wilderness enemies.");
+                        if (encounterCount < encounters.Length)
+                        {
+                            arena.Player.Teleport(SceneTravel.ManorGate.center);
+                            Advance(encounterCount == 2 ? 8 : 7); break;
+                        }
                         SessionState.SetBool(Key, false);
-                        Debug.Log("WILDERNESS_ENCOUNTER_PASS: random bear/snake branches; four lower-health snakes; formation/boundary; pursuit; bite damage; pause; hit/death; clear portal; no respawn; bear navigation/charge/spacing regression; reentry and restart cleanup.");
+                        Debug.Log("WILDERNESS_ENCOUNTER_PASS: " + string.Join(", ", encounters)
+                            + "; no repeat in any three visits across returns, another destination and restart; snake combat and bear formation regressions passed.");
                         EditorApplication.Exit(0); break;
+                    case 8:
+                        arena.Travel.SelectDestination(TravelDestination.HealingLodge);
+                        Check(arena.Travel.Current == TravelDestination.HealingLodge && arena.Enemies.Count == 0, "Healing lodge spawned wilderness enemies.");
+                        arena.TogglePause(); arena.ReturnHome();
+                        arena.Player.Teleport(SceneTravel.ManorGate.center); Advance(7); break;
                 }
             }
             catch (Exception ex)

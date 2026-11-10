@@ -10,6 +10,8 @@ namespace SlashDemo
         public static readonly Color Red = new Color(0.97f, 0.35f, 0.37f);
         public static readonly Color AttackWarningColor = new Color(1, .06f, .08f, .70f);
         public const float AttackWarningWidthScale = .4f;
+        public const float BeastAttackWarningBaseWidth = .055f;
+        public const float BeastAttackWarningWidth = BeastAttackWarningBaseWidth * AttackWarningWidthScale;
         public static void StyleAttackWarning(LineRenderer line, float originalWidth)
         {
             line.startColor = line.endColor = AttackWarningColor;

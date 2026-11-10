@@ -15,13 +15,13 @@ namespace SlashDemo
         SlashEnemy enemy;
         Transform healthBack, healthFill;
         Vector2 poseOffset;
-        float bob, lean;
+        float bob, lean, hudLift;
         bool dummy;
         float deathProgress;
         public float CreatureHeight { get; set; }
         public float ShadowScale { get; set; } = 1;
         public Transform GroundWarning => groundWarning;
-        public float LabelHeight => (CreatureHeight > 0 ? CreatureHeight + 0.28f : dummy ? 1.13f : 1.48f) * view.characterScale;
+        public float LabelHeight => (CreatureHeight > 0 ? CreatureHeight + 0.28f : dummy ? 1.13f : 1.48f) * view.characterScale + hudLift;
 
         public void Initialize(SlashArena arena, bool isDummy = false)
         {
@@ -68,9 +68,10 @@ namespace SlashDemo
             Refresh();
         }
 
-        public void SetPose(Vector2 offset, float verticalBob, float screenLean)
+        public void SetPose(Vector2 offset, float verticalBob, float screenLean, float labelLift = 0)
         {
             poseOffset = offset; bob = verticalBob; lean = screenLean;
+            hudLift = labelLift;
             Refresh();
         }
         public void SetDeathProgress(float progress)
@@ -104,6 +105,7 @@ namespace SlashDemo
                 float hp = enemy != null && Application.isPlaying ? enemy.Health / (float)Mathf.Max(1, enemy.maxHealth) : 1;
                 Vector3 height = view.Up * ((dummy ? 0.95f : 1.30f) * scale);
                 if (CreatureHeight > 0) height = view.Up * ((CreatureHeight + 0.1f) * scale);
+                height += view.Up * hudLift;
                 healthBack.localPosition = height;
                 healthFill.localPosition = height + Vector3.right * ((hp - 1) * 0.4f * scale);
                 healthBack.localRotation = healthFill.localRotation = view.Rotation;

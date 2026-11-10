@@ -141,7 +141,12 @@ namespace SlashDemo.Editor
                             "Direct map travel retained old map.");
                         Check(!portal.gameObject.activeInHierarchy && travel.Portal == null, "Old portal survived travel.");
                         Check(arena.Player == player && player.Health == health, "Travel changed character or health.");
-                        Check(arena.Enemies.Count == (destination == TravelDestination.Wilderness ? (arena.Enemies[0].rockBear ? BearDemon.WildernessCount : SnakeDemon.WildernessCount) : 0), "Destination has incorrect enemies.");
+                        if (destination == TravelDestination.AscensionPlatform)
+                            Check(arena.Enemies.Count == 1 && arena.Enemies[0].GetComponent<AscensionCultivator>() != null, "Ascension entry did not spawn one cultivator.");
+                        else if (destination == TravelDestination.Wilderness)
+                            Check(arena.Enemies.Count > 0 && arena.Enemies.Count == (arena.Enemies[0].GetComponent<SnakeDemon>() != null
+                                ? SnakeDemon.WildernessCount : arena.Enemies[0].rockBear ? BearDemon.WildernessCount : ApeDemon.WildernessCount), "Wilderness entry has an incorrect pack size.");
+                        else Check(arena.Enemies.Count == 0, "Non-combat destination spawned enemies.");
                         keys = new KeyboardState(); Advance(7); break;
                     case 7:
                         arena.TogglePause(); arena.ReturnHome();

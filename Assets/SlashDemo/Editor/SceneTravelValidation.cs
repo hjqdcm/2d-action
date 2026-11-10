@@ -200,7 +200,7 @@ namespace SlashDemo.Editor
                     case 7:
                         Check(!travel.BlocksGameplayInput, "Input did not resume after releasing the selection click.");
                         foreach (var enemy in arena.Enemies)
-                            Check(enemy == null || !enemy.gameObject.activeInHierarchy, "Manor enemy remained active in the new map.");
+                            Check(enemy == null || enemy.transform.IsChildOf(travel.ActiveMap.transform), "Manor enemy remained registered in the new map.");
                         Check(!arena.GetComponentInChildren<ManorEnvironment>(true).gameObject.activeInHierarchy, "Manor colliders remained active.");
                         ValidateMap(travel.ActiveMap, original.GetComponent<CircleCollider2D>().radius);
                         arena.CameraRig.ResetFeedback();
@@ -295,15 +295,18 @@ namespace SlashDemo.Editor
             }
             Physics2D.SyncTransforms();
             foreach (var point in route)
-                foreach (var collider in Physics2D.OverlapCircleAll(ManorEnvironment.Ground(point.x, point.y), radius))
-                    Check(collider.isTrigger || !collider.transform.IsChildOf(map.transform), "Blocked entrance route point " + point + " by " + collider.name);
+                foreach (var collider in Physics2D.OverlapCircleAll(map.Definition.Ground(point.x, point.y), radius))
+                    Check(!BlocksRoute(collider, map), "Blocked entrance route point " + point + " by " + collider.name);
             for (int i = 1; i < route.Length; i++)
             {
-                Vector2 a = ManorEnvironment.Ground(route[i - 1].x, route[i - 1].y);
-                Vector2 b = ManorEnvironment.Ground(route[i].x, route[i].y);
+                Vector2 a = map.Definition.Ground(route[i - 1].x, route[i - 1].y);
+                Vector2 b = map.Definition.Ground(route[i].x, route[i].y);
                 foreach (var hit in Physics2D.CircleCastAll(a, radius, b - a, (b - a).magnitude))
-                    Check(hit.collider.isTrigger || !hit.transform.IsChildOf(map.transform), "Blocked entrance route by " + hit.collider.name);
+                    Check(!BlocksRoute(hit.collider, map), "Blocked entrance route by " + hit.collider.name);
             }
         }
+
+        static bool BlocksRoute(Collider2D collider, TravelMapEnvironment map)
+            => !collider.isTrigger && collider.transform.IsChildOf(map.transform) && collider.GetComponentInParent<SlashEnemy>() == null;
     }
 }

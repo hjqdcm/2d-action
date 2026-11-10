@@ -162,6 +162,15 @@ namespace SlashDemo
                 Emit(p,.05f,Vector2.zero,.24f,5,new Color(.63f,.86f,.23f,.48f),R(.025f,.055f),.65f);
             }
         }
+
+        internal enum SkillParticle { Stone = 1, Mote = 2, Spark = 4, Paper = 6, Star = 7 }
+
+        internal void SkillMote(Vector2 ground, float height, Vector2 velocity, float rise,
+            SkillParticle shape, Color color, float size, float life)
+        {
+            Emit(ground, height, velocity, rise, (int)shape, color, size, life);
+        }
+
         public void Advance(float dt)
         {
             if(arena==null || arena.Paused || dt<=0) return;
@@ -190,7 +199,7 @@ namespace SlashDemo
                 for(int corner=0;corner<4;corner++)
                 {
                     float x=corner==0||corner==3?-1:1, y=corner<2?-1:1;
-                    float dx=x*size,dy=y*size*(p.kind==4?.4f:1);
+                    float dx=x*size,dy=y*size*(p.kind==4?.4f:p.kind==6?1.55f:1);
                     vertices.Add(center+Vector3.right*(dx*c-dy*s)+arena.View.Up*(dx*s+dy*c));
                     uvs.Add(new Vector3((x+1)*.5f,(y+1)*.5f,p.kind)); colors.Add(color);
                 }

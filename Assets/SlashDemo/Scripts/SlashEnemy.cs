@@ -14,7 +14,7 @@ namespace SlashDemo
         public bool rockBear;
         public int Health { get; private set; }
         public bool Alive => Health > 0;
-        public bool IsChasing => Alive && !trainingDummy && (bearCombat != null ? bearCombat.IsChasing : snakeCombat != null ? snakeCombat.IsChasing : apeCombat != null ? apeCombat.IsChasing : phase == Phase.Chase);
+        public bool IsChasing => Alive && !trainingDummy && (bearCombat != null ? bearCombat.IsChasing : snakeCombat != null ? snakeCombat.IsChasing : apeCombat != null ? apeCombat.IsChasing : cultivator != null ? cultivator.IsChasing : phase == Phase.Chase);
         public float Radius => GetComponent<CircleCollider2D>().radius;
 
         enum Phase { Chase, Windup, Recover, Dead }
@@ -37,6 +37,7 @@ namespace SlashDemo
         SnakeCombat snakeCombat;
         ApeDemon ape;
         ApeCombat apeCombat;
+        AscensionCultivator cultivator;
 
         void Awake()
         {
@@ -45,6 +46,7 @@ namespace SlashDemo
             bear = GetComponent<BearDemon>();
             snake = GetComponent<SnakeDemon>();
             ape = GetComponent<ApeDemon>();
+            cultivator = GetComponent<AscensionCultivator>();
             visual = transform.Find("Visual");
             Health = maxHealth;
             presentation = GetComponent<ObliqueActor>();
@@ -52,8 +54,11 @@ namespace SlashDemo
             presentation.Initialize(arena, trainingDummy);
             warning = presentation.GroundWarning;
             if (warning != null)
+            {
+                float baseWidth = rockBear || snake != null || ape != null ? DemoArt.BeastAttackWarningBaseWidth : .045f;
                 foreach (var line in warning.GetComponentsInChildren<LineRenderer>(true))
-                    DemoArt.StyleAttackWarning(line, rockBear ? .055f : .045f);
+                    DemoArt.StyleAttackWarning(line, baseWidth);
+            }
             sprites = visual.GetComponentsInChildren<SpriteRenderer>();
             colors = new Color[sprites.Length];
             for (int i = 0; i < sprites.Length; i++) colors[i] = sprites[i].color;
@@ -76,6 +81,7 @@ namespace SlashDemo
                 if (apeCombat == null) apeCombat = gameObject.AddComponent<ApeCombat>();
                 apeCombat.Initialize(this, arena, presentation, warning);
             }
+            if (cultivator != null) cultivator.InitializeCombat(arena, presentation, warning);
         }
 
         void Update()
@@ -106,6 +112,7 @@ namespace SlashDemo
             if (bearCombat != null) { bearCombat.Tick(Time.deltaTime); return; }
             if (snakeCombat != null) { snakeCombat.Tick(Time.deltaTime); return; }
             if (apeCombat != null) { apeCombat.Tick(Time.deltaTime); return; }
+            if (cultivator != null) { cultivator.Tick(Time.deltaTime); return; }
             if (trainingDummy || arena.Player == null || !arena.Player.IsAlive) return;
             Vector2 toPlayer = arena.Player.transform.position - transform.position;
             if (phase == Phase.Recover)
@@ -147,30 +154,32 @@ namespace SlashDemo
         {
             if (!Alive || arena == null || arena.Paused) { body.linearVelocity = Vector2.zero; return; }
             if (bearCombat != null) { bearCombat.FixedTick(Vector2.zero); return; }
+            if (cultivator != null) { cultivator.FixedTick(Time.fixedDeltaTime); return; }
+            var navigation = snake != null ? snake.Navigation : ape?.Navigation;
             Vector2 velocity = Vector2.zero;
             if (IsChasing && arena.Player != null && arena.Player.IsAlive)
             {
                 Vector2 toward = ((Vector2)arena.Player.transform.position - body.position).normalized;
                 if (bear != null) toward = bear.ChaseDirection(body.position, arena.Player.transform.position);
-                if (snake != null) toward = snake.Navigation.ChaseDirection(body.position, arena.Player.transform.position);
-                if (ape != null) toward = ape.Navigation.ChaseDirection(body.position, arena.Player.transform.position);
+                if (navigation != null) toward = navigation.ChaseDirection(body.position, arena.Player.transform.position);
                 Vector2 separation = Vector2.zero;
                 foreach (var other in arena.Enemies)
                 {
-                    if (other == this || other == null || !other.Alive) continue;
+                    if (other == this || other == null || !other.Alive || (other.apeCombat != null && other.apeCombat.IsAirborne)) continue;
                     Vector2 away = body.position - (Vector2)other.transform.position;
                     float gap = snake != null || ape != null ? Radius + other.Radius + .65f : 1.1f;
                     if (away.magnitude < gap && away.sqrMagnitude > 0.001f) separation += away.normalized * (gap - away.magnitude);
                 }
                 velocity += (toward + separation * 1.8f).normalized * moveSpeed;
             }
-            body.linearVelocity = snake != null ? snake.Navigation.ConstrainVelocity(velocity, Time.fixedDeltaTime)
-                : ape != null ? ape.Navigation.ConstrainVelocity(velocity, Time.fixedDeltaTime) : velocity;
+            body.linearVelocity = navigation != null ? navigation.ConstrainVelocity(velocity, Time.fixedDeltaTime) : velocity;
         }
 
         public void TakeHit(int amount, Vector2 direction, float force, bool heavy = false, bool interrupt = true)
         {
-            if (!Alive) return;
+            if (!Alive || (apeCombat != null && apeCombat.IsAirborne)) return;
+            if (amount > 0 && cultivator != null && cultivator.DamageReduction > 0)
+                amount = Mathf.Max(1, Mathf.RoundToInt(amount * (1 - cultivator.DamageReduction)));
             Health = Mathf.Max(0, Health - amount);
             flash = 0.10f;
             // All enemies take damage without resetting attacks, poses or movement.
@@ -185,6 +194,7 @@ namespace SlashDemo
             if (bearCombat != null) bearCombat.Stop();
             if (snakeCombat != null) snakeCombat.Stop();
             if (apeCombat != null) apeCombat.Stop();
+            if (cultivator != null) cultivator.Stop();
             GetComponent<Collider2D>().enabled = false;
             body.linearVelocity = Vector2.zero;
             arena.Effects.Burst(transform.position, DemoArt.Gold, 18, 1.2f);
@@ -197,12 +207,14 @@ namespace SlashDemo
         {
             // Record each enemy's wave-scaled baseline once, rather than multiplying it repeatedly.
             if (baseHealth == 0) { baseHealth = maxHealth; baseSpeed = moveSpeed; }
-            int nextMax = trainingDummy ? settings.dummyHealth : Mathf.Max(1, Mathf.RoundToInt(baseHealth * settings.enemyHealthMultiplier));
+            int nextMax = cultivator != null ? cultivator.TunedMaxHealth(settings)
+                : trainingDummy ? settings.dummyHealth : Mathf.Max(1, Mathf.RoundToInt(baseHealth * settings.enemyHealthMultiplier));
             if (Health > 0 && maxHealth != nextMax)
                 Health = Mathf.Clamp(Mathf.RoundToInt(Health / (float)Mathf.Max(1, maxHealth) * nextMax), 1, nextMax);
             maxHealth = nextMax;
             moveSpeed = snake != null ? settings.moveSpeed * SnakeDemon.MoveSpeedScale
                 : ape != null ? settings.moveSpeed * ApeDemon.MoveSpeedScale : baseSpeed * settings.enemySpeedMultiplier;
+            if (cultivator != null) { cultivator.ApplyAttackTuning(settings); return; }
             windupTime = settings.enemyWindup * (rockBear ? 1.45f : snake != null ? SnakeDemon.WindupScale : ape != null ? ApeDemon.WindupScale : 1);
             damage = snake != null ? SnakeDemon.BaseDamage : ape != null ? ApeDemon.BaseDamage : settings.enemyDamage;
             attackRange = settings.enemyRange * (rockBear ? BearDemon.RangeScale : snake != null ? SnakeDemon.RangeScale : ape != null ? ApeDemon.RangeScale : 1);

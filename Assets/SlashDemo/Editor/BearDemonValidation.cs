@@ -247,7 +247,8 @@ namespace SlashDemo.Editor
                         OpenGate(); Advance(8); break;
                     case 8:
                         arena.Travel.SelectDestination(TravelDestination.AscensionPlatform);
-                        Check(arena.Enemies.Count == 0, "Bear appeared in another destination.");
+                        Check(arena.Enemies.Count == 1 && arena.Enemies[0].GetComponent<AscensionCultivator>() != null,
+                            "Ascension platform did not isolate its challenger from the bears.");
                         arena.Restart();
                         Check(arena.Travel.Current == TravelDestination.Manor && arena.Enemies.Count == 3,
                             "Restart did not clean up travel enemies.");

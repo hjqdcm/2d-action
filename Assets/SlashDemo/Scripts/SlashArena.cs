@@ -44,7 +44,7 @@ namespace SlashDemo
             || (Travel != null && Travel.BlocksGameplayInput);
         public IReadOnlyList<SlashEnemy> Enemies => enemies;
         public bool Paused { get; private set; }
-        public bool PauseMenuOpen => Paused && !Defeated && (Travel == null || !Travel.IsSelectionOpen)
+        public bool PauseMenuOpen => Paused && !Defeated && (Travel == null || !Travel.HasModal)
             && (Codex == null || !Codex.IsOpen) && (CharacterPanel == null || !CharacterPanel.IsOpen);
         public bool Defeated { get; private set; }
         public int Wave { get; private set; }
@@ -93,6 +93,7 @@ namespace SlashDemo
                 waitingForMenuRelease = false;
             if (Codex != null && (Codex.IsOpen || Codex.ConsumedInputThisFrame)) return;
             if (CharacterPanel != null && (CharacterPanel.IsOpen || CharacterPanel.ConsumedInputThisFrame)) return;
+            if (Travel != null && Travel.IsChallengeDecisionOpen) return;
             if (Travel != null && Travel.IsSelectionOpen)
             {
                 if (DemoInput.PausePressed)

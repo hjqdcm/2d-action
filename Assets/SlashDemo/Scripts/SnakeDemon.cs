@@ -64,7 +64,7 @@ namespace SlashDemo
             var points = new Vector3[26];
             for (int i = 1; i < points.Length - 1; i++)
                 points[i] = DemoArt.Direction(Mathf.Lerp(-52.5f, 52.5f, (i - 1) / 23f)) * 1.15f;
-            DemoArt.Line("Bite warning", warning, points, DemoArt.AttackWarningColor, .045f * DemoArt.AttackWarningWidthScale, 10);
+            DemoArt.Line("Bite warning", warning, points, DemoArt.AttackWarningColor, DemoArt.BeastAttackWarningWidth, 10);
             warning.gameObject.SetActive(false);
             var enemy = go.AddComponent<SlashEnemy>();
             enemy.maxHealth = BaseHealth; enemy.moveSpeed = arena.Player.moveSpeed * MoveSpeedScale;

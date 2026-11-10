@@ -6,6 +6,7 @@ Shader "SlashDemo/HeroCloth"
         _Color ("Tint", Color) = (1, 1, 1, 1)
         _VolumeStrength ("Painted Volume", Range(0, 1)) = 0.45
         _WalkBlend ("Walking", Range(0, 1)) = 0
+        [HideInInspector] _PaintedPortrait ("Painted Portrait", Float) = 0
     }
     SubShader
     {
@@ -26,6 +27,7 @@ Shader "SlashDemo/HeroCloth"
                 half4 _Color;
                 half _VolumeStrength;
                 half _WalkBlend;
+                half _PaintedPortrait;
             CBUFFER_END
             float4 _MainTex_TexelSize;
             struct Attributes { float4 positionOS : POSITION; float2 uv : TEXCOORD0; float2 localUV : TEXCOORD1; float4 binding : COLOR; };
@@ -42,6 +44,7 @@ Shader "SlashDemo/HeroCloth"
             half4 Frag(Varyings input) : SV_Target
             {
                 half4 paint = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv);
+                if (_PaintedPortrait > 0.5h) return paint * _Color;
                 half clothWhite = 1 - smoothstep(0.40h, 0.60h, (paint.b - paint.r) / max(0.001h, paint.b));
                 clothWhite = max(clothWhite, input.binding.a);
                 half left = input.binding.r * clothWhite, right = input.binding.g * clothWhite;

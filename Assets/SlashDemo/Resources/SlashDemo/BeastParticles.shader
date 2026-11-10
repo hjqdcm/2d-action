@@ -29,7 +29,21 @@ Shader "SlashDemo/BeastParticles"
                 else if(kind<1.5) alpha=1-smoothstep(.61,.72,abs(p.x)*.9+abs(p.y));
                 else if(kind<2.5) alpha=(1-smoothstep(.42,.92,radius))*(.75+.25*exp(-dot(p-float2(-.2,.2),p-float2(-.2,.2))*24));
                 else if(kind<4.5) alpha=exp(-p.x*p.x*5-p.y*p.y*15)*(1-smoothstep(.65,1,radius));
-                else alpha=exp(-pow((radius-.62)*16,2))*(1-smoothstep(.8,1,radius));
+                else if(kind<5.5) alpha=exp(-pow((radius-.62)*16,2))*(1-smoothstep(.8,1,radius));
+                else if(kind<6.5)
+                {
+                    // Warm paper with a cinnabar spine and short cross strokes.
+                    alpha=1-smoothstep(.68,.85,max(abs(p.x),abs(p.y)));
+                    float ink=(1-smoothstep(.07,.13,abs(p.x))) * (1-smoothstep(.52,.65,abs(p.y)));
+                    ink=max(ink,(1-smoothstep(.05,.12,abs(abs(p.y)-.24))) * (1-smoothstep(.37,.49,abs(p.x))));
+                    return half4(lerp(i.color.rgb,half3(.72,.09,.025),ink),i.color.a*alpha);
+                }
+                else
+                {
+                    float2 a=abs(p);
+                    float rays=max(exp(-a.x*15)*max(0,1-a.y),exp(-a.y*15)*max(0,1-a.x));
+                    alpha=max(rays,exp(-radius*7))*(1-smoothstep(.67,1,radius));
+                }
                 return half4(i.color.rgb,i.color.a*alpha);
             }
             ENDHLSL
