@@ -178,17 +178,21 @@ namespace SlashDemo
         public void TakeHit(int amount, Vector2 direction, float force, bool heavy = false, bool interrupt = true)
         {
             if (!Alive || (apeCombat != null && apeCombat.IsAirborne)) return;
-            if (amount > 0 && cultivator != null && cultivator.DamageReduction > 0)
-                amount = Mathf.Max(1, Mathf.RoundToInt(amount * (1 - cultivator.DamageReduction)));
+            if (amount > 0 && cultivator != null) amount = cultivator.MitigateHit(amount);
             Health = Mathf.Max(0, Health - amount);
             flash = 0.10f;
             // All enemies take damage without resetting attacks, poses or movement.
             // Keep force/interrupt arguments compatible with existing sword and skill callers.
-            arena.Effects.Burst(transform.position, trainingDummy ? DemoArt.Gold : DemoArt.Jade, 10);
+            if (amount > 0)
+                arena.Effects.DamageImpact(presentation, direction, DemoArt.Gold, heavy, !Alive);
             arena.Effects.Number(transform.position, amount.ToString(), amount >= 40 ? DemoArt.Gold : Color.white);
             arena.Effects.PlayHit(heavy, !Alive);
-            arena.Effects.Impact(transform.position, heavy, !Alive);
-            if (Alive) return;
+            arena.CameraRig.Punch(heavy || !Alive ? 1 : .35f);
+            if (Alive)
+            {
+                if (amount > 0) cultivator?.OnSurvivedHit();
+                return;
+            }
             warning.gameObject.SetActive(false);
             phase = Phase.Dead;
             if (bearCombat != null) bearCombat.Stop();

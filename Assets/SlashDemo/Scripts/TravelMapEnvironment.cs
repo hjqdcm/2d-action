@@ -22,8 +22,12 @@ namespace SlashDemo
             this.entry = entry; this.reservedExit = reservedExit;
             this.boundary = boundary; this.obstacles = obstacles;
         }
-        public Vector2 WorldSize => destination == TravelDestination.Wilderness
-            ? new Vector2(36, 24) : ManorEnvironment.WorldSize;
+        public Vector2 WorldSize => destination switch
+        {
+            TravelDestination.AscensionPlatform => ManorEnvironment.WorldSize * .75f,
+            TravelDestination.Wilderness => new Vector2(36, 24),
+            _ => ManorEnvironment.WorldSize
+        };
         public Vector2 Ground(float x, float y)
             => new Vector2((x / 1536f - .5f) * WorldSize.x, (.5f - y / 1024f) * WorldSize.y);
         public Rect GroundRect(Rect pixels)

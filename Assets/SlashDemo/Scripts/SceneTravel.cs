@@ -35,6 +35,18 @@ namespace SlashDemo
         public bool BlocksGameplayInput => HasModal || waitingForRelease;
         public static Rect ManorGate => ManorEnvironment.GroundRect(new Rect(630, 770, 100, 75));
 
+        AscensionCultivator ActiveCultivator
+        {
+            get
+            {
+                var opponent = ascension?.Opponent;
+                return opponent != null && opponent.Alive ? opponent.GetComponent<AscensionCultivator>() : null;
+            }
+        }
+
+        internal Vector2 ChallengePull(Vector2 position) => ActiveCultivator?.FieldPull(position) ?? Vector2.zero;
+        internal float ChallengeSlowRemaining => ActiveCultivator?.SealSlowRemaining ?? 0;
+
         public void Initialize(SlashArena owner)
         {
             arena = owner;

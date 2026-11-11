@@ -16,12 +16,17 @@ namespace SlashDemo
         Transform healthBack, healthFill;
         Vector2 poseOffset;
         float bob, lean, hudLift;
-        bool dummy;
+        bool dummy, hasPassive;
+        float PassiveLabelLift => hasPassive ? .38f : 0;
         float deathProgress;
         public float CreatureHeight { get; set; }
         public float ShadowScale { get; set; } = 1;
         public Transform GroundWarning => groundWarning;
-        public float LabelHeight => (CreatureHeight > 0 ? CreatureHeight + 0.28f : dummy ? 1.13f : 1.48f) * view.characterScale + hudLift;
+        internal Vector3 HealthBarLowerLeft => healthBack.TransformPoint(new Vector3(-.5f, -.5f, 0));
+        internal Vector3 DamageImpactPoint => CreatureHeight > 0 && model != null
+            ? model.position + view.Up * (CreatureHeight * view.characterScale * .54f)
+            : view.LiftPoint(transform.position, view.WeaponHeight);
+        public float LabelHeight => (CreatureHeight > 0 ? CreatureHeight + 0.28f : dummy ? 1.13f : 1.48f) * view.characterScale + hudLift + PassiveLabelLift;
 
         public void Initialize(SlashArena arena, bool isDummy = false)
         {
@@ -29,6 +34,7 @@ namespace SlashDemo
             dummy = isDummy;
             model = transform.Find("Visual");
             enemy = GetComponent<SlashEnemy>();
+            hasPassive = GetComponent<AscensionCultivator>() != null;
             sortingGroup = GetComponent<SortingGroup>();
             if (sortingGroup == null) sortingGroup = gameObject.AddComponent<SortingGroup>();
             if (groundShadow == null && model != null)
@@ -105,7 +111,7 @@ namespace SlashDemo
                 float hp = enemy != null && Application.isPlaying ? enemy.Health / (float)Mathf.Max(1, enemy.maxHealth) : 1;
                 Vector3 height = view.Up * ((dummy ? 0.95f : 1.30f) * scale);
                 if (CreatureHeight > 0) height = view.Up * ((CreatureHeight + 0.1f) * scale);
-                height += view.Up * hudLift;
+                height += view.Up * (hudLift + PassiveLabelLift);
                 healthBack.localPosition = height;
                 healthFill.localPosition = height + Vector3.right * ((hp - 1) * 0.4f * scale);
                 healthBack.localRotation = healthFill.localRotation = view.Rotation;

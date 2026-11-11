@@ -110,7 +110,7 @@ namespace SlashDemo
         Vector2 codexScroll;
         static readonly string[] CharacterPageNames = { "功法", "属性", "物品" };
         GUIStyle small, health, damage, status, travelTitle, travelButton;
-        GUIStyle buffName, buffStacks, buffTooltipBody, buffTooltipTitle;
+        GUIStyle buffName, buffStacks, passiveStacks, buffTooltipBody, buffTooltipTitle;
         readonly Dictionary<string, Texture2D> buffIcons = new Dictionary<string, Texture2D>(StringComparer.Ordinal);
         readonly Dictionary<string, BuffCountdownMask> buffCountdowns = new Dictionary<string, BuffCountdownMask>(StringComparer.Ordinal);
         CombatBuffView hoveredBuff;
@@ -146,6 +146,7 @@ namespace SlashDemo
             damage = new GUIStyle(health) { fontSize = 23, fontStyle = FontStyle.Bold };
             buffName = new GUIStyle(small) { fontSize = 12, alignment = TextAnchor.MiddleCenter, padding = new RectOffset() };
             buffStacks = new GUIStyle(damage) { fontSize = 16, alignment = TextAnchor.MiddleCenter, padding = new RectOffset() };
+            passiveStacks = new GUIStyle(buffStacks) { fontSize = 10 };
             buffTooltipBody = new GUIStyle(small) { fontSize = 15, wordWrap = true, alignment = TextAnchor.UpperLeft, padding = new RectOffset() };
             buffTooltipTitle = new GUIStyle(buffTooltipBody) { fontSize = 18, fontStyle = FontStyle.Bold };
             status = new GUIStyle(small) { alignment = TextAnchor.MiddleCenter };
@@ -254,9 +255,10 @@ namespace SlashDemo
             DrawGauge(new Rect(width / 2 - 105, height - 28, 210, 3), player.DashReady, Jade);
             Label(new Rect(width / 2 - 105, height - 58, 210, 30), player.DashReady >= 1 ? "冲刺就绪" : "冲刺冷却中", status, player.DashReady >= 1 ? Jade : Muted);
             DrawActiveSkill(width, height);
+            AscensionCultivator challenger = null;
             if (arena.Travel != null && arena.Travel.ChallengeRound > 0 && arena.Enemies.Count > 0)
             {
-                var challenger = arena.Enemies[0].GetComponent<AscensionCultivator>();
+                challenger = arena.Enemies[0].GetComponent<AscensionCultivator>();
                 string skill = challenger != null ? challenger.CastingSkill : null;
                 var round = new Rect(width / 2 - 190, 25, 380, skill == null ? 44 : 69);
                 DrawFrame(round);
@@ -292,6 +294,7 @@ namespace SlashDemo
             {
                 DrawHeavyChargeBar(scale);
                 DrawWorldHealth(scale);
+                if (challenger != null) DrawCultivatorPassive(challenger, scale);
                 DrawDamageNumbers(scale);
                 DrawPointer(scale);
             }
@@ -339,29 +342,46 @@ namespace SlashDemo
         {
             HoveredBuffId = null;
             var buffs = VisibleBuffs;
+            for (int i = 0; i < buffs.Count; i++) DrawBuffSlot(BuffBarLayout.Slot(i, area), buffs[i], scale);
+        }
+
+        void DrawBuffSlot(Rect slot, CombatBuffView buff, float scale)
+        {
+            DrawFrame(slot);
+            if (!DrawBuffIcon(slot, buff.iconResource))
+                Label(new Rect(slot.x + 4, slot.y + 20, slot.width - 8, 20), buff.name, buffName, Jade);
+            DrawBuffCountdown(slot, buff);
+            if (buff.stacks > 0)
+            {
+                Rect badge = BuffBarLayout.StackBadge(slot);
+                Box(badge, new Color(0.02f, 0.06f, 0.12f, 0.92f));
+                Outline(badge, Bronze);
+                Label(badge, buff.stacks.ToString(), buffStacks, Color.white);
+            }
+            HoverBuffSlot(slot, buff, scale);
+        }
+
+        bool DrawBuffIcon(Rect slot, string resource)
+        {
+            if (string.IsNullOrEmpty(resource)) return false;
+            if (!buffIcons.TryGetValue(resource, out Texture2D icon))
+            {
+                icon = Resources.Load<Texture2D>(resource);
+                buffIcons.Add(resource, icon);
+            }
+            if (icon == null) return false;
+            GUI.DrawTexture(new Rect(slot.x + 2, slot.y + 2, slot.width - 4, slot.height - 4), icon, ScaleMode.ScaleToFit);
+            return true;
+        }
+
+        void HoverBuffSlot(Rect slot, CombatBuffView buff, float scale)
+        {
             Vector2 pointer = new Vector2(DemoInput.Pointer.x / scale, (Screen.height - DemoInput.Pointer.y) / scale);
             bool canHover = DemoInput.MouseAvailable && !arena.PauseMenuOpen
                 && (arena.CharacterPanel == null || !arena.CharacterPanel.IsOpen)
                 && (arena.Codex == null || !arena.Codex.IsOpen) && (arena.Travel == null || !arena.Travel.HasModal);
-            for (int i = 0; i < buffs.Count; i++)
-            {
-                var slot = BuffBarLayout.Slot(i, area);
-                DrawFrame(slot);
-                Texture2D icon = null;
-                string resource = buffs[i].iconResource;
-                if (!string.IsNullOrEmpty(resource) && !buffIcons.TryGetValue(resource, out icon))
-                { icon = Resources.Load<Texture2D>(resource); buffIcons.Add(resource, icon); }
-                if (icon != null)
-                    GUI.DrawTexture(new Rect(slot.x + 2, slot.y + 2, slot.width - 4, slot.height - 4), icon, ScaleMode.ScaleToFit);
-                else Label(new Rect(slot.x + 4, slot.y + 20, slot.width - 8, 20), buffs[i].name, buffName, Jade);
-                DrawBuffCountdown(slot, buffs[i]);
-                Rect badge = BuffBarLayout.StackBadge(slot);
-                Box(badge, new Color(0.02f, 0.06f, 0.12f, 0.92f));
-                Outline(badge, Bronze);
-                Label(badge, buffs[i].stacks.ToString(), buffStacks, Color.white);
-                if (canHover && slot.Contains(pointer) && !string.IsNullOrEmpty(buffs[i].description))
-                { HoveredBuffId = buffs[i].id; hoveredBuff = buffs[i]; hoveredBuffSlot = slot; }
-            }
+            if (canHover && slot.Contains(pointer) && !string.IsNullOrEmpty(buff.description))
+            { HoveredBuffId = buff.id; hoveredBuff = buff; hoveredBuffSlot = slot; }
         }
 
         void DrawBuffCountdown(Rect slot, CombatBuffView buff)
@@ -621,6 +641,28 @@ namespace SlashDemo
                 Vector3 p = arena.WorldCamera.WorldToScreenPoint(arena.View.LiftPoint(enemy.transform.position, labelHeight));
                 Label(new Rect(p.x / scale - 70, (Screen.height - p.y) / scale - 12, 140, 24), enemy.Health.ToString(), health, DemoArt.Gold);
             }
+        }
+
+        void DrawCultivatorPassive(AscensionCultivator challenger, float scale)
+        {
+            var actor = challenger.GetComponent<ObliqueActor>();
+            Vector3 point = arena.WorldCamera.WorldToScreenPoint(actor.HealthBarLowerLeft);
+            if (point.z <= 0) return;
+            const float size = BuffBarLayout.CellSize * .4f;
+            var slot = new Rect(point.x / scale, (Screen.height - point.y) / scale + 4, size, size);
+            var buff = challenger.PassiveBuff;
+            Box(slot, new Color(.08f, .11f, .11f, .92f));
+            Outline(slot, Bronze);
+            DrawBuffIcon(slot, buff.iconResource);
+            if (buff.stacks > 0)
+            {
+                DrawBuffCountdown(slot, buff);
+                var badge = new Rect(slot.xMax - 6, slot.yMax - 9, 10, 11);
+                Box(badge, new Color(.02f, .06f, .12f, .92f));
+                Outline(badge, Bronze);
+                Label(badge, buff.stacks.ToString(), passiveStacks, Color.white);
+            }
+            HoverBuffSlot(slot, buff, scale);
         }
 
         void DrawDamageNumbers(float scale)

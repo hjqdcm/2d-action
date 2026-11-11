@@ -6,6 +6,8 @@ namespace SlashDemo
     public sealed class SlashEffects : MonoBehaviour
     {
         const float SwordWaveGlowThickness = 0.48f, SwordWaveCoreThickness = 0.156f;
+        const float NormalHitVolume = .8f;
+        internal const float ReceivedHitMultiplier = 1.2f;
         sealed class Fleck
         {
             public SpriteRenderer renderer;
@@ -23,9 +25,8 @@ namespace SlashDemo
         sealed class ImpactRing
         {
             public LineRenderer line;
-            public Vector2 position;
             public Color color;
-            public float age, life, size;
+            public float age, life, size, aspect;
         }
         readonly List<ImpactRing> rings = new List<ImpactRing>(24);
         sealed class WhirlwindRing
@@ -139,7 +140,7 @@ namespace SlashDemo
         [Min(0)] public float hitStopMultiplier = 1;
         [Range(0, 1)] public float volume = 0.18f;
         AudioSource audioSource;
-        AudioClip swing, heavySwing, hit, heavyHit, killingHit;
+        AudioClip swing, heavySwing, hit, heavyHit, killingHit, receivedHit;
         Material gatherMaterial;
         bool gathering;
         Vector2 chargeTarget;
@@ -169,6 +170,7 @@ namespace SlashDemo
             hit = MakeSound("Impact", 0.10f, 110, true);
             heavyHit = MakeSound("Heavy impact", 0.16f, 72, true);
             killingHit = MakeSound("Final impact", 0.22f, 48, true);
+            receivedHit = MakeReceivedHitSound();
         }
 
         static AudioClip MakeSound(string name, float duration, float frequency, bool impact)
@@ -190,11 +192,38 @@ namespace SlashDemo
             return clip;
         }
 
+        static AudioClip MakeReceivedHitSound()
+        {
+            const int rate = 22050;
+            const float duration = .16f;
+            var samples = new float[Mathf.CeilToInt(rate * duration)];
+            var random = new System.Random(29);
+            float filteredNoise = 0;
+            for (int i = 0; i < samples.Length; i++)
+            {
+                float time = i / (float)rate;
+                filteredNoise = Mathf.Lerp(filteredNoise, (float)random.NextDouble() * 2 - 1, .24f);
+                float thud = .53f * Mathf.Sin(2 * Mathf.PI * (106 - 145 * time) * time) * Mathf.Exp(-31 * time);
+                float snap = .24f * filteredNoise * Mathf.Exp(-110 * time);
+                float reboundTime = Mathf.Max(0, time - .024f);
+                float rebound = .23f * Mathf.Sin(2 * Mathf.PI * 66 * reboundTime) * Mathf.Exp(-43 * reboundTime);
+                float envelope = Mathf.Clamp01(time * 640) * Mathf.Clamp01((duration - time) * 60);
+                samples[i] = (thud + snap + rebound) * envelope;
+            }
+            var clip = AudioClip.Create("Player received hit", samples.Length, 1, rate, false);
+            clip.SetData(samples, 0);
+            return clip;
+        }
+
         public void PlaySwing(bool heavy) { if (audioSource != null) audioSource.PlayOneShot(heavy ? heavySwing : swing); }
         public void PlayHit(bool heavy = false, bool lethal = false)
         {
             if (audioSource != null) audioSource.PlayOneShot(lethal ? killingHit : heavy ? heavyHit : hit,
-                lethal ? 1 : heavy ? 0.9f : 0.8f);
+                lethal ? 1 : heavy ? 0.9f : NormalHitVolume);
+        }
+        internal void PlayReceivedHit()
+        {
+            if (audioSource != null) audioSource.PlayOneShot(receivedHit, NormalHitVolume * ReceivedHitMultiplier);
         }
         public void SetVolume(float value)
         {
@@ -384,29 +413,58 @@ namespace SlashDemo
             }
         }
 
-        public void Impact(Vector2 position, bool heavy, bool lethal)
+        internal void DamageImpact(ObliqueActor target, Vector2 direction, Color color,
+            bool heavy = false, bool lethal = false)
         {
             if (rings.Count >= 24)
             {
                 if (rings[0].line != null) Destroy(rings[0].line.gameObject);
                 rings.RemoveAt(0);
             }
-            Color color = heavy || lethal ? new Color(0.9f, 0.98f, 1, 0.85f) : new Color(0.55f, 0.85f, 1, 0.45f);
-            var line = DemoArt.Ring("Sword impact ring", transform, 0.5f, color, 0.045f,
-                ObliqueProjection.DepthOrder(position.y) + 35, 40);
-            var ring = new ImpactRing { line = line, position = position, color = color,
-                life = heavy || lethal ? 0.14f : 0.10f, size = lethal ? 1.25f : heavy ? 1.05f : 0.65f };
+            Vector3 point = target.DamageImpactPoint;
+            Vector2 screenDirection = ObliqueProjection.ProjectGround(direction, View.elevation);
+            bool directional = screenDirection.sqrMagnitude > .0001f;
+            float heading = directional ? Mathf.Atan2(screenDirection.y, screenDirection.x) * Mathf.Rad2Deg : 0;
+            float size = (lethal ? 1.48f : heavy ? 1.25f : .91f)
+                * Mathf.Clamp(target.CreatureHeight / HeroAppearance.BodyHeight, 1, 1.36f);
+            int order = ObliqueProjection.DepthOrder(target.transform.position.y) + 35;
+            var line = DemoArt.Ring("Damage impact ring", transform, .5f, color, heavy || lethal ? .044f : .034f, order, 40);
+            line.transform.SetPositionAndRotation(point, View.Rotation * Quaternion.Euler(0, 0, heading));
+            var ring = new ImpactRing { line = line, color = new Color(color.r, color.g, color.b, .76f),
+                life = heavy || lethal ? .23f : .17f, size = size, aspect = directional ? .66f : 1 };
             rings.Add(ring);
             DrawImpactRing(ring);
-            GetComponentInParent<SlashArena>().CameraRig.Punch(heavy || lethal ? 1 : 0.35f);
+
+            Color white = Color.Lerp(color, Color.white, .88f);
+            AddDamageFleck(point, heading + 28, new Vector2(.69f, .13f) * size, white, 0, .10f, order + 2);
+            AddDamageFleck(point, heading + 112, new Vector2(.46f, .095f) * size, white, 0, .12f, order + 2);
+            int count = heavy || lethal ? 13 : 9;
+            for (int i = 0; i < count; i++)
+            {
+                float angle = directional && i < count - 3
+                    ? heading + Random.Range(-65f, 65f) : Random.Range(0f, 360f);
+                Vector2 offset = DemoArt.Direction(angle) * Random.Range(.055f, .18f) * size;
+                Vector2 dimensions = new Vector2(Random.Range(.14f, .28f), Random.Range(.034f, .065f)) * size;
+                AddDamageFleck(point + View.Rotation * (Vector3)offset, angle, dimensions, i % 3 == 0 ? white : color,
+                    Random.Range(2.7f, 6.2f) * size, Random.Range(.18f, .34f), order + 1);
+            }
+        }
+
+        void AddDamageFleck(Vector3 point, float angle, Vector2 size, Color color, float speed, float life, int order)
+        {
+            if (particles.Count >= 180) return;
+            var spark = DemoArt.Shape("Damage spark", transform, speed > 0 ? "Blade" : "Disk", Vector2.zero, size, color, order);
+            spark.transform.SetPositionAndRotation(point, View.Rotation * Quaternion.Euler(0, 0, angle));
+            Vector3 velocity = View.Rotation * (Vector3)(DemoArt.Direction(angle) * speed);
+            particles.Add(new Fleck { renderer = spark, velocity = velocity, life = life,
+                angle = angle, color = color, scale = spark.transform.localScale });
         }
 
         void DrawImpactRing(ImpactRing ring)
         {
             float t = Mathf.Clamp01(ring.age / ring.life);
-            ring.line.transform.position = View.LiftPoint(ring.position, View.WeaponHeight);
-            ring.line.transform.rotation = View.Rotation;
-            ring.line.transform.localScale = Vector3.one * Mathf.Lerp(0.18f, ring.size, 1 - (1 - t) * (1 - t));
+            float scale = Mathf.Lerp(.30f, ring.size, 1 - (1 - t) * (1 - t));
+            ring.line.transform.localScale = new Vector3(scale, scale * ring.aspect, 1);
             Color c = ring.color;
             c.a *= (1 - t) * (1 - t);
             ring.line.startColor = ring.line.endColor = c;
@@ -1158,6 +1216,7 @@ namespace SlashDemo
             if (hit != null) Destroy(hit);
             if (heavyHit != null) Destroy(heavyHit);
             if (killingHit != null) Destroy(killingHit);
+            if (receivedHit != null) Destroy(receivedHit);
         }
     }
 }

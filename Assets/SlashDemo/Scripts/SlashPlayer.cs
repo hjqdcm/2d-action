@@ -16,6 +16,7 @@ namespace SlashDemo
     {
         const float AttackMoveMultiplier = 0.5f;
         const float ComboRecoveryDuration = 0.1f;
+        const float SwordHitShake = .011f;
         float comboRecoveryLeft;
         public bool IsComboRecovering => comboRecoveryLeft > 0;
 
@@ -107,10 +108,17 @@ namespace SlashDemo
         public float NormalAttackSpeedMultiplier => HasFlowingCloud ? techniqueCombo.AttackSpeedMultiplier(Realm) : 1;
         public float NormalAttackMoveSpeedMultiplier => AttackMoveMultiplier
             * (HasFlowingCloud ? techniqueCombo.AttackMoveSpeedMultiplier(Realm) : 1);
+        float WalkingSpeed => moveSpeed * ((arena?.Travel?.ChallengeSlowRemaining ?? 0) > 0
+            ? AscensionCultivator.SealSlowMultiplier : 1);
         public void CollectBuffs(CombatBuffBar buffs)
         {
             buffs.Clear();
             if (!IsAlive) return;
+            float sealSlow = arena?.Travel?.ChallengeSlowRemaining ?? 0;
+            if (sealSlow > 0)
+                buffs.AddOrUpdate(new CombatBuffView("ascension-seal-slow", "符缚", 1,
+                    description: "移速降低 35%，与普攻移速倍率相乘。减速期间不会叠加符印。",
+                    timeLeft: sealSlow, duration: AscensionCultivator.SealSlowDuration));
             if (GangQiStacks > 0)
                 buffs.AddOrUpdate(new CombatBuffView("iron-sword-gangqi", "罡气", GangQiStacks,
                     iconResource: "SlashDemo/IronSwordGangQiIcon", description:
@@ -430,7 +438,7 @@ namespace SlashDemo
             if (ComboIndex == 3) TotalPursuits++;
             previousAttackOrigin = body.position;
             // Apply the attack slowdown immediately, including between physics ticks.
-            body.linearVelocity = move * moveSpeed * NormalAttackMoveSpeedMultiplier + recoil;
+            body.linearVelocity = move * WalkingSpeed * NormalAttackMoveSpeedMultiplier + recoil;
             swingSoundPlayed = false;
             ClearTrail();
             IsAttacking = true;
@@ -791,14 +799,14 @@ namespace SlashDemo
                 enemy.TakeHit(strike.damage, direction.normalized, strike.knockback, strike.action == SwordAction.WideCleave);
                 if (!IsTechniqueActive) RegisterTechniqueHit(ComboIndex);
                 arena.Effects.HitStop(strike.action == SwordAction.WideCleave ? 0.045f : 0.033f);
-                arena.CameraRig.Shake((strike.action == SwordAction.WideCleave ? 0.09f : 0.055f) * 0.2f);
+                arena.CameraRig.Shake(strike.action == SwordAction.WideCleave ? .018f : SwordHitShake);
             }
         }
 
         void OnWhirlwindHit()
         {
             RegisterTechniqueHit(3);
-            arena.CameraRig.Shake(0.011f);
+            arena.CameraRig.Shake(SwordHitShake);
             if (Realm >= CultivationRealm.NascentSoul)
             {
                 var wave = heavyAttack.Clone();
@@ -838,13 +846,14 @@ namespace SlashDemo
             if (!IsAlive || arena == null || arena.Paused) { body.linearVelocity = Vector2.zero; return; }
             recoil *= Mathf.Exp(-14 * Time.fixedDeltaTime);
             Vector2 velocity = IsDashing ? dashDirection * dashSpeed : IsHeavyBusy ? Vector2.zero
-                : move * moveSpeed * (IsAttacking || IsComboRecovering ? NormalAttackMoveSpeedMultiplier : 1) + recoil;
+                : move * WalkingSpeed * (IsAttacking || IsComboRecovering ? NormalAttackMoveSpeedMultiplier : 1) + recoil;
             if (IsTechniqueActive)
             {
                 float step = Mathf.Min(skillRushRemaining, Time.fixedDeltaTime);
                 velocity = attackAim * skillRushSpeed * (step / Time.fixedDeltaTime);
                 skillRushRemaining -= step;
             }
+            else if (!IsDashing && arena.Travel != null) velocity += arena.Travel.ChallengePull(body.position);
             body.linearVelocity = velocity;
         }
 
@@ -868,17 +877,23 @@ namespace SlashDemo
             if (!poison) invulnerability = 0.8f;
             flash = 0.1f;
             recoil = protectedCharge ? Vector2.zero : direction.normalized * 5;
-            arena.Effects.Burst(transform.position, DemoArt.Red, 12);
-            arena.Effects.Number(transform.position, "-" + damage, DemoArt.Red);
-            arena.CameraRig.Shake(0.16f);
-            if (!IsAlive)
+            bool lethal = !IsAlive;
+            bool settled = lethal && challenger != null && arena.Travel != null && arena.Travel.TrySettleChallengeDefeat(challenger);
+            if (settled)
             {
-                if (challenger != null && arena.Travel != null && arena.Travel.TrySettleChallengeDefeat(challenger))
-                {
-                    Health = Mathf.CeilToInt(maxHealth * .5f);
-                    Teleport(body.position);
-                    return true;
-                }
+                Health = Mathf.CeilToInt(maxHealth * .5f);
+                Teleport(body.position);
+            }
+            if (damage > 0)
+            {
+                Color impactColor = poison ? new Color(.65f, .86f, .27f) : DemoArt.Red;
+                arena.Effects.DamageImpact(presentation, direction, impactColor, lethal: lethal);
+                arena.Effects.PlayReceivedHit();
+                arena.CameraRig.Shake(SwordHitShake * SlashEffects.ReceivedHitMultiplier);
+            }
+            arena.Effects.Number(transform.position, "-" + damage, DemoArt.Red);
+            if (lethal && !settled)
+            {
                 ironBodyLeft = 0;
                 IsAttacking = false;
                 comboRecoveryLeft = 0;

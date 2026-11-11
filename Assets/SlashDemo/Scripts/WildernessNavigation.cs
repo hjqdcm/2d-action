@@ -17,6 +17,14 @@ namespace SlashDemo
         public void Initialize(TravelMapEnvironment environment, Rigidbody2D physicsBody, float radius)
         { map = environment; body = physicsBody; Radius = radius; }
 
+        internal void InvalidateRoute()
+        {
+            nodes.Clear();
+            links.Clear();
+            route.Clear();
+            nextRoute = 0;
+        }
+
         public Vector2 ChaseDirection(Vector2 from, Vector2 target)
         {
             if (Clear(from, target)) { route.Clear(); return (target - from).normalized; }
@@ -34,7 +42,7 @@ namespace SlashDemo
 
         // Kinematic bodies need an explicit sweep to remain blocked by walls and other creatures.
         // Slide along contacts instead of stopping all movement when approaching at an angle.
-        public Vector2 ConstrainVelocity(Vector2 velocity, float dt)
+        public Vector2 ConstrainVelocity(Vector2 velocity, float dt, bool slide = true)
         {
             if (dt <= 0 || velocity.sqrMagnitude < .000001f) return Vector2.zero;
             const float skin = .015f;
@@ -61,7 +69,7 @@ namespace SlashDemo
                     nearest = travel; normal = contactNormal;
                 }
                 position += direction * nearest;
-                if (normal == Vector2.zero) break;
+                if (!slide || normal == Vector2.zero) break;
                 remaining -= direction * nearest;
                 remaining -= normal * Mathf.Min(0, Vector2.Dot(remaining, normal));
             }
