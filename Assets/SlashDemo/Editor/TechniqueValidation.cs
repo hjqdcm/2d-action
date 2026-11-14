@@ -663,6 +663,12 @@ namespace SlashDemo.Editor
                 "F at the furnace opens the alchemy codex and pauses gameplay");
             Check(!arena.Codex.Equip(TechniqueCatalog.IronSword), "the alchemy codex does not equip techniques");
             Capture("Alchemy-TreasureCodex.png");
+            Vector2 alchemyOrigin = new Vector2(Screen.width / scale / 2 - 540, Screen.height / scale / 2 - 360);
+            yield return ClickCharacterPanel((alchemyOrigin + new Vector2(310, 44)) * scale);
+            Check(arena.Codex.ShowsPills && arena.Paused, "the pill tab switches catalogs without resuming gameplay");
+            Capture("Alchemy-PillCodex.png");
+            yield return ClickCharacterPanel((alchemyOrigin + new Vector2(118, 44)) * scale);
+            Check(!arena.Codex.ShowsPills && arena.Paused, "the treasure tab switches back to the treasure catalog");
             keys = new KeyboardState(Key.Escape); yield return Frames(3);
             Check(!arena.Codex.IsOpen && !arena.Codex.IsAlchemyOpen && !arena.Paused && !arena.PauseMenuOpen,
                 "Esc closes the alchemy codex and resumes gameplay");

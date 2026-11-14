@@ -109,13 +109,14 @@ namespace SlashDemo
         Texture2D ironSkillIcon;
         Texture2D swordsmanPortrait;
         GUIStyle codexBody, codexHeading;
-        GUIStyle treasureDescription, treasureTitle;
+        GUIStyle alchemyDescription, alchemyTitle;
         int codexIndex;
         Vector2 techniqueScroll;
         Vector2 codexScroll;
         Vector2 treasureScroll;
-        float[] treasureRowOffsets;
-        float treasureCardWidth;
+        Vector2 pillScroll;
+        readonly Dictionary<IReadOnlyList<AlchemyEntry>, float[]> alchemyRowOffsets = new Dictionary<IReadOnlyList<AlchemyEntry>, float[]>();
+        float alchemyCardWidth;
         static readonly string[] CharacterPageNames = { "功法", "属性", "物品" };
         GUIStyle small, health, damage, status, travelTitle, travelButton;
         GUIStyle buffName, buffStacks, passiveStacks, buffTooltipBody, buffTooltipTitle;
@@ -142,7 +143,7 @@ namespace SlashDemo
         static readonly Color Muted = new Color(0.43f, 0.40f, 0.31f);
         static readonly Color Jade = new Color(0.22f, 0.43f, 0.34f);
         static readonly Color Cinnabar = new Color(0.61f, 0.23f, 0.18f);
-        static readonly Color[] TreasureNameColors = {
+        static readonly Color[] AlchemyNameColors = {
             Color.white, new Color(0.46f, 0.75f, 1f), new Color(0.81f, 0.63f, 1f), new Color(1f, 0.65f, 0.32f)
         };
 
@@ -175,10 +176,10 @@ namespace SlashDemo
             travelButton.normal.textColor = Ink;
             codexBody = new GUIStyle(small) { fontSize = 17, wordWrap = true };
             codexHeading = new GUIStyle(codexBody) { fontSize = 22, fontStyle = FontStyle.Bold };
-            treasureDescription = new GUIStyle(codexBody) {
+            alchemyDescription = new GUIStyle(codexBody) {
                 fontSize = 16, alignment = TextAnchor.UpperLeft, padding = new RectOffset()
             };
-            treasureTitle = new GUIStyle(codexHeading) {
+            alchemyTitle = new GUIStyle(codexHeading) {
                 fontSize = 19, alignment = TextAnchor.MiddleCenter, padding = new RectOffset()
             };
         }
@@ -346,7 +347,8 @@ namespace SlashDemo
                 DrawPointer(scale);
             }
             DrawBuffTooltip(new Rect(0, 0, width, height));
-            if (arena.Codex == null || !arena.Codex.IsAlchemyOpen) treasureScroll = Vector2.zero;
+            if (arena.Codex == null || !arena.Codex.IsAlchemyOpen)
+                treasureScroll = pillScroll = Vector2.zero;
             if (DefeatPanelVisible) DrawDefeatPanel(width, height);
             else if (arena.Codex != null && arena.Codex.IsAlchemyOpen) DrawAlchemyCodex(width, height);
             else if (arena.Codex != null && arena.Codex.IsOpen) DrawTechniqueCodex(width, height);
@@ -636,55 +638,60 @@ namespace SlashDemo
 
             var treasureTab = new Rect(panel.x + 28, panel.y + 22, 180, 44);
             var pillTab = new Rect(treasureTab.xMax + 12, treasureTab.y, treasureTab.width, treasureTab.height);
-            Box(treasureTab, Jade);
-            Outline(treasureTab, Bronze);
-            Label(treasureTab, "法宝图鉴", travelTitle, Color.white);
-            Outline(pillTab, Muted);
-            Label(pillTab, "丹药图鉴（待补）", status, Muted);
+            var codex = arena.Codex;
+            if (DrawCharacterButton(treasureTab, "法宝图鉴", !codex.ShowsPills))
+                codex.SelectAlchemyPage(false);
+            if (DrawCharacterButton(pillTab, "丹药图鉴", codex.ShowsPills))
+                codex.SelectAlchemyPage(true);
             if (GUI.Button(new Rect(panel.xMax - 168, panel.y + 24, 140, 40), "关闭 F / Esc", travelButton))
             {
-                arena.Codex.Close();
+                codex.Close();
                 GUI.depth = previousDepth;
                 return;
             }
             Box(new Rect(panel.x + 28, panel.y + 82, panel.width - 56, 1), Bronze);
-            DrawTreasureGrid(new Rect(panel.x + 28, panel.y + 99, panel.width - 56, panel.height - 127));
+            var viewport = new Rect(panel.x + 28, panel.y + 99, panel.width - 56, panel.height - 127);
+            if (codex.ShowsPills) DrawAlchemyGrid(viewport, PillCatalog.All, ref pillScroll);
+            else DrawAlchemyGrid(viewport, TreasureCatalog.All, ref treasureScroll);
             GUI.depth = previousDepth;
         }
 
-        void DrawTreasureGrid(Rect viewport)
+        void DrawAlchemyGrid(Rect viewport, IReadOnlyList<AlchemyEntry> entries, ref Vector2 scroll)
         {
             const int columns = 5;
             const float gap = 10, padding = 12, imageSize = 112, titleHeight = 30;
             const float descriptionTop = padding + imageSize + 4 + titleHeight + 4;
-            var entries = TreasureCatalog.All;
             int rowCount = (entries.Count + columns - 1) / columns;
             float contentWidth = viewport.width - 20;
             float cardWidth = (contentWidth - (columns - 1) * gap) / columns;
             float textWidth = cardWidth - 2 * padding;
-            if (treasureRowOffsets == null || treasureCardWidth != cardWidth)
+            if (alchemyCardWidth != cardWidth)
             {
-                treasureCardWidth = cardWidth;
-                treasureRowOffsets = new float[rowCount + 1];
+                alchemyCardWidth = cardWidth;
+                alchemyRowOffsets.Clear();
+            }
+            if (!alchemyRowOffsets.TryGetValue(entries, out var rowOffsets))
+            {
+                rowOffsets = new float[rowCount + 1];
                 for (int row = 0; row < rowCount; row++)
                 {
                     float descriptionHeight = 0;
                     int end = Mathf.Min((row + 1) * columns, entries.Count);
                     for (int i = row * columns; i < end; i++)
                         descriptionHeight = Mathf.Max(descriptionHeight,
-                            treasureDescription.CalcHeight(new GUIContent(entries[i].Effect), textWidth));
-                    treasureRowOffsets[row + 1] = treasureRowOffsets[row] + descriptionTop + descriptionHeight + padding + gap;
+                            alchemyDescription.CalcHeight(new GUIContent(entries[i].Effect), textWidth));
+                    rowOffsets[row + 1] = rowOffsets[row] + descriptionTop + descriptionHeight + padding + gap;
                 }
+                alchemyRowOffsets.Add(entries, rowOffsets);
             }
 
-            treasureScroll = GUI.BeginScrollView(viewport, treasureScroll,
-                new Rect(0, 0, contentWidth, Mathf.Max(0, treasureRowOffsets[rowCount] - gap)));
+            scroll = GUI.BeginScrollView(viewport, scroll, new Rect(0, 0, contentWidth, Mathf.Max(0, rowOffsets[rowCount] - gap)));
             for (int row = 0; row < rowCount; row++)
             {
-                float y = treasureRowOffsets[row];
-                if (y >= treasureScroll.y + viewport.height) break;
-                float cardHeight = treasureRowOffsets[row + 1] - y - gap;
-                if (y + cardHeight <= treasureScroll.y) continue;
+                float y = rowOffsets[row];
+                if (y >= scroll.y + viewport.height) break;
+                float cardHeight = rowOffsets[row + 1] - y - gap;
+                if (y + cardHeight <= scroll.y) continue;
 
                 int start = row * columns;
                 int end = Mathf.Min(start + columns, entries.Count);
@@ -701,9 +708,9 @@ namespace SlashDemo
                         DrawHudIcon(imageSlot, entry.IconResource);
                     Outline(imageSlot, Bronze);
                     Label(new Rect(x + padding, imageSlot.yMax + 4, textWidth, titleHeight),
-                        entry.Name, treasureTitle, TreasureNameColors[(int)entry.Quality]);
+                        entry.Name, alchemyTitle, AlchemyNameColors[(int)entry.Quality]);
                     Label(new Rect(x + padding, y + descriptionTop, textWidth, cardHeight - descriptionTop - padding),
-                        entry.Effect, treasureDescription, new Color(0.94f, 0.92f, 0.85f));
+                        entry.Effect, alchemyDescription, new Color(0.94f, 0.92f, 0.85f));
                 }
             }
             GUI.EndScrollView();
