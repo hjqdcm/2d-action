@@ -231,7 +231,9 @@ namespace SlashDemo
             s.dashCooldown = Slider(ref y, width, "冲刺冷却", s.dashCooldown, 0.15f, 3, 0.05f, " s");
             s.comboResetTime = Slider(ref y, width, "连招衔接窗口", s.comboResetTime, 0.15f, 2, 0.05f, " s");
             s.maxHealth = Mathf.RoundToInt(Slider(ref y, width, "最大气血（保留血量比例）", s.maxHealth, 20, 500, 10));
-            s.invincible = GUI.Toggle(new Rect(0, y + 5, width, 32), s.invincible, " 调试无敌", toggle);
+            s.invincible = GUI.Toggle(new Rect(0, y + 5, width / 2, 32), s.invincible, " 调试无敌", toggle);
+            s.infiniteUltimateForDebug = GUI.Toggle(new Rect(width / 2, y + 5, width / 2, 32),
+                s.infiniteUltimateForDebug, " 无限大招", toggle);
         }
         void DrawStrike(ref float y, float width)
         {

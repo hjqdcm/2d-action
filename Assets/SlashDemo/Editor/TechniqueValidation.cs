@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -165,6 +166,9 @@ namespace SlashDemo.Editor
             AssetDatabase.ForceToDesiredWorkerCount();
             SceneTravelValidation.RunBatch();
         }
+        static IReadOnlyList<CombatBuffView> TechniqueBuffs(SlashHUD hud)
+            => hud.VisibleBuffs.Where(buff => buff.id != "five-star-sword-progress").ToArray();
+
         static void Check(bool condition, string message)
         {
             if (!condition) throw new Exception(message);
@@ -543,7 +547,7 @@ namespace SlashDemo.Editor
                 yield return Idle(player);
                 Check(player.ComboStacks == 2 && combo.StackUntil == deadline && !combo.StrikeHit,
                     "a real missed attack preserves layers and the last hit deadline without refreshing either");
-                Check(hud.VisibleBuffs.Count == 1 && hud.VisibleBuffs[0].stacks == 2
+                Check(TechniqueBuffs(hud).Count == 1 && TechniqueBuffs(hud)[0].stacks == 2
                     && Mathf.Abs(player.NormalAttackSpeedMultiplier - 1.1f) < 0.001f,
                     "missed attacks retain the two-layer buff cell and its Foundation speed bonus");
             }
@@ -551,7 +555,7 @@ namespace SlashDemo.Editor
                 "misses grant no damage or whirlwind follow-up while preserving layers");
             Capture("MissedAttack-Preserved-Buff.png");
             yield return Wait(Mathf.Max(0, deadline - Time.time) + 0.05f);
-            Check(player.ComboStacks == 0 && hud.VisibleBuffs.Count == 0,
+            Check(player.ComboStacks == 0 && TechniqueBuffs(hud).Count == 0,
                 "layers and the buff cell expire at the original deadline despite repeated missed attacks");
         }
 
@@ -629,6 +633,40 @@ namespace SlashDemo.Editor
             Check(!arena.Codex.IsOpen && !arena.CharacterPanel.IsOpen && !arena.Paused, "F closes only the table codex");
             keys = new KeyboardState();
             yield return Frames(3);
+
+            player.Teleport(ManorEnvironment.Ground(380, 540)); yield return Frames(3);
+            Check(arena.CharacterPanel.ShowWardrobePrompt && !arena.Codex.ShowPrompt,
+                "the wardrobe prompt appears on the walkable bedroom floor");
+            keys = new KeyboardState(Key.F); yield return Frames(3);
+            Check(arena.CharacterPanel.IsWardrobeOpen && arena.InputBlocked && !arena.PauseMenuOpen && !arena.Codex.IsOpen,
+                "F at the wardrobe pauses gameplay and opens the selection");
+            keys = new KeyboardState(); yield return Frames(3);
+            Capture("Wardrobe-CharacterSelection.png");
+            var wardrobeOrigin = new Vector2(Screen.width / scale / 2 - 540, Screen.height / scale / 2 - 350);
+            yield return ClickCharacterPanel((wardrobeOrigin + new Vector2(774, 645)) * scale);
+            Check(!arena.CharacterPanel.IsOpen && !arena.Paused && arena.Player == player
+                && player.Character == PlayableCharacter.Swordsman && player.TotalSwings == swings,
+                "confirming the swordsman preserves the player and resumes without an attack");
+            keys = new KeyboardState(Key.F); yield return Frames(3);
+            Check(arena.CharacterPanel.IsWardrobeOpen, "the wardrobe can be opened again after confirmation");
+            keys = new KeyboardState(Key.Escape); yield return Frames(3);
+            Check(!arena.CharacterPanel.IsOpen && !arena.Paused,
+                "Esc returns from the wardrobe without opening the pause menu");
+            keys = new KeyboardState(); yield return Frames(3);
+
+            Check(!arena.Codex.ShowAlchemyPrompt, "the alchemy codex prompt stays hidden in the bedroom");
+            player.Teleport(ManorEnvironment.Ground(380, 245)); yield return Frames(3);
+            Check(arena.Codex.ShowAlchemyPrompt && !arena.Codex.ShowPrompt,
+                "the counter in front of the furnace offers the alchemy codex");
+            keys = new KeyboardState(Key.F); yield return Frames(3);
+            Check(arena.Codex.IsAlchemyOpen && arena.InputBlocked && !arena.PauseMenuOpen && !arena.CharacterPanel.IsOpen,
+                "F at the furnace opens the alchemy codex and pauses gameplay");
+            Check(!arena.Codex.Equip(TechniqueCatalog.IronSword), "the alchemy codex does not equip techniques");
+            Capture("Alchemy-TreasureCodex.png");
+            keys = new KeyboardState(Key.Escape); yield return Frames(3);
+            Check(!arena.Codex.IsOpen && !arena.Codex.IsAlchemyOpen && !arena.Paused && !arena.PauseMenuOpen,
+                "Esc closes the alchemy codex and resumes gameplay");
+            keys = new KeyboardState(); yield return Frames(3);
         }
 
         static IEnumerator ValidateBuffBar(SlashArena arena)
@@ -636,13 +674,13 @@ namespace SlashDemo.Editor
             Place(arena, CultivationRealm.QiRefining); yield return Frames();
             var player = arena.Player;
             var hud = arena.GetComponent<SlashHUD>();
-            Check(hud.VisibleBuffs.Count == 0, "buff bar is empty when no buff is active");
+            Check(TechniqueBuffs(hud).Count == 0, "buff bar is empty when no buff is active");
             player.RequestAttack(Vector2.right); yield return Idle(player);
-            Check(hud.VisibleBuffs.Count == 1 && hud.VisibleBuffs[0].id == "flowing-cloud-stacks"
-                && hud.VisibleBuffs[0].name == "叠浪" && hud.VisibleBuffs[0].stacks == 1,
+            Check(TechniqueBuffs(hud).Count == 1 && TechniqueBuffs(hud)[0].id == "flowing-cloud-stacks"
+                && TechniqueBuffs(hud)[0].name == "叠浪" && TechniqueBuffs(hud)[0].stacks == 1,
                 "a real hit shows one Flowing Cloud buff cell with its current layer count");
             Capture("BuffBar-One-Stack.png");
-            var buff = hud.VisibleBuffs[0];
+            var buff = TechniqueBuffs(hud)[0];
             var icon = Resources.Load<Texture2D>(buff.iconResource);
             Check(buff.iconResource == "SlashDemo/FlowingCloudBuffIcon" && icon != null && icon.width == icon.height,
                 "buff cell loads the user's supplied square sword-and-cloud artwork");
@@ -680,46 +718,46 @@ namespace SlashDemo.Editor
             foreach (var realm in new[] { CultivationRealm.FoundationEstablishment, CultivationRealm.GoldenCore, CultivationRealm.NascentSoul })
             {
                 player.SetRealm(realm); player.FillTechniqueStacksForDebug();
-                Check(hud.VisibleBuffs[0].description == "每层叠浪使普攻伤害提高8%、普攻移速提高3%、普攻攻速提升5%，叠满5层时，额外提升20%的普攻伤害",
+                Check(TechniqueBuffs(hud)[0].description == "每层叠浪使普攻伤害提高8%、普攻移速提高3%、普攻攻速提升5%，叠满5层时，额外提升20%的普攻伤害",
                     "Foundation and higher realms show the requested damage and attack-speed sentence");
             }
             player.SetRealm(CultivationRealm.FoundationEstablishment); player.FillTechniqueStacksForDebug();
             pointer = new MouseState { position = new Vector2(center.x * scale, Screen.height - center.y * scale) };
             yield return Wait(0.45f); Capture("BuffCountdown-Quarter.png");
-            float quarterRemaining = hud.VisibleBuffs[0].RemainingFraction;
+            float quarterRemaining = TechniqueBuffs(hud)[0].RemainingFraction;
             yield return Wait(0.5f); Capture("BuffCountdown-Half.png");
-            Check(hud.VisibleBuffs[0].RemainingFraction < quarterRemaining, "visible countdown advances with the existing buff clock");
+            Check(TechniqueBuffs(hud)[0].RemainingFraction < quarterRemaining, "visible countdown advances with the existing buff clock");
             yield return Wait(0.5f); Capture("BuffCountdown-ThreeQuarters.png");
             player.SetRealm(CultivationRealm.QiRefining);
             player.FillTechniqueStacksForDebug(); yield return Frames(2);
-            Check(hud.VisibleBuffs.Count == 1 && hud.VisibleBuffs[0].stacks == 5,
+            Check(TechniqueBuffs(hud).Count == 1 && TechniqueBuffs(hud)[0].stacks == 5,
                 "five layers update the same buff cell instead of creating five cells");
             Capture("BuffBar-Five-Stacks.png");
             pointer = new MouseState { position = new Vector2(center.x * scale, Screen.height - center.y * scale) };
             yield return Frames(2); Capture("BuffIcon-Hover-Five.png");
             Check(hud.HoveredBuffId == "flowing-cloud-stacks" && Mathf.Abs(player.ComboDamageBonus - 0.6f) < 0.001f,
                 "five-stack badge and hover match the new sixty-percent total damage bonus");
-            Check(player.TryDash(Vector2.left) && hud.VisibleBuffs.Count == 1 && hud.VisibleBuffs[0].stacks == 4,
+            Check(player.TryDash(Vector2.left) && TechniqueBuffs(hud).Count == 1 && TechniqueBuffs(hud)[0].stacks == 4,
                 "dodge immediately updates the visible buff from five to four layers");
             yield return Idle(player); Capture("BuffBar-Four-Stacks.png");
-            Check(player.TryTechniqueSkill(Vector2.right) && hud.VisibleBuffs.Count == 0,
+            Check(player.TryTechniqueSkill(Vector2.right) && TechniqueBuffs(hud).Count == 0,
                 "Q consuming all layers immediately removes the buff cell");
             yield return Idle(player);
             Check(hud.HoveredBuffId == null, "consuming the buff also dismisses its hover tooltip");
             player.FillTechniqueStacksForDebug();
-            Check(player.TakeDamage(1, Vector2.up) && hud.VisibleBuffs.Count == 0, "incoming damage clears the visible buff with its layers");
+            Check(player.TakeDamage(1, Vector2.up) && TechniqueBuffs(hud).Count == 0, "incoming damage clears the visible buff with its layers");
             player.FillTechniqueStacksForDebug();
             float timeLeft = player.ComboStackTimeLeft;
             arena.TogglePause(); yield return Frames();
-            Check(hud.VisibleBuffs.Count == 1 && hud.VisibleBuffs[0].stacks == 5 && player.ComboStackTimeLeft == timeLeft,
+            Check(TechniqueBuffs(hud).Count == 1 && TechniqueBuffs(hud)[0].stacks == 5 && player.ComboStackTimeLeft == timeLeft,
                 "pause preserves the visible buff and freezes its lifetime");
-            Check(hud.VisibleBuffs[0].timeLeft == timeLeft, "paused icon countdown freezes with the gameplay timer");
+            Check(TechniqueBuffs(hud)[0].timeLeft == timeLeft, "paused icon countdown freezes with the gameplay timer");
             arena.TogglePause(); yield return Wait(2.05f);
-            Check(hud.VisibleBuffs.Count == 0, "expired layers cannot leave a stale buff cell");
+            Check(TechniqueBuffs(hud).Count == 0, "expired layers cannot leave a stale buff cell");
             player.FillTechniqueStacksForDebug(); player.Teleport(ManorEnvironment.TrainingCenter);
-            Check(hud.VisibleBuffs.Count == 0, "teleport removes buff cells whose layers were cleared");
+            Check(TechniqueBuffs(hud).Count == 0, "teleport removes buff cells whose layers were cleared");
             player.FillTechniqueStacksForDebug();
-            Check(player.TakeDamage(player.maxHealth, Vector2.up) && !player.IsAlive && hud.VisibleBuffs.Count == 0,
+            Check(player.TakeDamage(player.maxHealth, Vector2.up) && !player.IsAlive && TechniqueBuffs(hud).Count == 0,
                 "a defeated player cannot retain a visible active buff");
         }
 
@@ -1686,16 +1724,16 @@ namespace SlashDemo.Editor
             IronCharge(player).Advance(player.heavyAttack.chargeTime * 0.5f);
             Time.timeScale = 0;
             yield return Frames(2);
-            Check(hud.VisibleBuffs.Count == 1 && hud.VisibleBuffs[0].id == "iron-sword-gangqi"
-                && hud.VisibleBuffs[0].iconResource == "SlashDemo/IronSwordGangQiIcon" && hud.VisibleBuffs[0].stacks == player.GangQiStacks,
+            Check(TechniqueBuffs(hud).Count == 1 && TechniqueBuffs(hud)[0].id == "iron-sword-gangqi"
+                && TechniqueBuffs(hud)[0].iconResource == "SlashDemo/IronSwordGangQiIcon" && TechniqueBuffs(hud)[0].stacks == player.GangQiStacks,
                 "Gangqi uses the supplied square artwork and live stack badge in the shared buff bar");
             Capture("IronSword-Icons-Charging.png");
             Check(player.TryTechniqueSkill(Vector2.right), "activate Sword Gangqi Protection during the HUD charge preview");
             IronCharge(player).Advance(player.heavyAttack.chargeTime);
             yield return Frames(2);
-            Check(hud.VisibleBuffs.Count == 2 && hud.VisibleBuffs[0].stacks == 6
-                && hud.VisibleBuffs[1].name == "剑罡护体" && hud.VisibleBuffs[1].iconResource == "SlashDemo/IronSwordActiveIcon"
-                && hud.VisibleBuffs[1].duration == player.IronSword.bodyDuration,
+            Check(TechniqueBuffs(hud).Count == 2 && TechniqueBuffs(hud)[0].stacks == 6
+                && TechniqueBuffs(hud)[1].name == "剑罡护体" && TechniqueBuffs(hud)[1].iconResource == "SlashDemo/IronSwordActiveIcon"
+                && TechniqueBuffs(hud)[1].duration == player.IronSword.bodyDuration,
                 "full Gangqi and timed protection share Flowing Cloud's stack, tooltip and countdown presentation");
             Capture("IronSword-Icons-Protected.png");
             float scale = Mathf.Min(Screen.width / 1600f, Screen.height / 900f);
@@ -1705,10 +1743,10 @@ namespace SlashDemo.Editor
             Check(hud.HoveredBuffId == "iron-sword-gangqi", "new Gangqi icon retains the shared effect tooltip");
             Capture("IronSword-Icons-Gangqi-Tooltip.png");
             player.CancelHeavyAttack();
-            Check(hud.VisibleBuffs.Count == 1 && hud.VisibleBuffs[0].id == "iron-sword-body", "ending charge removes Gangqi without hiding the active protection buff");
+            Check(TechniqueBuffs(hud).Count == 1 && TechniqueBuffs(hud)[0].id == "iron-sword-body", "ending charge removes Gangqi without hiding the active protection buff");
             pointer = new MouseState(); Time.timeScale = 1;
             yield return Wait(player.IronSword.bodyDuration + 0.05f);
-            Check(hud.VisibleBuffs.Count == 0 && player.TechniqueCooldownLeft > 0,
+            Check(TechniqueBuffs(hud).Count == 0 && player.TechniqueCooldownLeft > 0,
                 "protection expiry removes its buff while the active slot continues cooling down");
         }
 

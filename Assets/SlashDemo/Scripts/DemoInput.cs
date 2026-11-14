@@ -28,10 +28,11 @@ namespace SlashDemo
         public static bool TuningPressed => Keyboard.current != null && Keyboard.current.f1Key.wasPressedThisFrame;
         public static bool SkillPressed => Keyboard.current != null && Keyboard.current.qKey.wasPressedThisFrame;
         public static bool SkillHeld => Keyboard.current != null && Keyboard.current.qKey.isPressed;
+        public static bool UltimatePressed => Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
         public static bool InteractPressed => Keyboard.current != null && Keyboard.current.fKey.wasPressedThisFrame;
         public static bool CharacterPanelPressed => Keyboard.current != null && Keyboard.current.tabKey.wasPressedThisFrame;
         public static bool GameplayHeld => AttackHeld || HeavyHeld || DashHeld || SkillHeld
-            || (Keyboard.current != null && Keyboard.current.fKey.isPressed);
+            || (Keyboard.current != null && (Keyboard.current.fKey.isPressed || Keyboard.current.rKey.isPressed));
         public static bool MouseAvailable => Mouse.current != null;
         public static Vector2 Pointer => Mouse.current == null ? Vector2.zero : Mouse.current.position.ReadValue();
     }

@@ -79,11 +79,27 @@ namespace SlashDemo
         internal bool Clear(Vector2 a, Vector2 b)
         {
             Vector2 delta = b - a;
-            foreach (var hit in Physics2D.CircleCastAll(a, Radius + 0.04f, delta.normalized, delta.magnitude))
-                if (!hit.collider.isTrigger && hit.transform.IsChildOf(map.transform)
-                    && hit.collider.GetComponent<SlashEnemy>() == null) return false;
+            float distance = delta.magnitude;
+            Vector2 direction = delta.normalized;
+            bool touchesPadding = false;
+            foreach (var hit in Physics2D.CircleCastAll(a, Radius + .04f, direction, distance))
+            {
+                if (!IsMapObstacle(hit.collider)) continue;
+                if (hit.distance > 0) return false;
+                touchesPadding = true;
+            }
+
+            // A body stopped by the movement sweep can sit inside the route's extra clearance.
+            // Sweep the full path at body size to catch later segments of the same boundary.
+            if (touchesPadding)
+                foreach (var hit in Physics2D.CircleCastAll(a, Radius, direction, distance))
+                    if (IsMapObstacle(hit.collider)) return false;
             return true;
         }
+
+        bool IsMapObstacle(Collider2D collider)
+            => !collider.isTrigger && collider.transform.IsChildOf(map.transform)
+                && collider.GetComponent<SlashEnemy>() == null;
 
         public bool Walkable(Vector2 p)
         {

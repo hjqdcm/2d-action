@@ -215,16 +215,17 @@ namespace SlashDemo
             return clip;
         }
 
-        public void PlaySwing(bool heavy) { if (audioSource != null) audioSource.PlayOneShot(heavy ? heavySwing : swing); }
+        void PlaySound(AudioClip clip, float volumeScale = 1)
+        {
+            if (audioSource != null && clip != null) audioSource.PlayOneShot(clip, volumeScale);
+        }
+
+        public void PlaySwing(bool heavy) => PlaySound(heavy ? heavySwing : swing);
         public void PlayHit(bool heavy = false, bool lethal = false)
-        {
-            if (audioSource != null) audioSource.PlayOneShot(lethal ? killingHit : heavy ? heavyHit : hit,
+            => PlaySound(lethal ? killingHit : heavy ? heavyHit : hit,
                 lethal ? 1 : heavy ? 0.9f : NormalHitVolume);
-        }
         internal void PlayReceivedHit()
-        {
-            if (audioSource != null) audioSource.PlayOneShot(receivedHit, NormalHitVolume * ReceivedHitMultiplier);
-        }
+            => PlaySound(receivedHit, NormalHitVolume * ReceivedHitMultiplier);
         public void SetVolume(float value)
         {
             volume = Mathf.Clamp01(value);
@@ -436,8 +437,8 @@ namespace SlashDemo
             DrawImpactRing(ring);
 
             Color white = Color.Lerp(color, Color.white, .88f);
-            AddDamageFleck(point, heading + 28, new Vector2(.69f, .13f) * size, white, 0, .10f, order + 2);
-            AddDamageFleck(point, heading + 112, new Vector2(.46f, .095f) * size, white, 0, .12f, order + 2);
+            AddFleck(point, heading + 28, new Vector2(.69f, .13f) * size, white, 0, .10f, order + 2);
+            AddFleck(point, heading + 112, new Vector2(.46f, .095f) * size, white, 0, .12f, order + 2);
             int count = heavy || lethal ? 13 : 9;
             for (int i = 0; i < count; i++)
             {
@@ -445,15 +446,49 @@ namespace SlashDemo
                     ? heading + Random.Range(-65f, 65f) : Random.Range(0f, 360f);
                 Vector2 offset = DemoArt.Direction(angle) * Random.Range(.055f, .18f) * size;
                 Vector2 dimensions = new Vector2(Random.Range(.14f, .28f), Random.Range(.034f, .065f)) * size;
-                AddDamageFleck(point + View.Rotation * (Vector3)offset, angle, dimensions, i % 3 == 0 ? white : color,
+                AddFleck(point + View.Rotation * (Vector3)offset, angle, dimensions, i % 3 == 0 ? white : color,
                     Random.Range(2.7f, 6.2f) * size, Random.Range(.18f, .34f), order + 1);
             }
         }
 
-        void AddDamageFleck(Vector3 point, float angle, Vector2 size, Color color, float speed, float life, int order)
+        internal void DrawSwordSlashFlecks(Vector2 start, Vector2 end, Color color)
+        {
+            const float sizeScale = .64f;
+            const float opacity = .90f;
+            Color lightBlue = Color.Lerp(color, Color.white, .38f);
+            lightBlue.a = opacity;
+            Color highlight = Color.Lerp(lightBlue, Color.white, .32f);
+            highlight.a = opacity;
+            Vector2 direction = ObliqueProjection.ProjectGround(end - start, View.elevation);
+            float heading = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
+            for (int i = 0; i < 4; i++)
+            {
+                Vector2 point = Vector2.Lerp(start, end, .18f + i * .21f);
+                AddFleck(View.LiftPoint(point, Random.Range(.35f, .55f)), heading + Random.Range(-23f, 23f),
+                    Vector2.one * (Random.Range(.075f, .11f) * sizeScale), highlight,
+                    Random.Range(2.7f, 4.3f), Random.Range(.12f, .20f), 15003, "Sword slash fleck", "Disk");
+            }
+
+            Vector2 side = Vector2.Perpendicular((end - start).normalized);
+            const int flecksPerSide = 10;
+            for (int i = 0; i < flecksPerSide; i++)
+            {
+                for (int sign = -1; sign <= 1; sign += 2)
+                {
+                    float along = Mathf.Lerp(.10f, .90f, (i + Random.Range(.10f, .90f)) / flecksPerSide);
+                    Vector2 point = Vector2.Lerp(start, end, along) + side * (sign * Random.Range(.27f, .86f));
+                    AddFleck(View.LiftPoint(point, Random.Range(.30f, .58f)), heading + sign * Random.Range(18f, 43f),
+                        Vector2.one * (Random.Range(.083f, .13f) * sizeScale), lightBlue,
+                        Random.Range(2.1f, 3.9f), Random.Range(.24f, .36f), 15003, "Sword slash fleck", "Disk");
+                }
+            }
+        }
+
+        void AddFleck(Vector3 point, float angle, Vector2 size, Color color, float speed, float life,
+            int order, string name = "Damage spark", string sprite = null)
         {
             if (particles.Count >= 180) return;
-            var spark = DemoArt.Shape("Damage spark", transform, speed > 0 ? "Blade" : "Disk", Vector2.zero, size, color, order);
+            var spark = DemoArt.Shape(name, transform, sprite ?? (speed > 0 ? "Blade" : "Disk"), Vector2.zero, size, color, order);
             spark.transform.SetPositionAndRotation(point, View.Rotation * Quaternion.Euler(0, 0, angle));
             Vector3 velocity = View.Rotation * (Vector3)(DemoArt.Direction(angle) * speed);
             particles.Add(new Fleck { renderer = spark, velocity = velocity, life = life,

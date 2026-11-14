@@ -151,6 +151,7 @@ namespace SlashDemo
         public void Restart()
         {
             var equipped = player != null ? player.Technique : TechniqueCatalog.FlowingCloud;
+            var character = player != null ? player.Character : PlayableCharacter.Swordsman;
             if (Codex != null) Codex.Close();
             if (CharacterPanel != null) CharacterPanel.Close();
             if (Travel != null) Travel.ResetForRestart();
@@ -162,7 +163,7 @@ namespace SlashDemo
             foreach (Transform child in actors)
             { child.gameObject.SetActive(false); Destroy(child.gameObject); }
             enemies.Clear();
-            player = CreatePlayer(actors, ManorEnvironment.SpawnPoint);
+            player = CreatePlayer(actors, ManorEnvironment.SpawnPoint, character: character);
             if (Tuning != null) Tuning.ApplyPlayer(player);
             player.EquipTechnique(equipped);
             CameraRig.target = player.transform;
@@ -217,7 +218,7 @@ namespace SlashDemo
             if (Travel != null) Travel.ReturnHome();
             var defeatedPlayer = player;
             defeatedPlayer.gameObject.SetActive(false);
-            player = CreatePlayer(actors, ManorEnvironment.SpawnPoint, continuous3D);
+            player = CreatePlayer(actors, ManorEnvironment.SpawnPoint, continuous3D, defeatedPlayer.Character);
             if (Tuning != null) Tuning.ApplyPlayer(player);
             // Death resets progression and possessions unless an explicit retention rule is added.
             player.EquipTechnique(TechniqueCatalog.FlowingCloud, true);
@@ -322,7 +323,8 @@ namespace SlashDemo
             gameObject.AddComponent<SlashHUD>();
         }
 
-        public static SlashPlayer CreatePlayer(Transform parent, Vector2 position, bool continuous3D = false)
+        public static SlashPlayer CreatePlayer(Transform parent, Vector2 position, bool continuous3D = false,
+            PlayableCharacter character = PlayableCharacter.Swordsman)
         {
             var go = new GameObject("Player - Swordsman");
             go.SetActive(false);
@@ -336,6 +338,7 @@ namespace SlashDemo
             DemoArt.Shape("Guard", pivot, "Square", new Vector2(0.55f, 0), new Vector2(0.065f, 0.29f), DemoArt.Gold, 321);
             DemoArt.Shape("Blade", pivot, "Blade", new Vector2(1.03f, 0), new Vector2(0.95f, 0.13f), new Color(0.89f, 1, 0.95f), 322);
             var player = go.AddComponent<SlashPlayer>();
+            player.Character = character;
             player.useContinuous3D = continuous3D;
             go.AddComponent<ObliqueActor>().Initialize(parent.GetComponentInParent<SlashArena>());
             go.SetActive(true);

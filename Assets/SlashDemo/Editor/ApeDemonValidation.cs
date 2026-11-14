@@ -107,11 +107,52 @@ namespace SlashDemo.Editor
                 camera.GetUniversalAdditionalCameraData().renderPostProcessing=post;
             }
         }
+        static void VerifyWallPursuit(SlashEnemy enemy, Rigidbody2D body)
+        {
+            var map = arena.Travel.ActiveMap;
+            var wall = map.GetComponentInChildren<EdgeCollider2D>();
+            var navigation = enemy.GetComponent<ApeDemon>().Navigation;
+            Vector2 wallPoint = map.Definition.Ground(820, 1005);
+            Vector2 start = wallPoint + Vector2.up * (enemy.Radius + .4f);
+            body.position = start;
+            body.transform.position = start;
+            body.linearVelocity = Vector2.zero;
+            arena.Player.Teleport(start + Vector2.up * 5);
+            Physics2D.SyncTransforms();
+
+            float dt = Time.fixedDeltaTime;
+            var fixedUpdate = typeof(SlashEnemy).GetMethod("FixedUpdate", Private);
+            var simulation = Physics2D.simulationMode;
+            try
+            {
+                Physics2D.simulationMode = SimulationMode2D.Script;
+                for (int step = 0; step < 25; step++)
+                {
+                    body.linearVelocity = navigation.ConstrainVelocity(Vector2.down * enemy.moveSpeed, dt);
+                    Physics2D.Simulate(dt);
+                }
+                Vector2 contact = body.position;
+                float clearance = contact.y - wallPoint.y;
+                Check(clearance >= enemy.Radius && clearance < enemy.Radius + wall.edgeRadius + .025f,
+                    "The ape did not stop against the wall.");
+                for (int step = 0; step < 25; step++)
+                {
+                    fixedUpdate.Invoke(enemy, null);
+                    Physics2D.Simulate(dt);
+                }
+                Check(body.position.y > contact.y + .5f && navigation.Walkable(body.position),
+                    "The ape could not leave wall contact to pursue the player.");
+            }
+            finally { Physics2D.simulationMode = simulation; }
+        }
+
         static void VerifyCombat()
         {
             var enemy = pack[0]; var combat = enemy.GetComponent<ApeCombat>(); var animation = enemy.GetComponent<ApeAnimation>();
             var actor = enemy.GetComponent<ObliqueActor>(); var body = enemy.GetComponent<Rigidbody2D>();
             foreach (var other in pack.Skip(1)) other.gameObject.SetActive(false);
+            combat.Stop();
+            VerifyWallPursuit(enemy, body);
             body.position = Vector2.zero; body.transform.position = Vector2.zero; body.linearVelocity = Vector2.zero;
             enemy.moveSpeed = 0; combat.Stop(); Set(combat, "nextPound", 1000f);
             arena.Player.invincible = false; Set(arena.Player, "invulnerability", 0f);

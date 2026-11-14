@@ -88,10 +88,24 @@ namespace SlashDemo
         public TechniqueDefinition Technique { get; private set; } = TechniqueCatalog.FlowingCloud;
         public bool HasIronSword => Technique == TechniqueCatalog.IronSword;
         public bool HasFlowingCloud => Technique == TechniqueCatalog.FlowingCloud;
+        public PlayableCharacter Character { get; internal set; }
+        FiveStarSwordSlash ultimate;
+        internal FiveStarSwordSlash Ultimate
+        {
+            get
+            {
+                if (ultimate == null && arena != null && Character == PlayableCharacter.Swordsman)
+                    ultimate = new FiveStarSwordSlash(this, arena);
+                return ultimate;
+            }
+        }
+        internal bool InfiniteUltimateForDebug { get; private set; }
+        public bool IsUltimateActive => ultimate != null && ultimate.Active;
+        bool ultimatePressedQueued;
         public SlashTuningSettings.IronSwordSettings IronSword { get; private set; } = new SlashTuningSettings.IronSwordSettings();
         SlashTuningSettings.IronSwordSettings chargedIronSettings;
         CultivationRealm chargedIronRealm;
-        bool ironHeavy;
+        bool ironHeavy, fullIronRelease;
         float ironBodyLeft, ironCooldownLeft;
         public int GangQiStacks => HasIronSword && IsCharging ? IronSwordRules.Stacks(ChargeProgress) : 0;
         public int LastReleasedGangQi { get; private set; }
@@ -142,7 +156,13 @@ namespace SlashDemo
                 buffs.AddOrUpdate(new CombatBuffView("flowing-cloud-stacks", "叠浪", ComboStacks,
                     "SlashDemo/FlowingCloudBuffIcon", effects, ComboStackTimeLeft, FlowingCloudRules.StackDuration));
             }
-            // Register future active buffs here; their screen positions belong only to BuffBarLayout.
+            var skill = Ultimate;
+            if (skill != null)
+                buffs.AddOrUpdate(new CombatBuffView(FiveStarSwordSlash.ProgressBuffId, FiveStarSwordSlash.Name, skill.Progress,
+                    iconResource: FiveStarSwordSlash.IconResource,
+                    description: skill.Requirement + " " + skill.Progress + " / " + skill.Required
+                        + (InfiniteUltimateForDebug ? "。调试模式下可直接按 R 施放。" : "。满层且冷却结束后按 R 施放。"),
+                    showZeroStacks: true, cropIconToSquare: true));
         }
         float normalStrikeSpeed = 1;
         public bool IsTechniqueActive { get; private set; }
@@ -233,7 +253,7 @@ namespace SlashDemo
             {
                 inputBuffer.Clear(); queued = false; move = Vector2.zero;
                 if (IsCharging || !IsAlive) CancelHeavyAttack();
-                heavyPressedQueued = heavyReleaseQueued = skillPressedQueued = false;
+                heavyPressedQueued = heavyReleaseQueued = skillPressedQueued = ultimatePressedQueued = false;
                 return;
             }
             float dt = Time.deltaTime;
@@ -243,7 +263,7 @@ namespace SlashDemo
             {
                 queued = false; inputBuffer.Clear();
                 if (IsCharging) CancelHeavyAttack();
-                heavyPressedQueued = heavyReleaseQueued = skillPressedQueued = false;
+                heavyPressedQueued = heavyReleaseQueued = skillPressedQueued = ultimatePressedQueued = false;
             }
             if (!inputBlocked && DemoInput.MouseAvailable)
             {
@@ -258,6 +278,7 @@ namespace SlashDemo
             {
                 if (DemoInput.AttackPressed && !IsHeavyBusy) inputBuffer.Attack(Aim, Time.time);
                 if (DemoInput.SkillPressed) skillPressedQueued = true;
+                if (DemoInput.UltimatePressed) ultimatePressedQueued = true;
                 if (DemoInput.HeavyPressed) heavyPressedQueued = true;
                 if (DemoInput.HeavyReleased) heavyReleaseQueued = true;
                 if (DemoInput.DashPressed) inputBuffer.Dash(move.sqrMagnitude > 0 ? move : Aim);
@@ -271,6 +292,8 @@ namespace SlashDemo
             techniqueCooldownLeft = Mathf.Max(0, techniqueCooldownLeft - dt);
             ironCooldownLeft = Mathf.Max(0, ironCooldownLeft - dt);
             ironBodyLeft = Mathf.Max(0, ironBodyLeft - dt);
+            Ultimate?.Advance(dt);
+            if (arena.Paused) return;
             techniqueCombo.ExpireStacks(Time.time);
             if (!IsAttacking && Time.time - lastAttackEnd > comboResetTime)
             {
@@ -284,10 +307,20 @@ namespace SlashDemo
                 skillPressedQueued = false;
                 TryTechniqueSkill(Aim);
             }
+            if (ultimatePressedQueued)
+            {
+                ultimatePressedQueued = false;
+                TryUltimateSkill(Aim);
+            }
 
-            equipment.Advance(dt, IsAttacking || IsHeavyBusy || IsComboRecovering, drawDuration, sheathDuration, sheathDelay);
+            equipment.Advance(dt, IsAttacking || IsHeavyBusy || IsComboRecovering || IsUltimateActive, drawDuration, sheathDuration, sheathDelay);
 
-            if (IsDashing)
+            if (IsUltimateActive)
+            {
+                heavyPressedQueued = heavyReleaseQueued = false;
+                inputBuffer.Clear();
+            }
+            else if (IsDashing)
             {
                 heavyPressedQueued = heavyReleaseQueued = false;
                 dashRemaining = Mathf.Max(0, dashRemaining - dt);
@@ -335,6 +368,8 @@ namespace SlashDemo
                             IsAttacking = false;
                             if (IsTechniqueActive)
                             {
+                                if (IsTechniqueFinisher && TechniqueConsumedStacks >= FlowingCloudRules.MaxStacks)
+                                    Ultimate?.RecordQualification();
                                 IsTechniqueActive = false;
                                 IsTechniqueFinisher = false;
                                 rebuildReward.Arm(Realm);
@@ -385,7 +420,7 @@ namespace SlashDemo
 
         public bool RequestAttack(Vector2 direction, bool explicitPress = true, float pressedAt = -1)
         {
-            if (!IsAlive || IsDashing || IsHeavyBusy || IsTechniqueActive || arena.Paused || arena.InputBlocked || strikes.Length == 0) return false;
+            if (!IsAlive || IsDashing || IsHeavyBusy || IsTechniqueActive || IsUltimateActive || arena.Paused || arena.InputBlocked || strikes.Length == 0) return false;
             if (pressedAt < 0) pressedAt = Time.time;
             int next = HasFlowingCloud ? techniqueCombo.NextSegment(ComboIndex,
                 !IsAttacking && pressedAt - lastAttackEnd > comboResetTime, Realm)
@@ -448,7 +483,7 @@ namespace SlashDemo
 
         public bool TryDash(Vector2 direction)
         {
-            if (!IsAlive || IsDashing || dashCooldownLeft > 0 || arena.Paused || arena.InputBlocked) return false;
+            if (!IsAlive || IsDashing || IsUltimateActive || dashCooldownLeft > 0 || arena.Paused || arena.InputBlocked) return false;
             if (HasIronSword && ironHeavy && IsCharging && chargedIronRealm >= CultivationRealm.FoundationEstablishment)
             {
                 // Snapshot the current charge before dashing clears it. Fire at the departure point,
@@ -474,6 +509,7 @@ namespace SlashDemo
 
         public bool TryTechniqueSkill(Vector2 direction)
         {
+            if (IsUltimateActive) return false;
             if (HasIronSword)
             {
                 if (!TechniqueReady || IsDashing || arena.Paused || arena.InputBlocked) return false;
@@ -519,6 +555,21 @@ namespace SlashDemo
             TotalTechniqueCasts++;
             arena.Effects.Ghost(transform);
             AnimateSword();
+            return true;
+        }
+
+        public bool TryUltimateSkill(Vector2 direction)
+        {
+            var skill = Ultimate;
+            if (skill == null || !skill.Ready || !IsAlive || IsDashing || IsAttacking || IsComboRecovering
+                || IsHeavyBusy || arena.InputBlocked || arena.Effects.Frozen) return false;
+            Vector2 aim = direction.sqrMagnitude > .001f ? direction.normalized : Aim;
+            skill.Begin(body.position, aim);
+            recoil = body.linearVelocity = Vector2.zero;
+            queued = queuedExplicit = false;
+            queuedSegment = -1;
+            inputBuffer.Clear();
+            equipment.Advance(drawDuration, true, drawDuration, sheathDuration, sheathDelay);
             return true;
         }
 
@@ -618,6 +669,7 @@ namespace SlashDemo
 
         void InterruptCombo(bool dodging = false)
         {
+            ultimate?.Cancel();
             RestoreRushEnemyCollisions();
             if (arena != null && arena.Effects != null) arena.Effects.CancelWhirlwinds(this);
             if (dodging) techniqueCombo.ApplyDodge(Time.time);
@@ -626,7 +678,7 @@ namespace SlashDemo
             IsAttacking = IsTechniqueActive = false;
             IsTechniqueFinisher = false;
             skillRushRemaining = comboRecoveryLeft = 0;
-            queued = queuedExplicit = skillPressedQueued = false; queuedSegment = -1;
+            queued = queuedExplicit = skillPressedQueued = ultimatePressedQueued = false; queuedSegment = -1;
             inputBuffer.Clear();
             activeStrike = null;
             ClearTrail();
@@ -649,7 +701,7 @@ namespace SlashDemo
 
         public bool RequestHeavyAttack()
         {
-            if (!IsAlive || IsAttacking || IsComboRecovering || IsDashing || IsHeavyBusy || arena.Paused || arena.InputBlocked) return false;
+            if (!IsAlive || IsAttacking || IsComboRecovering || IsDashing || IsHeavyBusy || IsUltimateActive || arena.Paused || arena.InputBlocked) return false;
             InterruptCombo();
             chargedSettings = (heavyAttack ?? new SlashTuningSettings.HeavyAttackSettings()).Clone();
             chargedSettings.Validate(new SlashTuningSettings.HeavyAttackSettings());
@@ -679,6 +731,7 @@ namespace SlashDemo
                 LastReleasedGangQi = IronSwordRules.Stacks(ChargeProgress);
                 chargedSettings = chargedIronSettings.Release(chargedSettings, LastReleasedGangQi, chargedIronRealm, IronBodyActive);
             }
+            fullIronRelease = ironHeavy && heavyState.Ready;
             bool fire = heavyState.Release(ironHeavy);
             if (fire)
             {
@@ -696,6 +749,7 @@ namespace SlashDemo
             if (appearance != null) appearance.SetWeaponCharge(0);
             heavyState.Cancel();
             heavyRelease.Cancel();
+            fullIronRelease = false;
             ClearTrail();
             heavyPressedQueued = heavyReleaseQueued = false;
         }
@@ -755,6 +809,8 @@ namespace SlashDemo
                 scarSettings: scar ? chargedIronSettings : null, scarExplodes: crushing);
             arena.Effects.PlaySwing(true);
             TotalSwordWaves++;
+            if (fullIronRelease) Ultimate?.RecordQualification();
+            fullIronRelease = false;
         }
 
         public static bool InsideArc(Vector2 origin, Vector2 facing, Vector2 target, float reach, float arc, float targetRadius)
@@ -845,7 +901,7 @@ namespace SlashDemo
             else RestoreDashEnemyCollisions();
             if (!IsAlive || arena == null || arena.Paused) { body.linearVelocity = Vector2.zero; return; }
             recoil *= Mathf.Exp(-14 * Time.fixedDeltaTime);
-            Vector2 velocity = IsDashing ? dashDirection * dashSpeed : IsHeavyBusy ? Vector2.zero
+            Vector2 velocity = IsDashing ? dashDirection * dashSpeed : IsHeavyBusy || IsUltimateActive ? Vector2.zero
                 : move * WalkingSpeed * (IsAttacking || IsComboRecovering ? NormalAttackMoveSpeedMultiplier : 1) + recoil;
             if (IsTechniqueActive)
             {
@@ -853,7 +909,7 @@ namespace SlashDemo
                 velocity = attackAim * skillRushSpeed * (step / Time.fixedDeltaTime);
                 skillRushRemaining -= step;
             }
-            else if (!IsDashing && arena.Travel != null) velocity += arena.Travel.ChallengePull(body.position);
+            else if (!IsDashing && !IsUltimateActive && arena.Travel != null) velocity += arena.Travel.ChallengePull(body.position);
             body.linearVelocity = velocity;
         }
 
@@ -868,7 +924,7 @@ namespace SlashDemo
 
         bool ApplyDamage(int damage, Vector2 direction, bool poison, SlashEnemy challenger = null)
         {
-            if (!IsAlive || invincible || (!poison && invulnerability > 0) || IsDashing
+            if (!IsAlive || invincible || IsUltimateActive || (!poison && invulnerability > 0) || IsDashing
                 || (HasFlowingCloud && IsTechniqueActive)) return false;
             bool protectedCharge = IronBodyActive && IsCharging;
             if (IronBodyActive) damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1 - IronSword.bodyDamageReduction)));
@@ -958,6 +1014,7 @@ namespace SlashDemo
             if (Technique != technique)
             {
                 InterruptCombo(); CancelHeavyAttack(); rebuildReward.Clear();
+                ultimate?.ResetProgress();
                 ironBodyLeft = 0; LastReleasedGangQi = 0;
                 if (arena != null && arena.Effects != null)
                 { arena.Effects.ClearSwordWaves(); arena.Effects.ClearSwordScars(this); }
@@ -982,6 +1039,7 @@ namespace SlashDemo
             dashCooldownLeft = Mathf.Min(dashCooldownLeft, dashCooldown);
             comboResetTime = settings.comboResetTime;
             invincible = settings.invincible;
+            InfiniteUltimateForDebug = settings.infiniteUltimateForDebug;
             trailLifetime = settings.trailLifetime;
             trailGlowWidth = settings.bladeFeedback.glowWidth;
             trailCrescentPower = settings.bladeFeedback.crescentPower;
@@ -1222,6 +1280,11 @@ namespace SlashDemo
                     heavyRelease.RecoveryProgress, Time.time);
             }
             Vector2 facing = IsAttacking || IsComboRecovering ? attackAim : IsHeavyRecovering ? heavyAim : Aim;
+            if (IsUltimateActive)
+            {
+                pose = SwordMotion.HeavyPose(1, true, Ultimate.PoseProgress, Ultimate.PoseRecovery, Time.time);
+                facing = Ultimate.Aim;
+            }
             Vector2 socket = SwordMotion.CarryGrip;
             Vector2 side = new Vector2(-facing.y, facing.x);
             Vector2 carryAxis = appearance.Ready && !appearance.Continuous3D
@@ -1252,7 +1315,7 @@ namespace SlashDemo
             appearance.SetWeaponCharge(IsCharging && equipment.Ready ? ChargeProgress : 0);
             if (IsCharging && equipment.Ready)
                 arena.Effects.SetChargeTarget(body.position + SwordMotion.ToWorld(pose.tip, facing), ChargeProgress);
-            appearance.SetCombatPose(pose, IsAttacking || IsHeavyBusy, IsDashing, Time.deltaTime, facing, arena.View);
+            appearance.SetCombatPose(pose, IsAttacking || IsHeavyBusy || IsUltimateActive, IsDashing, Time.deltaTime, facing, arena.View);
             bool backFacing = appearance.Ready ? appearance.IsBackFacing : facing.y > 0.3f;
             armRig.localPosition = lift;
             Vector2 swordDirection = DemoArt.Direction(angle);
@@ -1346,12 +1409,13 @@ namespace SlashDemo
             {
                 inputBuffer.Clear(); queued = false; move = Vector2.zero;
                 if (IsCharging) CancelHeavyAttack();
-                heavyPressedQueued = heavyReleaseQueued = false;
+                heavyPressedQueued = heavyReleaseQueued = ultimatePressedQueued = false;
             }
         }
         void OnDisable() { dashRemaining = 0; RestoreDashEnemyCollisions(true); rebuildReward.Clear(); InterruptCombo(); CancelHeavyAttack(); }
         void OnDestroy()
         {
+            ultimate?.Dispose();
             RestoreDashEnemyCollisions(true);
             if (scabbardSprite != null) Destroy(scabbardSprite);
             if (trailMesh != null) Destroy(trailMesh);

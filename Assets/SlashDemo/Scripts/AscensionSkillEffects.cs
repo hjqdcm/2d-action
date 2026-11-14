@@ -10,7 +10,7 @@ namespace SlashDemo
     {
         const int TraceBudget = 36;
         const float FrostBeamHeight = .28f;
-        enum Form { Crescent, Ring, Blade, Streak, Meteor, Seal, Beam }
+        enum Form { Crescent, Ring, Blade, Streak, Meteor, Beam, Fault, Guard, FlyingSword, Orbit, Talisman }
 
         sealed class Trace
         {
@@ -36,6 +36,22 @@ namespace SlashDemo
         static readonly AnimationCurve Even = AnimationCurve.Constant(0, 1, 1);
         static readonly Color FrostBeamCore = new Color(.91f, .86f, 1);
         static readonly Color FrostBeamGlow = new Color(.48f, .30f, 1);
+        static readonly Vector2[] SwordOutline =
+        {
+            new Vector2(.68f, 0), new Vector2(.36f, .10f), new Vector2(-.15f, .10f),
+            new Vector2(-.15f, .21f), new Vector2(-.26f, .21f), new Vector2(-.26f, .046f),
+            new Vector2(-.5f, .046f), new Vector2(-.5f, -.046f), new Vector2(-.26f, -.046f),
+            new Vector2(-.26f, -.21f), new Vector2(-.15f, -.21f), new Vector2(-.15f, -.10f),
+            new Vector2(.36f, -.10f)
+        };
+        static readonly Vector2[] TalismanOutline =
+        {
+            new Vector2(-.25f, 0), new Vector2(.25f, 0), new Vector2(.25f, 1),
+            new Vector2(-.25f, 1), new Vector2(-.25f, .15f), new Vector2(.12f, .15f),
+            new Vector2(-.08f, .38f), new Vector2(.12f, .57f), new Vector2(-.12f, .57f),
+            new Vector2(.12f, .82f), new Vector2(-.25f, .82f)
+        };
+        static readonly float[] FaultOffsets = { 0, .65f, -.35f, 1, -.72f, .42f, -.46f, 0 };
 
         readonly List<Trace> traces = new List<Trace>(TraceBudget);
         readonly ObliqueView view;
@@ -48,9 +64,9 @@ namespace SlashDemo
         readonly Sprite auraSprite;
         readonly Texture2D auraTexture;
         readonly Trace charge, chargeEcho;
-        Vector2 caster;
+        Vector2 caster, chargeAim;
         float chargeClock, moteTimer;
-        bool charging, heavyCharge, counterCharge, rushCharge, vortexCharge;
+        bool charging, heavyCharge;
         int guardStacks;
         float passiveClock, passiveFlash, passiveMoteTimer;
         uint random = 0x3c97a0ef;
@@ -178,13 +194,22 @@ namespace SlashDemo
             trace.Form = form; trace.Origin = origin; trace.Direction = direction; trace.Size = size;
             trace.Detail = detail; trace.Width = width; trace.Height = height; trace.Life = life;
             trace.Age = -delay; trace.Active = true;
-            bool loop = form == Form.Ring || form == Form.Seal;
+            bool loop = form == Form.Ring || form == Form.Guard || form == Form.FlyingSword;
             bool straight = form == Form.Streak || form == Form.Beam;
-            int samples = straight ? 2 : form == Form.Blade || form == Form.Meteor ? 13 : 32;
+            int samples = form switch
+            {
+                Form.Streak or Form.Beam => 2,
+                Form.Guard => 6,
+                Form.FlyingSword => SwordOutline.Length,
+                Form.Talisman => TalismanOutline.Length,
+                Form.Fault => FaultOffsets.Length,
+                Form.Blade or Form.Meteor => 13,
+                _ => 32
+            };
             trace.Core.loop = trace.Halo.loop = loop;
             trace.Core.positionCount = trace.Halo.positionCount = samples;
-            trace.Core.widthCurve = trace.Halo.widthCurve = loop || straight ? Even : Taper;
-            bool aboveGround = height > .15f || form == Form.Meteor;
+            trace.Core.widthCurve = trace.Halo.widthCurve = loop || straight || form == Form.Talisman ? Even : Taper;
+            bool aboveGround = height > .15f || form == Form.Meteor || form == Form.Talisman;
             trace.Core.sortingOrder = aboveGround ? 15002 : -71;
             trace.Halo.sortingOrder = trace.Core.sortingOrder - 1;
         }
@@ -206,25 +231,37 @@ namespace SlashDemo
         public void BeginCharge(Vector2 origin, Vector2 focus, Vector2 aim, bool ultimate, bool mechanic)
         {
             caster = origin;
+            chargeAim = aim;
             chargeClock = moteTimer = 0;
             charging = true; heavyCharge = ultimate;
-            counterCharge = mechanic && path == Path.Body;
-            rushCharge = mechanic && path == Path.Sword;
-            vortexCharge = mechanic && path == Path.Spell;
             guardStacks = 0;
-            bool ranged = path == Path.Spell || path == Path.Talisman;
-            bool markTarget = ranged && !(path == Path.Spell && ultimate);
-            Form form = counterCharge || path == Path.Talisman ? Form.Seal
-                : ranged ? Form.Ring : rushCharge ? Form.Blade : Form.Crescent;
-            float radius = ultimate ? .87f : .57f;
-            float detail = rushCharge ? .10f : ranged ? radius * .65f : 230;
-            Setup(charge, form, markTarget ? focus : origin, aim, rushCharge ? 1.42f : radius, detail,
-                ultimate || mechanic ? .035f : .024f, rushCharge ? .48f : .045f, 1, 0);
-            if (vortexCharge)
-                Setup(chargeEcho, Form.Seal, focus, aim, 1.04f, 0, .031f, .09f, 1, 0);
-            else if (ultimate || counterCharge)
-                Setup(chargeEcho, Form.Seal, origin, aim, ultimate ? 1.15f : .82f, 0, .029f,
-                    counterCharge ? .42f : .035f, 1, 0);
+            Hide(chargeEcho);
+            switch (path)
+            {
+                case Path.Body:
+                    Setup(charge, mechanic ? Form.Guard : Form.Crescent, origin, aim, ultimate ? 1.02f : .80f,
+                        200, .052f, mechanic ? .36f : .065f, 1, 0);
+                    if (mechanic || ultimate)
+                        Setup(chargeEcho, Form.Guard, origin, aim, 1.06f, 0, .033f, .07f, 1, 0);
+                    break;
+                case Path.Sword:
+                    float length = ultimate || mechanic ? 1.34f : 1.05f;
+                    Setup(charge, Form.FlyingSword, origin, aim, length, 0, .032f, .77f, 1, 0);
+                    Setup(chargeEcho, Form.FlyingSword, origin, aim, length, 0, .029f, .46f, 1, 0);
+                    break;
+                case Path.Spell:
+                    Vector2 center = mechanic ? focus : origin;
+                    Setup(charge, Form.Orbit, center, aim, ultimate || mechanic ? 1.20f : .84f, 275,
+                        .040f, .22f, 1, 0);
+                    Setup(chargeEcho, Form.Orbit, center, -aim, charge.Size, -275, .027f, .32f, 1, 0);
+                    break;
+                case Path.Talisman:
+                    Setup(charge, Form.Talisman, origin, Vector2.right, ultimate ? .97f : .73f, .48f,
+                        .036f, .62f, 1, 0);
+                    Setup(chargeEcho, Form.Talisman, focus, Vector2.right, mechanic ? .87f : .52f, 0,
+                        .030f, .10f, 1, 0);
+                    break;
+            }
             Charge(0, 0);
         }
 
@@ -232,13 +269,22 @@ namespace SlashDemo
         {
             chargeClock += dt;
             moteTimer -= dt;
-            if (!rushCharge) charge.Direction = DemoArt.Direction(chargeClock * (heavyCharge ? 185 : 125));
-            Draw(charge, progress, .31f + .32f * progress + .09f * guardStacks);
-            if (heavyCharge || counterCharge || vortexCharge)
+            if (path == Path.Sword)
             {
-                chargeEcho.Direction = DemoArt.Direction(-chargeClock * 88);
-                Draw(chargeEcho, progress, .35f + .27f * progress + .09f * guardStacks);
+                Vector2 side = Vector2.Perpendicular(chargeAim);
+                float spacing = Mathf.Lerp(1.03f, .36f, progress);
+                Vector2 center = caster + chargeAim * Mathf.Lerp(-.34f, .52f, progress);
+                charge.Origin = center + side * spacing;
+                chargeEcho.Origin = center - side * spacing;
             }
+            else if (path == Path.Spell)
+            {
+                charge.Direction = DemoArt.Direction(chargeClock * 195);
+                chargeEcho.Direction = -charge.Direction;
+            }
+            Draw(charge, progress, .31f + .32f * progress + .09f * guardStacks);
+            if (chargeEcho.Active)
+                Draw(chargeEcho, progress, .35f + .27f * progress + .09f * guardStacks);
             if (moteTimer > 0) return;
             moteTimer = heavyCharge ? .055f : .085f;
             int count = heavyCharge ? 6 : 3;
@@ -247,10 +293,28 @@ namespace SlashDemo
                 Vector2 direction = DemoArt.Direction(chargeClock * 270 + 360f * i / count);
                 Vector2 side = new Vector2(-direction.y, direction.x);
                 float radius = Mathf.Lerp(heavyCharge ? 1.35f : .86f, .32f, progress);
-                var shape = path == Path.Talisman && i == 0 ? Particle.Paper : Particle.Mote;
-                particles.SkillMote(caster + direction * radius, Range(.14f, .61f),
-                    (-direction + side * .58f) * Range(.8f, 1.9f), Range(.25f, .9f), shape,
-                    i % 2 == 0 ? tint : glow, Range(.042f, .09f), heavyCharge ? .54f : .38f);
+                switch (path)
+                {
+                    case Path.Body:
+                        particles.SkillMote(caster + direction * radius, .055f, direction * Range(.12f, .48f),
+                            Range(.45f, 1.35f), Particle.Stone, tint, Range(.076f, .16f), .42f);
+                        break;
+                    case Path.Sword:
+                        Vector2 blade = i % 2 == 0 ? charge.Origin : chargeEcho.Origin;
+                        particles.SkillMote(blade - chargeAim * Range(.18f, .52f), i % 2 == 0 ? .77f : .46f,
+                            -chargeAim * Range(.72f, 1.8f), 0, Particle.Spark, tint, Range(.064f, .14f), .25f);
+                        break;
+                    case Path.Spell:
+                        particles.SkillMote(charge.Origin + direction * radius, Range(.15f, .65f),
+                            (side - direction * .45f) * Range(.7f, 1.35f), .50f, Particle.Star,
+                            i % 2 == 0 ? tint : FrostBeamGlow, Range(.065f, .13f), .42f);
+                        break;
+                    case Path.Talisman:
+                        particles.SkillMote(caster + direction * radius, Range(.32f, .85f),
+                            side * Range(.18f, .72f), Range(.38f, 1.05f), i % 3 == 0 ? Particle.Paper : Particle.Spark,
+                            i % 2 == 0 ? tint : glow, Range(.065f, .14f), .45f);
+                        break;
+                }
             }
         }
 
@@ -265,7 +329,7 @@ namespace SlashDemo
         {
             guardStacks = stacks;
             float radius = .70f + .13f * stacks;
-            Add(Form.Ring, origin, Vector2.right, radius, radius * .55f, .055f, .46f, .28f);
+            Add(Form.Guard, origin, chargeAim, radius, 0, .055f, .46f, .28f);
             for (int i = 0; i < 10; i++)
             {
                 Vector2 direction = DemoArt.Direction(i * 36 + stacks * 13);
@@ -277,11 +341,11 @@ namespace SlashDemo
         public void ReleaseCounter(Vector2 origin, Vector2 aim, float radius, int stacks)
         {
             Impact(Shape.Circle, origin, aim, radius, 0, false);
-            Add(Form.Seal, origin, aim, radius * .76f, 0, .05f + .011f * stacks, .11f, .56f);
+            Add(Form.Guard, origin, aim, radius * .76f, 0, .05f + .011f * stacks, .11f, .56f);
             for (int i = 0; i < 6 + stacks * 2; i++)
             {
                 Vector2 direction = DemoArt.Direction(i * 360f / (6 + stacks * 2));
-                Add(Form.Blade, origin + direction * radius * .19f, direction, radius * .77f,
+                Add(Form.Fault, origin + direction * radius * .19f, direction, radius * .77f,
                     Range(-.18f, .18f), .042f, .055f, .38f + .045f * stacks, Range(0, .075f));
             }
         }
@@ -298,7 +362,8 @@ namespace SlashDemo
         {
             Add(Form.Ring, center, Vector2.right, radius, radius * .12f, .084f, .07f, .46f);
             Add(Form.Ring, center, Vector2.right, radius * .16f, radius * .94f, .068f, .16f, .62f, .08f);
-            Add(Form.Seal, center, Vector2.right, radius * .70f, 0, .060f, .13f, .64f, .05f);
+            Add(Form.Orbit, center, Vector2.right, radius * .86f, 310, .060f, .13f, .64f, .05f);
+            Add(Form.Orbit, center, Vector2.left, radius * .78f, -310, .044f, .31f, .59f, .09f);
             Add(Form.Meteor, center, Vector2.zero, 2.75f, 0, .10f, .06f, .38f, .08f);
             for (int i = 0; i < 24; i++)
             {
@@ -317,8 +382,8 @@ namespace SlashDemo
             for (int i = -2; i <= 2; i++)
             {
                 Vector2 anchor = center + along * (halfLength * .43f * i);
-                Add(Form.Seal, anchor, normal, .43f, 0, .045f, .075f, .58f, Mathf.Abs(i) * .04f);
-                Add(Form.Meteor, anchor, Vector2.zero, 1.40f, 0, .052f, .15f, .4f, Mathf.Abs(i) * .06f);
+                Add(Form.Talisman, anchor, normal, .63f, .10f, .045f, .075f, .69f, Mathf.Abs(i) * .04f);
+                Add(Form.Streak, anchor, normal, .38f, 0, .046f, .11f, .39f, Mathf.Abs(i) * .06f);
             }
             for (int i = 0; i < 18; i++)
             {
@@ -332,6 +397,8 @@ namespace SlashDemo
         void FireFrostBeam(Vector2 origin, Vector2 aim, float length, float halfWidth)
         {
             Add(Form.Beam, origin, aim, length, 0, halfWidth, FrostBeamHeight, .38f);
+            Add(Form.Orbit, origin, aim, halfWidth * .66f, 260, .038f, .26f, .36f);
+            Add(Form.Orbit, origin + aim * length, -aim, halfWidth * .74f, -275, .032f, .18f, .38f, .035f);
             particles.SkillMote(origin, FrostBeamHeight, Vector2.zero, 0,
                 Particle.Star, FrostBeamCore, halfWidth * .88f, .19f);
             Vector2 side = Vector2.Perpendicular(aim);
@@ -354,8 +421,10 @@ namespace SlashDemo
                     if (shape == Shape.Arc)
                     {
                         Add(Form.Crescent, origin, aim, size, detail, .105f, .37f, .25f);
-                        Add(Form.Crescent, origin, aim, size * .93f, detail, .057f, .055f, .34f, .04f);
-                        Add(Form.Crescent, origin, aim, size * .83f, detail * .86f, .037f, .64f, .37f, .05f);
+                        Vector2 side = Vector2.Perpendicular(aim);
+                        for (int i = -1; i <= 1; i++)
+                            Add(Form.Fault, origin + side * (i * size * .12f), (aim + side * (i * .32f)).normalized,
+                                size * .81f, size * .062f, .054f, .055f, .50f, Mathf.Abs(i) * .035f);
                         particles.DustBurst(origin + aim * size * .6f, 12, 1.3f);
                     }
                     else
@@ -369,8 +438,10 @@ namespace SlashDemo
                         {
                             Vector2 spoke = DemoArt.Direction(i * 360f / cracks + Range(-8, 8));
                             float start = Mathf.Lerp(inside, size, .13f);
-                            Add(Form.Blade, origin + spoke * start, spoke, (size - start) * Range(.68f, .98f),
-                                Range(-.11f, .11f), .035f, .04f, .49f, Range(.025f, .085f));
+                            float reach = (size - start) * Range(.68f, .98f);
+                            Add(Form.Fault, origin + spoke * start, spoke, reach,
+                                reach * Range(.09f, .16f), .052f, .04f, .57f, Range(.025f, .085f));
+                            particles.DustBurst(origin + spoke * (start + reach * .75f), 3, 1.55f);
                         }
                         if (shape == Shape.Circle) particles.DustBurst(origin, 20, 1.6f);
                     }
@@ -379,17 +450,25 @@ namespace SlashDemo
                     if (shape == Shape.Arc)
                     {
                         Add(Form.Crescent, origin, aim, size, detail, .115f, .62f, .31f);
-                        Add(Form.Crescent, origin, aim, size * .95f, detail, .053f, .82f, .41f, .045f);
-                        Add(Form.Crescent, origin, aim, size * .92f, detail * .84f, .039f, .36f, .49f, .08f);
+                        Vector2 side = Vector2.Perpendicular(aim);
+                        for (int i = -1; i <= 1; i++)
+                        {
+                            float angle = detail * .30f * i * Mathf.Deg2Rad;
+                            Vector2 blade = aim * Mathf.Cos(angle) + side * Mathf.Sin(angle);
+                            Add(Form.FlyingSword, origin + blade * (size * .30f), blade, size * .27f, size * .47f,
+                                .037f, .58f + .19f * Mathf.Abs(i), .35f, Mathf.Abs(i) * .045f);
+                        }
                     }
                     else
                     {
                         Vector2 side = new Vector2(-aim.y, aim.x) * detail * .45f;
                         Add(Form.Blade, origin, aim, size, .15f, .095f * weight, .50f, .32f);
-                        Add(Form.Blade, origin + side, aim, size * .97f, .095f, .044f, .69f, .49f, .055f);
-                        Add(Form.Blade, origin - side, aim, size * .96f, -.11f, .05f, .34f, .49f, .09f);
-                        if (ultimate) Add(Form.Ring, origin + aim * size * .5f, aim, detail * 2,
-                            detail * .25f, .038f, .51f, .35f, .035f);
+                        for (int i = -1; i <= 1; i++)
+                        {
+                            float delay = (i + 1) * .055f;
+                            Add(Form.FlyingSword, origin + aim * (size * .18f) + side * i, aim,
+                                size * .30f, size * .58f, .042f, .67f + .18f * i, .36f, delay);
+                        }
                     }
                     break;
                 case Path.Spell:
@@ -402,23 +481,24 @@ namespace SlashDemo
                     {
                         Add(Form.Meteor, origin, -aim, (ultimate ? 2.25f : 1.65f), .31f, .12f * weight, .055f, .28f);
                         Add(Form.Ring, origin, aim, size, ultimate ? size : size * .17f, .065f, .085f, .49f);
-                        Add(Form.Seal, origin, aim, size * .88f, 0, .035f * weight, .13f, .59f, .055f);
-                        Add(Form.Ring, origin, aim, size * .77f, size * .23f, .038f, .38f, .37f, .085f);
+                        Add(Form.Orbit, origin, aim, size * .79f, 295, .058f * weight, .13f, .54f, .045f);
+                        Add(Form.Orbit, origin, -aim, size * .69f, -265, .034f, .24f, .51f, .085f);
                         if (ultimate)
                         {
                             Vector2 side = Vector2.Perpendicular(aim);
                             Add(Form.Meteor, origin + side * size * .36f, -aim, 1.7f, .46f, .057f, .08f, .34f, .04f);
                             Add(Form.Meteor, origin - side * size * .36f, side, 1.48f, .32f, .054f, .07f, .32f, .085f);
-                            Add(Form.Seal, origin, side, size * .56f, 0, .032f, .18f, .57f, .09f);
                         }
                     }
                     break;
                 case Path.Talisman:
-                    Add(Form.Seal, origin, aim, size * .94f, 0, .046f * weight, .08f, .61f);
-                    Add(Form.Ring, origin, aim, size, size * .36f, .05f, .045f, .42f, .03f);
-                    Add(Form.Seal, origin, Vector2.Perpendicular(aim), size * .57f, 0, .035f, .29f, .53f, .075f);
-                    Add(Form.Ring, origin, aim, size * .83f, size * .21f, .038f, .47f, .45f, .08f);
-                    if (ultimate) Add(Form.Meteor, origin, Vector2.zero, 1.65f, 0, .073f, .1f, .34f, .045f);
+                    Add(Form.Ring, origin, aim, size, size * .27f, .061f * weight, .045f, .40f);
+                    for (int i = 0; i < (ultimate ? 3 : 2); i++)
+                    {
+                        Vector2 outward = DemoArt.Direction(i * 132 + Range(-22, 22));
+                        Add(Form.Talisman, origin + outward * (size * .28f), outward, size * .48f,
+                            size * .39f, .045f, .16f, .66f, i * .045f);
+                    }
                     break;
             }
             Scatter(shape, origin, aim, size, detail, ultimate);
@@ -435,17 +515,34 @@ namespace SlashDemo
                 Vector2 point = shape == Shape.Lane
                     ? origin + aim * Range(.06f, 1) * size + Vector2.Perpendicular(aim) * detail * Range(-.85f, .85f)
                     : origin + direction * Range(shape == Shape.Ring ? detail : size * .22f, size * .97f);
-                Particle kind = Particle.Spark;
-                if (path == Path.Body && i % 2 == 0) kind = Particle.Stone;
-                if (path == Path.Spell && i % 3 != 0) kind = Particle.Star;
-                if (path == Path.Talisman && i % 3 == 0) kind = Particle.Paper;
-                float particleSize = kind == Particle.Paper || kind == Particle.Star ? Range(.085f, .145f) : Range(.049f, .12f);
-                float height = path == Path.Sword ? Range(.23f, .69f) : Range(.06f, .27f);
-                Color color = kind == Particle.Stone ? Color.Lerp(glow, new Color(.26f, .17f, .11f), .68f)
-                    : i % 3 == 0 ? glow : tint;
-                particles.SkillMote(point, height, direction * Range(.4f, ultimate ? 2.3f : 1.6f),
-                    Range(.4f, ultimate ? 1.9f : 1.35f), kind, color,
-                    particleSize, Range(.32f, ultimate ? .9f : .68f));
+                switch (path)
+                {
+                    case Path.Body:
+                        particles.SkillMote(point, .06f, direction * Range(.65f, 2.1f),
+                            Range(1.0f, 2.6f), Particle.Stone, Color.Lerp(glow, new Color(.24f, .15f, .09f), Range(.3f, .8f)),
+                            Range(.11f, .22f), Range(.44f, .70f));
+                        break;
+                    case Path.Sword:
+                        Vector2 travel = shape == Shape.Lane ? aim : Vector2.Perpendicular(direction);
+                        particles.SkillMote(point, Range(.38f, .88f), travel * Range(1.3f, 3.0f),
+                            Range(.02f, .35f), Particle.Spark, i % 3 == 0 ? glow : tint,
+                            Range(.055f, .13f), Range(.19f, .36f));
+                        break;
+                    case Path.Spell:
+                        bool star = i % 3 == 0;
+                        particles.SkillMote(point, star ? Range(.12f, .4f) : Range(.75f, 1.9f),
+                            direction * Range(.45f, 1.42f), star ? Range(.55f, 1.4f) : Range(-2.1f, -1.0f),
+                            star ? Particle.Star : Particle.Spark, star ? tint : FrostBeamCore,
+                            Range(.07f, .16f), Range(.30f, .61f));
+                        break;
+                    case Path.Talisman:
+                        bool paper = i % 3 == 0;
+                        particles.SkillMote(point, Range(.08f, .27f),
+                            (direction + Vector2.Perpendicular(direction) * .45f) * Range(.25f, 1.1f),
+                            Range(.7f, paper ? 1.35f : 2.2f), paper ? Particle.Paper : Particle.Spark,
+                            paper ? tint : glow, Range(.07f, paper ? .19f : .12f), Range(.36f, paper ? .84f : .58f));
+                        break;
+                }
             }
         }
 
@@ -480,6 +577,7 @@ namespace SlashDemo
             bool closed = trace.Core.loop;
             float heading = Mathf.Atan2(trace.Direction.y, trace.Direction.x) * Mathf.Rad2Deg;
             float growth = Mathf.Sqrt(progress);
+            Vector2 side = Vector2.Perpendicular(trace.Direction);
             for (int i = 0; i < count; i++)
             {
                 float u = i / (float)(closed ? count : count - 1);
@@ -497,7 +595,7 @@ namespace SlashDemo
                     case Form.Blade:
                         float bow = Mathf.Sin(u * Mathf.PI) * trace.Detail;
                         offset = trace.Direction * (u * trace.Size * Mathf.Lerp(.88f, 1, growth))
-                            + Vector2.Perpendicular(trace.Direction) * bow;
+                            + side * bow;
                         break;
                     case Form.Streak:
                         offset = trace.Direction * (u * trace.Size);
@@ -506,17 +604,35 @@ namespace SlashDemo
                         offset = trace.Direction * (u * trace.Detail);
                         height += u * trace.Size * Mathf.Lerp(1, .26f, growth);
                         break;
-                    default:
-                        float tooth = Mathf.Lerp(.64f, 1, 1 - Mathf.Abs(Mathf.Repeat(u * 8, 1) * 2 - 1));
-                        offset = DemoArt.Direction(heading + u * 360 + progress * 45)
-                            * (trace.Size * tooth * Mathf.Lerp(.64f, 1, growth));
+                    case Form.Fault:
+                        offset = trace.Direction * (u * trace.Size * Mathf.Lerp(.48f, 1, growth))
+                            + side * (FaultOffsets[i] * trace.Detail);
                         break;
+                    case Form.Guard:
+                        offset = DemoArt.Direction(heading + u * 360) * (trace.Size * Mathf.Lerp(.76f, 1, growth));
+                        break;
+                    case Form.FlyingSword:
+                        Vector2 blade = SwordOutline[i] * trace.Size;
+                        offset = trace.Direction * (blade.x + trace.Detail * progress * (2 - progress)) + side * blade.y;
+                        break;
+                    case Form.Orbit:
+                        float angleAround = heading + u * trace.Detail + Mathf.Sign(trace.Detail) * progress * 115;
+                        offset = DemoArt.Direction(angleAround) * (trace.Size * Mathf.Lerp(1, .26f, u) * Mathf.Lerp(.94f, .52f, progress));
+                        height += u * trace.Size * .36f;
+                        break;
+                    case Form.Talisman:
+                        Vector2 ink = TalismanOutline[i] * trace.Size;
+                        offset = trace.Direction * (trace.Detail * progress) + Vector2.right * ink.x;
+                        height += ink.y + progress * .48f;
+                        break;
+                    default:
+                        continue;
                 }
                 Vector3 point = view.LiftPoint(trace.Origin + offset, height);
                 trace.Core.SetPosition(i, point);
                 trace.Halo.SetPosition(i, point);
             }
-            Color core = Color.Lerp(tint, Color.white, .57f);
+            Color core = Color.Lerp(tint, Color.white, trace.Form == Form.Fault ? .22f : .57f);
             Color halo = glow;
             core.a = .83f * opacity; halo.a = .23f * opacity;
             trace.Core.startColor = trace.Core.endColor = core;

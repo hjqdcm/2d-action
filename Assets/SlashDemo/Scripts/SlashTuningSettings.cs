@@ -11,7 +11,7 @@ namespace SlashDemo
         public float moveSpeed = 5.4f, dashSpeed = 17, dashDuration = 0.15f, dashCooldown = 0.75f;
         public float comboResetTime = 0.65f;
         public int maxHealth = 100;
-        public bool invincible;
+        public bool invincible, infiniteUltimateForDebug;
         public SlashPlayer.Strike[] strikes = DefaultStrikes();
         public float enemySpeedMultiplier = 1, enemyHealthMultiplier = 1;
         public int enemyDamage = 12, dummyHealth = DefaultDummyHealth;
@@ -194,7 +194,8 @@ namespace SlashDemo
                 moveSpeed = player.moveSpeed, dashSpeed = player.dashSpeed,
                 dashDuration = player.dashDuration, dashCooldown = player.dashCooldown,
                 comboResetTime = player.comboResetTime, maxHealth = player.maxHealth,
-                invincible = player.invincible, strikes = CopyStrikes(player.strikes),
+                invincible = player.invincible, infiniteUltimateForDebug = player.InfiniteUltimateForDebug,
+                strikes = CopyStrikes(player.strikes),
                 heavyAttack = (player.heavyAttack ?? new HeavyAttackSettings()).Clone(),
                 flowingCloud = player.FlowingCloud.Clone(),
                 ironSword = player.IronSword.Clone(),

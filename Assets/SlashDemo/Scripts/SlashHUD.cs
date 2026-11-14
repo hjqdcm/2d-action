@@ -8,13 +8,15 @@ namespace SlashDemo
     {
         public readonly string id, name, iconResource, description;
         public readonly int stacks;
+        public readonly bool showZeroStacks, cropIconToSquare;
         public readonly float timeLeft, duration;
         public float RemainingFraction => duration > 0 ? Mathf.Clamp01(timeLeft / duration) : 1;
         public CombatBuffView(string id, string name, int stacks, string iconResource = null, string description = null,
-            float timeLeft = 0, float duration = 0)
+            float timeLeft = 0, float duration = 0, bool showZeroStacks = false, bool cropIconToSquare = false)
         {
             this.id = id; this.name = name; this.stacks = stacks; this.iconResource = iconResource; this.description = description;
             this.timeLeft = timeLeft; this.duration = duration;
+            this.showZeroStacks = showZeroStacks; this.cropIconToSquare = cropIconToSquare;
         }
     }
 
@@ -28,7 +30,7 @@ namespace SlashDemo
         public void AddOrUpdate(CombatBuffView buff)
         {
             if (string.IsNullOrEmpty(buff.id)) throw new ArgumentException("A buff needs a stable, non-empty ID.");
-            if (buff.stacks <= 0) { Remove(buff.id); return; }
+            if (buff.stacks <= 0 && !buff.showZeroStacks) { Remove(buff.id); return; }
             if (slots.TryGetValue(buff.id, out int index)) items[index] = buff;
             else { slots.Add(buff.id, items.Count); items.Add(buff); }
         }
@@ -103,15 +105,21 @@ namespace SlashDemo
         Font font;
         Texture2D paper;
         Texture2D skillIcon;
+        Texture2D ultimateIcon;
         Texture2D ironSkillIcon;
+        Texture2D swordsmanPortrait;
         GUIStyle codexBody, codexHeading;
+        GUIStyle treasureDescription, treasureTitle;
         int codexIndex;
         Vector2 techniqueScroll;
         Vector2 codexScroll;
+        Vector2 treasureScroll;
+        float[] treasureRowOffsets;
+        float treasureCardWidth;
         static readonly string[] CharacterPageNames = { "功法", "属性", "物品" };
         GUIStyle small, health, damage, status, travelTitle, travelButton;
         GUIStyle buffName, buffStacks, passiveStacks, buffTooltipBody, buffTooltipTitle;
-        readonly Dictionary<string, Texture2D> buffIcons = new Dictionary<string, Texture2D>(StringComparer.Ordinal);
+        readonly Dictionary<string, Texture2D> hudIcons = new Dictionary<string, Texture2D>(StringComparer.Ordinal);
         readonly Dictionary<string, BuffCountdownMask> buffCountdowns = new Dictionary<string, BuffCountdownMask>(StringComparer.Ordinal);
         CombatBuffView hoveredBuff;
         Rect hoveredBuffSlot;
@@ -134,8 +142,20 @@ namespace SlashDemo
         static readonly Color Muted = new Color(0.43f, 0.40f, 0.31f);
         static readonly Color Jade = new Color(0.22f, 0.43f, 0.34f);
         static readonly Color Cinnabar = new Color(0.61f, 0.23f, 0.18f);
+        static readonly Color[] TreasureNameColors = {
+            Color.white, new Color(0.46f, 0.75f, 1f), new Color(0.81f, 0.63f, 1f), new Color(1f, 0.65f, 0.32f)
+        };
 
-        void Awake() { arena = GetComponent<SlashArena>(); }
+        void Awake()
+        {
+            arena = GetComponent<SlashArena>();
+            skillIcon = Resources.Load<Texture2D>("SlashDemo/FlowingCloudActiveIcon");
+            ironSkillIcon = Resources.Load<Texture2D>("SlashDemo/IronSwordActiveIcon");
+            ultimateIcon = Resources.Load<Texture2D>(FiveStarSwordSlash.IconResource);
+            swordsmanPortrait = Resources.Load<Texture2D>("SlashDemo/Cultivators/WhiteSwordsmanFullBody-v1");
+            paper = CreatePaperTexture();
+        }
+
         void InitStyles()
         {
             if (small != null) return;
@@ -155,9 +175,17 @@ namespace SlashDemo
             travelButton.normal.textColor = Ink;
             codexBody = new GUIStyle(small) { fontSize = 17, wordWrap = true };
             codexHeading = new GUIStyle(codexBody) { fontSize = 22, fontStyle = FontStyle.Bold };
-            skillIcon = Resources.Load<Texture2D>("SlashDemo/FlowingCloudActiveIcon");
-            ironSkillIcon = Resources.Load<Texture2D>("SlashDemo/IronSwordActiveIcon");
-            paper = new Texture2D(64, 64, TextureFormat.RGBA32, false) {
+            treasureDescription = new GUIStyle(codexBody) {
+                fontSize = 16, alignment = TextAnchor.UpperLeft, padding = new RectOffset()
+            };
+            treasureTitle = new GUIStyle(codexHeading) {
+                fontSize = 19, alignment = TextAnchor.MiddleCenter, padding = new RectOffset()
+            };
+        }
+
+        static Texture2D CreatePaperTexture()
+        {
+            var texture = new Texture2D(64, 64, TextureFormat.RGBA32, false) {
                 name = "Manor HUD rice paper", wrapMode = TextureWrapMode.Repeat,
                 filterMode = FilterMode.Bilinear, hideFlags = HideFlags.HideAndDontSave };
             var pixels = new Color[64 * 64];
@@ -168,8 +196,9 @@ namespace SlashDemo
                     float grain = (((x * 73 + y * 151 + x * y * 19) % 101) / 100f - 0.5f) * 0.025f;
                     pixels[y * 64 + x] = new Color(0.88f + grain, 0.83f + grain, 0.70f + grain, 0.80f);
                 }
-            paper.SetPixels(pixels);
-            paper.Apply(false, true);
+            texture.SetPixels(pixels);
+            texture.Apply(false, true);
+            return texture;
         }
 
         static void Box(Rect rect, Color color)
@@ -206,10 +235,14 @@ namespace SlashDemo
             Outline(rect, ink);
             Outline(new Rect(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2), bronze, 2);
             var inside = new Rect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6);
-            Color previous = GUI.color;
-            GUI.color = Color.white;
-            GUI.DrawTextureWithTexCoords(inside, paper, new Rect(0, 0, inside.width / 64, inside.height / 64));
-            GUI.color = previous;
+            if (paper != null)
+            {
+                Color previous = GUI.color;
+                GUI.color = Color.white;
+                GUI.DrawTextureWithTexCoords(inside, paper, new Rect(0, 0, inside.width / 64, inside.height / 64));
+                GUI.color = previous;
+            }
+            else Box(inside, new Color(.88f, .83f, .70f, .80f));
             Box(new Rect(rect.x + 3, rect.y + 3, rect.width - 6, 1), new Color(1, 0.96f, 0.79f, 0.4f));
             for (int i = 0; i < 4; i++)
             {
@@ -236,6 +269,7 @@ namespace SlashDemo
         {
             if (arena == null || arena.Player == null) return;
             InitStyles();
+            if (paper == null && Event.current.type == EventType.Repaint) paper = CreatePaperTexture();
             float scale = Mathf.Min(Screen.width / 1600f, Screen.height / 900f);
             if (scale <= 0) return;
             Matrix4x4 previous = GUI.matrix;
@@ -254,7 +288,8 @@ namespace SlashDemo
             DrawFrame(new Rect(width / 2 - 105, height - 58, 210, 31));
             DrawGauge(new Rect(width / 2 - 105, height - 28, 210, 3), player.DashReady, Jade);
             Label(new Rect(width / 2 - 105, height - 58, 210, 30), player.DashReady >= 1 ? "冲刺就绪" : "冲刺冷却中", status, player.DashReady >= 1 ? Jade : Muted);
-            DrawActiveSkill(width, height);
+            DrawActiveSkill(height);
+            DrawUltimateSkill(height);
             AscensionCultivator challenger = null;
             if (arena.Travel != null && arena.Travel.ChallengeRound > 0 && arena.Enemies.Count > 0)
             {
@@ -289,6 +324,18 @@ namespace SlashDemo
                 DrawFrame(prompt);
                 Label(prompt, "F查看功法图鉴", status, Ink);
             }
+            if (arena.Codex != null && arena.Codex.ShowAlchemyPrompt)
+            {
+                var prompt = new Rect(width / 2 - 175, height / 2 - 25, 350, 50);
+                DrawFrame(prompt);
+                Label(prompt, "F  查看炼丹炉图鉴", status, Ink);
+            }
+            if (arena.CharacterPanel != null && arena.CharacterPanel.ShowWardrobePrompt)
+            {
+                var prompt = new Rect(width / 2 - 175, height / 2 - 25, 350, 50);
+                DrawFrame(prompt);
+                Label(prompt, "F  选择角色", status, Ink);
+            }
 
             if (!arena.Paused && !arena.Defeated)
             {
@@ -299,8 +346,11 @@ namespace SlashDemo
                 DrawPointer(scale);
             }
             DrawBuffTooltip(new Rect(0, 0, width, height));
+            if (arena.Codex == null || !arena.Codex.IsAlchemyOpen) treasureScroll = Vector2.zero;
             if (DefeatPanelVisible) DrawDefeatPanel(width, height);
+            else if (arena.Codex != null && arena.Codex.IsAlchemyOpen) DrawAlchemyCodex(width, height);
             else if (arena.Codex != null && arena.Codex.IsOpen) DrawTechniqueCodex(width, height);
+            else if (arena.CharacterPanel != null && arena.CharacterPanel.IsWardrobeOpen) DrawWardrobe(width, height);
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsOpen) DrawCharacterPanel(width, height);
             else if (arena.Travel != null && arena.Travel.IsChallengeDecisionOpen) DrawChallengeDecision(width, height);
             else if (arena.Travel != null && arena.Travel.IsSelectionOpen) DrawTravelSelection(width, height);
@@ -348,10 +398,10 @@ namespace SlashDemo
         void DrawBuffSlot(Rect slot, CombatBuffView buff, float scale)
         {
             DrawFrame(slot);
-            if (!DrawBuffIcon(slot, buff.iconResource))
+            if (!DrawHudIcon(slot, buff.iconResource, buff.cropIconToSquare))
                 Label(new Rect(slot.x + 4, slot.y + 20, slot.width - 8, 20), buff.name, buffName, Jade);
             DrawBuffCountdown(slot, buff);
-            if (buff.stacks > 0)
+            if (buff.stacks > 0 || buff.showZeroStacks)
             {
                 Rect badge = BuffBarLayout.StackBadge(slot);
                 Box(badge, new Color(0.02f, 0.06f, 0.12f, 0.92f));
@@ -361,16 +411,22 @@ namespace SlashDemo
             HoverBuffSlot(slot, buff, scale);
         }
 
-        bool DrawBuffIcon(Rect slot, string resource)
+        bool DrawHudIcon(Rect slot, string resource, bool cropIconToSquare = false)
         {
             if (string.IsNullOrEmpty(resource)) return false;
-            if (!buffIcons.TryGetValue(resource, out Texture2D icon))
+            if (!hudIcons.TryGetValue(resource, out Texture2D icon))
             {
                 icon = Resources.Load<Texture2D>(resource);
-                buffIcons.Add(resource, icon);
+                hudIcons.Add(resource, icon);
             }
             if (icon == null) return false;
-            GUI.DrawTexture(new Rect(slot.x + 2, slot.y + 2, slot.width - 4, slot.height - 4), icon, ScaleMode.ScaleToFit);
+            var iconRect = new Rect(slot.x + 2, slot.y + 2, slot.width - 4, slot.height - 4);
+            if (cropIconToSquare)
+            {
+                if (Event.current.type == EventType.Repaint)
+                    GUI.DrawTextureWithTexCoords(iconRect, icon, new Rect(.165f, .165f, .67f, .67f));
+            }
+            else GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit);
             return true;
         }
 
@@ -410,19 +466,43 @@ namespace SlashDemo
             GUI.depth = previousDepth;
         }
 
-        void DrawActiveSkill(float width, float height)
+        void DrawActiveSkill(float height)
         {
             var player = arena.Player;
-            var icon = new Rect(60, height - 174, 108, 108);
-            Color previous = GUI.color;
-            GUI.color = player.TechniqueReady ? Color.white : new Color(0.48f, 0.52f, 0.51f);
-            GUI.DrawTexture(icon, player.HasIronSword ? ironSkillIcon : skillIcon);
-            GUI.color = previous;
-            if (player.TechniqueCooldownLeft > 0)
-                Label(icon, player.TechniqueCooldownLeft.ToString("0.0"), damage, Color.white);
+            DrawSkillSlot(new Rect(60, height - 174, 108, 108), player.HasIronSword ? ironSkillIcon : skillIcon,
+                player.TechniqueReady, player.TechniqueCooldownLeft, "Q · " + player.Technique.activeName);
+        }
+
+        void DrawSkillSlot(Rect icon, Texture2D texture, bool ready, float cooldown, string captionText,
+            bool cooldownAbove = false)
+        {
+            if (texture != null)
+            {
+                Color previous = GUI.color;
+                GUI.color = ready ? Color.white : new Color(0.48f, 0.52f, 0.51f);
+                GUI.DrawTexture(icon, texture);
+                GUI.color = previous;
+            }
+            if (cooldown > 0)
+            {
+                var timer = cooldownAbove ? new Rect(icon.x, icon.y - 30, icon.width, 28) : icon;
+                string time = cooldown.ToString("0.0");
+                if (cooldownAbove)
+                    Label(new Rect(timer.x + 1, timer.y + 2, timer.width, timer.height), time, damage, Ink);
+                Label(timer, time, damage, Color.white);
+            }
             var caption = new Rect(icon.x - 30, icon.yMax + 7, 168, 31);
             DrawFrame(caption);
-            Label(caption, "Q · " + player.Technique.activeName, status, Ink);
+            Label(caption, captionText, status, Ink);
+        }
+
+        void DrawUltimateSkill(float height)
+        {
+            var player = arena.Player;
+            var ultimate = player.Ultimate;
+            if (ultimate == null) return;
+            DrawSkillSlot(new Rect(238, height - 174, 108, 108), ultimateIcon, ultimate.Ready || ultimate.Active,
+                player.InfiniteUltimateForDebug ? 0 : ultimate.CooldownLeft, "R · " + FiveStarSwordSlash.Name, cooldownAbove: true);
         }
 
         bool DrawCharacterButton(Rect rect, string text, bool selected)
@@ -451,6 +531,52 @@ namespace SlashDemo
             { arena.CharacterPanel.Close(); GUI.depth = previousDepth; return; }
             Box(new Rect(panel.x + 28, panel.y + 83, panel.width - 56, 1), Bronze);
             if (arena.CharacterPanel.ActivePage == CharacterPanelPage.Techniques) DrawCharacterTechniques(panel);
+            GUI.depth = previousDepth;
+        }
+
+        void DrawWardrobe(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -30;
+            Box(new Rect(0, 0, width, height), new Color(0.06f, 0.11f, 0.09f, 0.72f));
+            var panel = new Rect(width / 2 - 540, height / 2 - 350, 1080, 700);
+            Box(panel, new Color(0.90f, 0.86f, 0.74f));
+            DrawFrame(panel);
+            Label(new Rect(panel.x + 30, panel.y + 18, 480, 44), "衣柜 · 角色选择", codexHeading, Ink);
+            if (GUI.Button(new Rect(panel.xMax - 170, panel.y + 22, 140, 38), "关闭 F / Esc", travelButton))
+            {
+                arena.CharacterPanel.Close();
+                GUI.depth = previousDepth;
+                return;
+            }
+            Box(new Rect(panel.x + 30, panel.y + 75, panel.width - 60, 1), Bronze);
+
+            var portrait = new Rect(panel.x + 30, panel.y + 94, 432, 576);
+            Box(portrait, new Color(0.19f, 0.27f, 0.29f));
+            Outline(portrait, Bronze);
+            if (swordsmanPortrait != null)
+                GUI.DrawTexture(new Rect(portrait.x + 10, portrait.y + 10, portrait.width - 20, portrait.height - 20),
+                    swordsmanPortrait, ScaleMode.ScaleToFit);
+
+            float x = panel.x + 498, y = panel.y + 96, w = panel.xMax - 30 - x;
+            Label(new Rect(x, y, w, 36), "剑修", codexHeading, Ink);
+            Label(new Rect(x, y + 42, w, 32), "流派 · 近战剑术", codexHeading, Jade);
+            Label(new Rect(x, y + 77, w, 52), "擅长近身连斩，也可蓄力挥出剑气。", codexBody, Ink);
+            Label(new Rect(x, y + 130, w, 30), TechniqueCatalog.FlowingCloud.name + " · 连段与突进", codexBody, Ink);
+            Label(new Rect(x, y + 164, w, 30), TechniqueCatalog.IronSword.name + " · 蓄力重击与剑气", codexBody, Ink);
+            Box(new Rect(x, y + 218, w, 1), Bronze);
+
+            if (ultimateIcon != null)
+                GUI.DrawTexture(new Rect(x, y + 240, 70, 70), ultimateIcon, ScaleMode.ScaleToFit);
+            Label(new Rect(x + 86, y + 239, w - 86, 38), "R · " + FiveStarSwordSlash.Name, codexHeading, Ink);
+            Label(new Rect(x + 86, y + 277, w - 86, 28), $"冷却 {FiveStarSwordSlash.Cooldown:0} 秒", codexBody, Jade);
+            Label(new Rect(x, y + 326, w, 56), "向周身劈出五道交叉斩击，斩痕连成五角星。施放期间免受伤害。", codexBody, Ink);
+            Label(new Rect(x, y + 388, w, 30),
+                $"流云剑诀 · 完成 {FiveStarSwordSlash.FlowingCloudRequired} 次满层流云疾斩", codexBody, Ink);
+            Label(new Rect(x, y + 422, w, 30),
+                $"玄铁剑罡 · 释放 {FiveStarSwordSlash.IronSwordRequired} 次满蓄力重击", codexBody, Ink);
+            if (DrawCharacterButton(new Rect(x, y + 524, w, 50), "确认使用剑修", true))
+                arena.CharacterPanel.ConfirmCharacter(PlayableCharacter.Swordsman);
             GUI.depth = previousDepth;
         }
 
@@ -497,6 +623,90 @@ namespace SlashDemo
             DrawTechniqueDetails(new Rect(panel.x + 275, panel.y + 119, panel.width - 303, panel.height - 147),
                 technique, ref codexScroll);
             GUI.depth = previousDepth;
+        }
+
+        void DrawAlchemyCodex(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -30;
+            Box(new Rect(0, 0, width, height), new Color(0.06f, 0.11f, 0.09f, 0.72f));
+            var panel = new Rect(width / 2 - 540, height / 2 - 360, 1080, 720);
+            Box(panel, new Color(0.90f, 0.86f, 0.74f));
+            DrawFrame(panel);
+
+            var treasureTab = new Rect(panel.x + 28, panel.y + 22, 180, 44);
+            var pillTab = new Rect(treasureTab.xMax + 12, treasureTab.y, treasureTab.width, treasureTab.height);
+            Box(treasureTab, Jade);
+            Outline(treasureTab, Bronze);
+            Label(treasureTab, "法宝图鉴", travelTitle, Color.white);
+            Outline(pillTab, Muted);
+            Label(pillTab, "丹药图鉴（待补）", status, Muted);
+            if (GUI.Button(new Rect(panel.xMax - 168, panel.y + 24, 140, 40), "关闭 F / Esc", travelButton))
+            {
+                arena.Codex.Close();
+                GUI.depth = previousDepth;
+                return;
+            }
+            Box(new Rect(panel.x + 28, panel.y + 82, panel.width - 56, 1), Bronze);
+            DrawTreasureGrid(new Rect(panel.x + 28, panel.y + 99, panel.width - 56, panel.height - 127));
+            GUI.depth = previousDepth;
+        }
+
+        void DrawTreasureGrid(Rect viewport)
+        {
+            const int columns = 5;
+            const float gap = 10, padding = 12, imageSize = 112, titleHeight = 30;
+            const float descriptionTop = padding + imageSize + 4 + titleHeight + 4;
+            var entries = TreasureCatalog.All;
+            int rowCount = (entries.Count + columns - 1) / columns;
+            float contentWidth = viewport.width - 20;
+            float cardWidth = (contentWidth - (columns - 1) * gap) / columns;
+            float textWidth = cardWidth - 2 * padding;
+            if (treasureRowOffsets == null || treasureCardWidth != cardWidth)
+            {
+                treasureCardWidth = cardWidth;
+                treasureRowOffsets = new float[rowCount + 1];
+                for (int row = 0; row < rowCount; row++)
+                {
+                    float descriptionHeight = 0;
+                    int end = Mathf.Min((row + 1) * columns, entries.Count);
+                    for (int i = row * columns; i < end; i++)
+                        descriptionHeight = Mathf.Max(descriptionHeight,
+                            treasureDescription.CalcHeight(new GUIContent(entries[i].Effect), textWidth));
+                    treasureRowOffsets[row + 1] = treasureRowOffsets[row] + descriptionTop + descriptionHeight + padding + gap;
+                }
+            }
+
+            treasureScroll = GUI.BeginScrollView(viewport, treasureScroll,
+                new Rect(0, 0, contentWidth, Mathf.Max(0, treasureRowOffsets[rowCount] - gap)));
+            for (int row = 0; row < rowCount; row++)
+            {
+                float y = treasureRowOffsets[row];
+                if (y >= treasureScroll.y + viewport.height) break;
+                float cardHeight = treasureRowOffsets[row + 1] - y - gap;
+                if (y + cardHeight <= treasureScroll.y) continue;
+
+                int start = row * columns;
+                int end = Mathf.Min(start + columns, entries.Count);
+                for (int i = start; i < end; i++)
+                {
+                    var entry = entries[i];
+                    float x = (i - start) * (cardWidth + gap);
+                    var card = new Rect(x, y, cardWidth, cardHeight);
+                    Box(card, new Color(0.14f, 0.20f, 0.21f));
+                    Outline(card, Bronze);
+                    var imageSlot = new Rect(x + (cardWidth - imageSize) / 2, y + padding, imageSize, imageSize);
+                    Box(imageSlot, new Color(0.20f, 0.26f, 0.27f));
+                    if (Event.current.type == EventType.Repaint)
+                        DrawHudIcon(imageSlot, entry.IconResource);
+                    Outline(imageSlot, Bronze);
+                    Label(new Rect(x + padding, imageSlot.yMax + 4, textWidth, titleHeight),
+                        entry.Name, treasureTitle, TreasureNameColors[(int)entry.Quality]);
+                    Label(new Rect(x + padding, y + descriptionTop, textWidth, cardHeight - descriptionTop - padding),
+                        entry.Effect, treasureDescription, new Color(0.94f, 0.92f, 0.85f));
+                }
+            }
+            GUI.EndScrollView();
         }
 
         void DrawTechniqueDetails(Rect viewport, TechniqueDefinition technique, ref Vector2 scroll)
@@ -653,7 +863,7 @@ namespace SlashDemo
             var buff = challenger.PassiveBuff;
             Box(slot, new Color(.08f, .11f, .11f, .92f));
             Outline(slot, Bronze);
-            DrawBuffIcon(slot, buff.iconResource);
+            DrawHudIcon(slot, buff.iconResource);
             if (buff.stacks > 0)
             {
                 DrawBuffCountdown(slot, buff);

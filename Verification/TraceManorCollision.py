@@ -112,10 +112,13 @@ def main():
     # The two large strokes meet beside the meditation room. The gate stays open.
     boundary = left + right[::-1] + [(735, 758), (778, 822), (820, 860), (820, 1008),
                                     (555, 1008), (555, 860), (580, 820), (596, 758), left[0]]
-    # The hand-drawn passage is only 12 pixels wide at its throat. Retreat each
-    # opposing edge by at most six pixels so the unchanged 0.29-radius actor fits.
-    clearance = {(503, 239): (503, 245), (488, 227): (488, 221),
-                 (503, 227): (503, 221), (515, 221): (515, 218)}
+    # Widen the passage from the hall to the furnace to give the player room
+    # to enter off-center.
+    clearance = {(545, 234): (545, 236), (503, 239): (503, 249),
+                 (479, 245): (479, 249), (471, 253): (471, 255),
+                 (477, 222): (477, 219), (488, 227): (488, 217),
+                 (503, 227): (503, 217), (515, 221): (515, 214),
+                 (525, 211): (525, 209)}
     boundary = [clearance.get(point, point) for point in boundary]
     table = solid_outline(labels == components[2])
     data = {"referenceWidth": 1536, "referenceHeight": 1024,
