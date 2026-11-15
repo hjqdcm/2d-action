@@ -112,6 +112,8 @@ namespace SlashDemo
         GUIStyle alchemyDescription, alchemyTitle;
         int codexIndex;
         Vector2 techniqueScroll;
+        Vector2 attributeScroll;
+        readonly List<float> conditionalEffectHeights = new List<float>();
         Vector2 codexScroll;
         Vector2 treasureScroll;
         Vector2 pillScroll;
@@ -319,6 +321,12 @@ namespace SlashDemo
                 DrawFrame(prompt);
                 Label(prompt, "F 开启传送阵", status, Ink);
             }
+            if (arena.Travel != null && arena.Travel.ShowTreatmentPrompt)
+            {
+                var prompt = new Rect(width / 2 - 175, height / 2 + 80, 350, 50);
+                DrawFrame(prompt);
+                Label(prompt, "F  床边疗伤", status, Ink);
+            }
             if (arena.Codex != null && arena.Codex.ShowPrompt)
             {
                 var prompt = new Rect(width / 2 - 175, height / 2 - 25, 350, 50);
@@ -355,6 +363,7 @@ namespace SlashDemo
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsWardrobeOpen) DrawWardrobe(width, height);
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsOpen) DrawCharacterPanel(width, height);
             else if (arena.Travel != null && arena.Travel.IsChallengeDecisionOpen) DrawChallengeDecision(width, height);
+            else if (arena.Travel != null && arena.Travel.IsTreatmentOpen) DrawTreatmentDecision(width, height);
             else if (arena.Travel != null && arena.Travel.IsSelectionOpen) DrawTravelSelection(width, height);
             else if (arena.PauseMenuOpen) DrawPauseMenu(width, height);
             GUI.matrix = previous;
@@ -528,12 +537,101 @@ namespace SlashDemo
             for (int i = 0; i < CharacterPageNames.Length; i++)
                 if (DrawCharacterButton(new Rect(panel.x + 28 + i * 192, panel.y + 22, 180, 46),
                     CharacterPageNames[i], arena.CharacterPanel.ActivePage == (CharacterPanelPage)i))
-                { arena.CharacterPanel.SelectPage((CharacterPanelPage)i); techniqueScroll = Vector2.zero; }
+                {
+                    arena.CharacterPanel.SelectPage((CharacterPanelPage)i);
+                    techniqueScroll = Vector2.zero;
+                    attributeScroll = Vector2.zero;
+                }
             if (GUI.Button(new Rect(panel.xMax - 212, panel.y + 24, 184, 42), "关闭 Tab / Esc", travelButton))
             { arena.CharacterPanel.Close(); GUI.depth = previousDepth; return; }
             Box(new Rect(panel.x + 28, panel.y + 83, panel.width - 56, 1), Bronze);
             if (arena.CharacterPanel.ActivePage == CharacterPanelPage.Techniques) DrawCharacterTechniques(panel);
+            else if (arena.CharacterPanel.ActivePage == CharacterPanelPage.Attributes)
+                DrawCharacterAttributes(panel);
             GUI.depth = previousDepth;
+        }
+
+        void DrawCharacterAttributes(Rect panel)
+        {
+            const float rowHeight = 38, headingHeight = 38, gap = 16;
+            const int rowsPerColumn = 11;
+            var viewport = new Rect(panel.x + 28, panel.y + 99, panel.width - 56, panel.height - 127);
+            float width = viewport.width - 20;
+            float columnWidth = (width - gap) / 2;
+            float effectsY = headingHeight + rowsPerColumn * rowHeight + 18;
+            var player = arena.Player;
+            var effects = player.ActiveConditionalAlchemyEffects;
+            float contentHeight = headingHeight + rowsPerColumn * rowHeight;
+            conditionalEffectHeights.Clear();
+            if (effects.Count > 0)
+            {
+                contentHeight = effectsY + headingHeight;
+                foreach (var entry in effects)
+                {
+                    float height = 40 + codexBody.CalcHeight(new GUIContent(entry.Effect), width - 24);
+                    conditionalEffectHeights.Add(height);
+                    contentHeight += height;
+                }
+            }
+
+            var content = new Rect(0, 0, width, contentHeight);
+            attributeScroll.y = Mathf.Clamp(attributeScroll.y, 0, Mathf.Max(0, contentHeight - viewport.height));
+            attributeScroll = GUI.BeginScrollView(viewport, attributeScroll, content);
+            const string noBonus = "+0%";
+            float chargeTime = (player.heavyAttack?.chargeTime ?? new SlashTuningSettings.HeavyAttackSettings().chargeTime)
+                / (player.HasIronSword ? player.IronChargeSpeed : 1);
+            var row = new Rect(0, headingHeight, columnWidth, rowHeight);
+            Label(new Rect(row.x + 12, 0, row.width - 24, headingHeight), "生存与机动", codexHeading, Ink);
+            DrawAttributeRow(ref row, "最大生命", player.maxHealth.ToString());
+            DrawAttributeRow(ref row, "受到伤害减免", player.IronBodyActive ? $"{player.IronSword.bodyDamageReduction:P0}" : "0%");
+            DrawAttributeRow(ref row, "受到的治疗量加成", noBonus);
+            DrawAttributeRow(ref row, "受到的持续伤害减免", "0%");
+            DrawAttributeRow(ref row, "受击硬直时间缩短", "0%");
+            DrawAttributeRow(ref row, "移动速度", $"{player.WalkingSpeed:0.##} 单位/秒");
+            DrawAttributeRow(ref row, "冲刺距离", $"{player.dashSpeed * player.dashDuration:0.##} 单位");
+            DrawAttributeRow(ref row, "冲刺冷却时间", $"{player.dashCooldown:0.##} 秒");
+            DrawAttributeRow(ref row, "重击满蓄力时间", $"{chargeTime:0.##} 秒");
+            float techniqueCooldown = player.HasIronSword ? player.IronSword.bodyCooldown : player.FlowingCloud.activeCooldown;
+            DrawAttributeRow(ref row, "Q · 主动技能冷却时间", $"{techniqueCooldown:0.##} 秒");
+            DrawAttributeRow(ref row, "R · 大招冷却时间", $"{FiveStarSwordSlash.Cooldown:0.##} 秒");
+
+            row = new Rect(columnWidth + gap, headingHeight, columnWidth, rowHeight);
+            Label(new Rect(row.x + 12, 0, row.width - 24, headingHeight), "攻击与暴击", codexHeading, Ink);
+            DrawAttributeRow(ref row, "造成的伤害加成", noBonus);
+            DrawAttributeRow(ref row, "普攻伤害加成", $"+{player.ComboDamageBonus * 100:0.#}%");
+            DrawAttributeRow(ref row, "普攻攻速加成", $"+{(player.NormalAttackSpeedMultiplier - 1) * 100:0.#}%");
+            DrawAttributeRow(ref row, "普攻判定距离加成", noBonus);
+            DrawAttributeRow(ref row, "重击伤害加成", noBonus);
+            DrawAttributeRow(ref row, "剑气伤害加成", noBonus);
+            DrawAttributeRow(ref row, "剑气飞行距离加成", noBonus);
+            DrawAttributeRow(ref row, "Q · 主动技能伤害加成", noBonus);
+            DrawAttributeRow(ref row, "R · 大招伤害加成", noBonus);
+            DrawAttributeRow(ref row, "暴击率", $"{player.CriticalChance * 100:0.#}%");
+            DrawAttributeRow(ref row, "暴击伤害", $"+{player.CriticalDamage * 100:0.#}%");
+
+            if (effects.Count > 0)
+            {
+                Label(new Rect(12, effectsY, width - 24, headingHeight), "已获得的条件效果", codexHeading, Ink);
+                float y = effectsY + headingHeight;
+                for (int i = 0; i < effects.Count; i++)
+                {
+                    var entry = effects[i];
+                    float height = conditionalEffectHeights[i];
+                    Box(new Rect(0, y, width, 1), Bronze);
+                    Label(new Rect(12, y + 4, width - 24, 28), entry.Name, codexHeading, Jade);
+                    Label(new Rect(12, y + 34, width - 24, height - 40), entry.Effect, codexBody, Ink);
+                    y += height;
+                }
+            }
+            GUI.EndScrollView();
+        }
+
+        void DrawAttributeRow(ref Rect row, string name, string value)
+        {
+            Box(new Rect(row.x, row.y, row.width, 1), Bronze);
+            Label(new Rect(row.x + 12, row.y, row.width - 188, row.height), name, codexBody, Ink);
+            Label(new Rect(row.xMax - 176, row.y, 176, row.height), value, status, Jade);
+            row.y += row.height;
         }
 
         void DrawWardrobe(float width, float height)
@@ -813,6 +911,25 @@ namespace SlashDemo
                 if (GUI.Button(new Rect(panel.center.x - 120, panel.y + 189, 240, 50), "开启传送阵", travelButton))
                     travel.ResolveChallenge(false);
             }
+            GUI.depth = previousDepth;
+        }
+
+        void DrawTreatmentDecision(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -30;
+            Box(new Rect(0, 0, width, height), new Color(.08f, .12f, .10f, .65f));
+            var panel = new Rect(width / 2 - 280, height / 2 - 110, 560, 220);
+            Box(panel, new Color(.88f, .83f, .70f, .98f));
+            DrawFrame(panel);
+            Label(new Rect(panel.x, panel.y + 22, panel.width, 48), "床边疗伤", travelTitle, Ink);
+            Label(new Rect(panel.x, panel.y + 83, panel.width, 28),
+                $"回复最大气血的 {SceneTravel.TreatmentHealPercent}%，至多回满", status, Ink);
+            if (GUI.Button(new Rect(panel.x + 38, panel.y + 140, 232, 46),
+                $"治疗 · {SceneTravel.TreatmentCost} 灵石", travelButton))
+                arena.Travel.ResolveTreatment(true);
+            else if (GUI.Button(new Rect(panel.x + 290, panel.y + 140, 232, 46), "放弃治疗", travelButton))
+                arena.Travel.ResolveTreatment(false);
             GUI.depth = previousDepth;
         }
 

@@ -99,6 +99,7 @@ namespace SlashDemo.Editor
         static void Verify(SlashArena arena)
         {
             var player = arena.Player;
+            Check(player.CriticalChance == .05f && player.CriticalDamage == .50f, "Incorrect starting critical stats.");
             var settings = arena.Tuning.Settings;
             settings.infiniteUltimateForDebug = false;
             settings.invincible = false;
@@ -156,6 +157,7 @@ namespace SlashDemo.Editor
             arena.RegisterEnemy(target);
             Physics2D.SyncTransforms();
             int health = target.Health;
+            player.CriticalChanceBonus = 1;
             var strokes = (LineRenderer[])ultimate.GetType().GetField("cores", Private).GetValue(ultimate);
             var halos = (LineRenderer[])ultimate.GetType().GetField("halos", Private).GetValue(ultimate);
             float fullLength = 2 * 2.75f * 1.25f * Mathf.Sin(72 * Mathf.Deg2Rad);
@@ -173,7 +175,10 @@ namespace SlashDemo.Editor
             Check(strokes[1].enabled && HasUniformWidth(0) && HasUniformWidth(1),
                 "The second slash and the first slash's afterglow had different widths.");
             Advance(.347f);
-            Check(health - target.Health == 180, "The ultimate did not resolve all five slashes exactly once.");
+            Check(health - target.Health == 270, "The ultimate did not resolve five 150%-damage critical hits.");
+            Check(arena.Effects.Texts[arena.Effects.Texts.Count - 1].text == "暴击 54",
+                "The critical damage number did not identify the hit as critical.");
+            player.CriticalChanceBonus = 0;
             foreach (var stroke in strokes)
                 Check(stroke.enabled && Mathf.Abs(Length(stroke) - fullLength) < .001f, "The star edge did not grow by 25%.");
             for (int i = 0; i < strokes.Length; i++)

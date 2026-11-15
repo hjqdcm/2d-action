@@ -212,6 +212,54 @@ namespace SlashDemo.Editor
                     case 8:
                         Check(travel.Current == TravelMaps.Choices[choice].destination && !travel.IsSelectionOpen, "Reserved exit unexpectedly teleported the player.");
                         Debug.Log("SCENE_TRAVEL_DESTINATION_PASS: " + travel.Current + "; entry, routes, character state, camera, click suppression, inactive reserved exit.");
+                        if (travel.Current == TravelDestination.HealingLodge)
+                        {
+                            Check(travel.Portal == null && !travel.ShowTreatmentPrompt, "Treatment must start at the bed, with no portal yet.");
+                            original.Teleport(travel.ActiveMap.Definition.Ground(550, 310));
+                            QueueKeys(new KeyboardState(Key.F));
+                            Advance(20);
+                            break;
+                        }
+                        QueueKeys(new KeyboardState(Key.Escape));
+                        Advance(9);
+                        break;
+                    case 20:
+                        Check(travel.IsTreatmentOpen && arena.Paused && arena.InputBlocked && !arena.PauseMenuOpen,
+                            "F at the bed did not open a modal treatment choice.");
+                        Check(SceneTravel.TreatmentCost == 0, "Treatment must be free until spirit stones are available.");
+                        travel.ResolveTreatment(false);
+                        Check(original.Health == health && travel.Portal != null && !arena.Paused && !travel.IsTreatmentOpen,
+                            "Declining treatment changed health or failed to spawn the portal.");
+                        Check(Vector2.Distance(travel.Portal.transform.position, travel.ActiveMap.Definition.Ground(965, 574)) < .01f,
+                            "The healing lodge portal did not fit outside the treatment room.");
+                        QueueKeys(new KeyboardState());
+                        Advance(21);
+                        break;
+                    case 21:
+                        Check(!travel.ShowTreatmentPrompt && !travel.TryOpenTreatment(), "The treatment marker remained usable after resolving.");
+                        original.Teleport(travel.Portal.transform.position);
+                        QueueKeys(new KeyboardState(Key.F));
+                        Advance(22);
+                        break;
+                    case 22:
+                        Check(travel.IsSelectionOpen && arena.Paused, "The lodge portal did not open the standard travel picker.");
+                        travel.SelectDestination(TravelDestination.HealingLodge);
+                        Check(travel.Portal == null, "Revisiting the lodge reused its previous portal.");
+                        original.Teleport(travel.ActiveMap.Definition.Ground(550, 310));
+                        original.TakePoisonDamage(original.Health - Mathf.CeilToInt(original.maxHealth * .25f));
+                        health = original.Health;
+                        QueueKeys(new KeyboardState());
+                        Advance(23);
+                        break;
+                    case 23:
+                        Check(travel.TryOpenTreatment(), "The treatment marker did not reappear on a new visit.");
+                        travel.ResolveTreatment(true);
+                        health += Mathf.CeilToInt(original.maxHealth * .5f);
+                        Check(original.Health == health && travel.Portal != null && !travel.HasModal && arena.InputBlocked,
+                            "Treatment did not heal half of maximum health and open the portal.");
+                        travel.ResolveTreatment(true);
+                        Check(original.Health == health, "Treatment could be resolved twice in one visit.");
+                        Debug.Log("HEALING_LODGE_TREATMENT_PASS: F interaction, heal and decline, once per visit, courtyard portal and shared travel picker.");
                         QueueKeys(new KeyboardState(Key.Escape));
                         Advance(9);
                         break;

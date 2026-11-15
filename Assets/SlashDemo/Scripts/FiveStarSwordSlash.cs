@@ -122,7 +122,7 @@ namespace SlashDemo
                 Vector2 point = enemy.transform.position;
                 if (SwordMotion.DistanceToBlade(point, start, end, out _) > HalfWidth + enemy.Radius
                     || Blocked(origin, point)) continue;
-                enemy.TakeHit(DamagePerSlash, direction, 0, last);
+                owner.DealHit(enemy, DamagePerSlash, direction, 0, last);
             }
             if (arena.Travel != null && arena.Travel.IsChallengeDecisionOpen) Cancel();
         }

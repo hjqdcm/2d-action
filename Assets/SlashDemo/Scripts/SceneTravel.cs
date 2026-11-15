@@ -15,6 +15,7 @@ namespace SlashDemo
         string error;
         WildernessEncounter wildernessEncounter;
         AscensionChallenge ascension;
+        Transform treatmentMarker;
         readonly List<(SlashEnemy enemy, bool active)> manorEnemies = new List<(SlashEnemy, bool)>();
         public TravelDestination Current { get; private set; } = TravelDestination.Manor;
         public TravelMapEnvironment ActiveMap { get; private set; }
@@ -25,12 +26,18 @@ namespace SlashDemo
             && Vector2.Distance(arena.Player.transform.position, Portal.transform.position) <= TeleportFormation.InteractionRadius;
         public bool IsSelectionOpen { get; private set; }
         public bool IsChallengeDecisionOpen { get; private set; }
+        public bool IsTreatmentOpen { get; private set; }
+        public bool ShowTreatmentPrompt => treatmentMarker != null && arena.Player.IsAlive && !arena.InputBlocked
+            && (arena.Tuning == null || !arena.Tuning.IsOpen)
+            && Vector2.Distance(arena.Player.transform.position, treatmentMarker.position) <= 1.35f;
+        public const int TreatmentCost = 0;
+        public const int TreatmentHealPercent = 50;
         public bool CanContinueChallenge => IsChallengeDecisionOpen && ascension.HasNext;
         public int ChallengeRound => ascension?.Round ?? 0;
         public int ChallengeCompletedRounds => ascension?.CompletedRounds ?? 0;
         public bool ChallengeEndedByDefeat => ascension != null && Portal != null && ascension.CompletedRounds < ascension.Round;
         public string DefeatedChallenger { get; private set; }
-        public bool HasModal => IsSelectionOpen || IsChallengeDecisionOpen;
+        public bool HasModal => IsSelectionOpen || IsChallengeDecisionOpen || IsTreatmentOpen;
         public string Error => error;
         public bool BlocksGameplayInput => HasModal || waitingForRelease;
         public static Rect ManorGate => ManorEnvironment.GroundRect(new Rect(630, 770, 100, 75));
@@ -62,7 +69,7 @@ namespace SlashDemo
                 waitingForRelease = false;
             if (Current != TravelDestination.Manor)
             {
-                if (DemoInput.InteractPressed) TryOpenPortal();
+                if (DemoInput.InteractPressed && !TryOpenTreatment()) TryOpenPortal();
                 return;
             }
             if (IsSelectionOpen) return;
@@ -101,6 +108,32 @@ namespace SlashDemo
                 || (arena.CharacterPanel != null && arena.CharacterPanel.ConsumedInputThisFrame)) return false;
             OpenSelection();
             return true;
+        }
+
+        public bool TryOpenTreatment()
+        {
+            if (!ShowTreatmentPrompt) return false;
+            IsTreatmentOpen = true;
+            PauseForModal();
+            return true;
+        }
+
+        public void ResolveTreatment(bool heal)
+        {
+            var player = arena.Player;
+            if (!IsTreatmentOpen || Current != TravelDestination.HealingLodge || !player.IsAlive || arena.Defeated) return;
+
+            // On the courtyard paving just below the treatment room steps.
+            Portal = TeleportFormation.Spawn(ActiveMap, ActiveMap.Definition.Ground(965, 574), 1.8f);
+            if (heal) player.Heal(Mathf.CeilToInt(player.maxHealth * (TreatmentHealPercent / 100f)));
+            Destroy(treatmentMarker.gameObject);
+            treatmentMarker = null;
+            CloseModal();
+        }
+
+        void PlaceTreatmentMarker(TravelMapEnvironment map)
+        {
+            treatmentMarker = DemoArt.InteractionLight("床边疗伤光点", map.transform, map.Definition.Ground(550, 310), 1210);
         }
 
         public void EnemyDefeated(SlashEnemy defeated)
@@ -203,6 +236,7 @@ namespace SlashDemo
             Physics2D.SyncTransforms();
             if (destination == TravelDestination.Wilderness)
                 (wildernessEncounter ??= new WildernessEncounter()).SpawnPack(arena, map);
+            if (destination == TravelDestination.HealingLodge) PlaceTreatmentMarker(map);
             if (ascension != null) ascension.SpawnNext(arena, map);
             CloseModal();
             arena.CameraRig.ResetFeedback();
@@ -212,6 +246,7 @@ namespace SlashDemo
         {
             IsSelectionOpen = false;
             IsChallengeDecisionOpen = false;
+            IsTreatmentOpen = false;
             DefeatedChallenger = null;
             error = null;
             waitingForRelease = true;
@@ -259,6 +294,7 @@ namespace SlashDemo
             }
             ActiveMap = null;
             Portal = null;
+            treatmentMarker = null;
             ascension = null;
         }
     }

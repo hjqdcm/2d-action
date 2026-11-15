@@ -47,6 +47,20 @@ namespace SlashDemo
 
         public static bool InTraining(Vector2 position) => TrainingBounds.Contains(position);
 
+        void Start()
+        {
+            PlaceInteractionLight("功法图鉴光点", "Tea table");
+            PlaceInteractionLight("角色选择光点", "Wardrobe");
+            PlaceInteractionLight("法宝与丹药图鉴光点", "Alchemy furnace");
+        }
+
+        void PlaceInteractionLight(string name, string furniture)
+        {
+            Rect footprint = ManorCollisionLayout.FurnitureFootprint(furniture);
+            var position = new Vector2(footprint.center.x, footprint.yMin - .6f);
+            DemoArt.InteractionLight(name, transform, position, ObliqueProjection.DepthOrder(position.y));
+        }
+
         public static void Build(Transform environment)
         {
             var manor = new GameObject("Private Manor").AddComponent<ManorEnvironment>();

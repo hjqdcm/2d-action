@@ -191,6 +191,7 @@ namespace SlashDemo.Editor
         static void Place(SlashArena arena, CultivationRealm realm, bool multiple = false)
         {
             arena.Restart();
+            arena.Player.CriticalChanceBonus = -SlashPlayer.BaseCriticalChance;
             arena.Tuning.Settings.dummyHealth = 2000; arena.Tuning.Settings.invincible = false;
             arena.Tuning.ApplyAll(); arena.Effects.hitStopMultiplier = 0;
             arena.Player.SetRealm(realm); arena.Player.Teleport(ManorEnvironment.TrainingCenter);

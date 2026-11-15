@@ -175,7 +175,7 @@ namespace SlashDemo
             body.linearVelocity = navigation != null ? navigation.ConstrainVelocity(velocity, Time.fixedDeltaTime) : velocity;
         }
 
-        public void TakeHit(int amount, Vector2 direction, float force, bool heavy = false, bool interrupt = true)
+        public void TakeHit(int amount, Vector2 direction, float force, bool heavy = false, bool interrupt = true, bool critical = false)
         {
             if (!Alive || (apeCombat != null && apeCombat.IsAirborne)) return;
             if (amount > 0 && cultivator != null) amount = cultivator.MitigateHit(amount);
@@ -185,7 +185,8 @@ namespace SlashDemo
             // Keep force/interrupt arguments compatible with existing sword and skill callers.
             if (amount > 0)
                 arena.Effects.DamageImpact(presentation, direction, DemoArt.Gold, heavy, !Alive);
-            arena.Effects.Number(transform.position, amount.ToString(), amount >= 40 ? DemoArt.Gold : Color.white);
+            arena.Effects.Number(transform.position, critical ? $"暴击 {amount}" : amount.ToString(),
+                critical || amount >= 40 ? DemoArt.Gold : Color.white);
             arena.Effects.PlayHit(heavy, !Alive);
             arena.CameraRig.Punch(heavy || !Alive ? 1 : .35f);
             if (Alive)

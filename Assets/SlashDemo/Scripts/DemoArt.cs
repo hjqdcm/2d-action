@@ -92,6 +92,18 @@ namespace SlashDemo
             return Line(name, parent, points, color, width, order, true);
         }
 
+        internal static Transform InteractionLight(string name, Transform parent, Vector2 position, int order)
+        {
+            var marker = new GameObject(name).transform;
+            marker.SetParent(parent, false);
+            marker.localPosition = position;
+            Ring("Outer glow", marker, .40f, new Color(.32f, .93f, .79f, .45f), .05f, order, 32);
+            Ring("Inner glow", marker, .25f, Jade, .04f, order + 1, 24);
+            Shape("Light core", marker, "Square", Vector2.zero,
+                Vector2.one * .20f, new Color(.83f, 1f, .92f), order + 2, 45);
+            return marker;
+        }
+
         public static Rigidbody2D Body(GameObject go, float radius, float mass = 1)
         {
             var body = go.AddComponent<Rigidbody2D>();

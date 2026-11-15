@@ -124,13 +124,15 @@ namespace SlashDemo
 
         public static void Apply(Sprite sprite, Rect source, params Vector2[][] outlines)
         {
-            Vector2 center = ManorEnvironment.GroundRect(source).center;
+            // OverrideGeometry takes pixels relative to the sprite rect, with Y measured from the bottom.
+            var pixelsPerReferencePixel = new Vector2(sprite.rect.width / source.width, sprite.rect.height / source.height);
             var vertices = new List<Vector2>();
             var triangles = new List<ushort>();
             foreach (var outline in outlines)
             {
                 int offset = vertices.Count;
-                foreach (var p in outline) vertices.Add(ManorEnvironment.Ground(p.x, p.y) - center);
+                foreach (var p in outline)
+                    vertices.Add(Vector2.Scale(new Vector2(p.x - source.xMin, source.yMax - p.y), pixelsPerReferencePixel));
                 var remaining = new List<int>();
                 float area = 0;
                 for (int i = 0; i < outline.Length; i++)
@@ -159,9 +161,6 @@ namespace SlashDemo
                 }
                 foreach (int index in remaining) triangles.Add((ushort)index);
             }
-            // OverrideGeometry accepts sprite-rect pixels, while Sprite.vertices returns local units.
-            // https://docs.unity.cn/6000.7/Documentation/ScriptReference/Sprite.OverrideGeometry.html
-            for (int i = 0; i < vertices.Count; i++) vertices[i] = vertices[i] * sprite.pixelsPerUnit + sprite.pivot;
             sprite.OverrideGeometry(vertices.ToArray(), triangles.ToArray());
         }
 

@@ -24,7 +24,7 @@ namespace SlashDemo
         }
         public Vector2 WorldSize => destination switch
         {
-            TravelDestination.AscensionPlatform => ManorEnvironment.WorldSize * .75f,
+            TravelDestination.AscensionPlatform or TravelDestination.HealingLodge => ManorEnvironment.WorldSize * .75f,
             TravelDestination.Wilderness => new Vector2(36, 24),
             _ => ManorEnvironment.WorldSize
         };
@@ -160,7 +160,7 @@ namespace SlashDemo
             float scaleX = texture.width / 1536f, scaleY = texture.height / 1024f;
             gateRoof = Sprite.Create(texture,
                 new Rect(pixels.x * scaleX, (1024 - pixels.yMax) * scaleY, pixels.width * scaleX, pixels.height * scaleY),
-                Vector2.one * 0.5f, texture.width / ManorEnvironment.WorldSize.x, 0, SpriteMeshType.FullRect);
+                Vector2.one * 0.5f, texture.width / Definition.WorldSize.x, 0, SpriteMeshType.FullRect);
             gateRoof.name = "Healing lodge gate roof silhouette";
             ManorMaskGeometry.Apply(gateRoof, pixels, ManorMaskGeometry.Outline(
                 1094,700, 1108,697, 1108,685, 1121,688, 1130,679, 1155,674,
@@ -171,7 +171,7 @@ namespace SlashDemo
                 1171,750, 1154,736, 1132,731, 1115,722, 1097,723, 1092,716));
             var roof = new GameObject("Gate roof - overhead occlusion").AddComponent<SpriteRenderer>();
             roof.transform.SetParent(transform, false);
-            roof.transform.localPosition = ManorEnvironment.GroundRect(pixels).center;
+            roof.transform.localPosition = Definition.GroundRect(pixels).center;
             roof.sprite = gateRoof;
             roof.sharedMaterial = material != null ? material : DemoArt.Material;
             // The roof is above this passage even when the actor's feet are south

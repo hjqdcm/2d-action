@@ -11,15 +11,15 @@ namespace SlashDemo
         SpriteRenderer visual;
         float age;
 
-        public static TeleportFormation Spawn(TravelMapEnvironment map, Vector2 near)
+        public static TeleportFormation Spawn(TravelMapEnvironment map, Vector2 near, float visualRadius = VisualRadius)
         {
             var texture = Resources.Load<Texture2D>(ArtResource);
             if (texture == null) throw new System.InvalidOperationException("Missing teleport formation artwork.");
             var portal = new GameObject("清场传送阵").AddComponent<TeleportFormation>();
             portal.transform.SetParent(map.transform, false);
-            portal.transform.position = (Vector3)FindPosition(map, near) + Vector3.back * .02f;
+            portal.transform.position = (Vector3)FindPosition(map, near, visualRadius) + Vector3.back * .02f;
             portal.sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height),
-                Vector2.one * .5f, Mathf.Max(texture.width, texture.height) / (VisualRadius * 2), 0, SpriteMeshType.FullRect);
+                Vector2.one * .5f, Mathf.Max(texture.width, texture.height) / (visualRadius * 2), 0, SpriteMeshType.FullRect);
             portal.visual = portal.gameObject.AddComponent<SpriteRenderer>();
             portal.visual.sprite = portal.sprite;
             portal.visual.sharedMaterial = DemoArt.Material;
@@ -27,19 +27,19 @@ namespace SlashDemo
             return portal;
         }
 
-        static Vector2 FindPosition(TravelMapEnvironment map, Vector2 near)
+        static Vector2 FindPosition(TravelMapEnvironment map, Vector2 near, float visualRadius)
         {
             // Keep the whole rune circle inside the map, away from solid obstacles.
             for (int ring = 0; ring <= 12; ring++)
                 for (int sample = 0; sample < (ring == 0 ? 1 : 16); sample++)
                 {
                     Vector2 point = near + DemoArt.Direction(sample * 22.5f) * (ring * .65f);
-                    if (Clear(map, point)) return point;
+                    if (Clear(map, point, visualRadius)) return point;
                 }
             return map.Definition.Entry;
         }
 
-        static bool Clear(TravelMapEnvironment map, Vector2 point)
+        static bool Clear(TravelMapEnvironment map, Vector2 point, float visualRadius)
         {
             bool inside = false;
             var boundary = map.Definition.boundary;
@@ -51,7 +51,7 @@ namespace SlashDemo
                     inside = !inside;
             }
             if (!inside) return false;
-            foreach (var collider in Physics2D.OverlapCircleAll(point, VisualRadius))
+            foreach (var collider in Physics2D.OverlapCircleAll(point, visualRadius))
                 if (!collider.isTrigger && collider.transform.IsChildOf(map.transform)
                     && collider.GetComponentInParent<SlashEnemy>() == null) return false;
             return true;

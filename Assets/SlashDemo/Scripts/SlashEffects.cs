@@ -44,6 +44,7 @@ namespace SlashDemo
         public int ActiveWhirlwindCount => whirlwinds.Count;
         sealed class SwordWave
         {
+            public SlashPlayer attacker;
             public SlashPlayer normalAttackOwner;
             public SlashPlayer heavyOwner;
             public float scarHeavyBonus;
@@ -391,7 +392,8 @@ namespace SlashDemo
                         enemy.transform.position, enemy.Radius)) continue;
                 ring.hit.Add(enemy);
                 Vector2 direction = (Vector2)enemy.transform.position - ring.origin;
-                enemy.TakeHit(ring.damage, direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right, ring.knockback, true);
+                ring.owner.DealHit(enemy, ring.damage, direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right,
+                    ring.knockback, true);
                 if (!ring.notified) { ring.notified = true; ring.onFirstHit?.Invoke(); }
                 HitStop(0.033f);
             }
@@ -552,14 +554,14 @@ namespace SlashDemo
 
         public void LaunchSwordWave(Vector2 position, Vector2 direction, SlashTuningSettings.HeavyAttackSettings settings,
             SlashPlayer normalAttackOwner = null, SlashPlayer heavyOwner = null, float scarHeavyBonus = 0,
-            SlashTuningSettings.IronSwordSettings scarSettings = null, bool scarExplodes = false)
+            SlashTuningSettings.IronSwordSettings scarSettings = null, bool scarExplodes = false, SlashPlayer attacker = null)
         {
             var root = new GameObject("Charged sword wave").transform;
             root.SetParent(transform, false);
             var wave = new SwordWave { root = root, position = position,
                 direction = direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right,
                 settings = settings.Clone(), normalAttackOwner = normalAttackOwner, normalAttack = normalAttackOwner != null,
-                heavyOwner = heavyOwner, scarHeavyBonus = scarHeavyBonus };
+                heavyOwner = heavyOwner, scarHeavyBonus = scarHeavyBonus, attacker = attacker ?? normalAttackOwner ?? heavyOwner };
             if (scarSettings != null && heavyOwner != null)
                 wave.scar = CreateSwordScar(heavyOwner, position, wave.direction, settings, scarSettings, scarExplodes);
             int points = SwordMotion.WaveArcSegments + 1;
@@ -620,7 +622,9 @@ namespace SlashDemo
                         if (wave.heavyOwner != null && wave.scarHeavyBonus > 0
                             && IsOnSwordScar(wave.heavyOwner, enemy.transform.position, enemy.Radius))
                             damage = Mathf.RoundToInt(damage * (1 + wave.scarHeavyBonus));
-                        enemy.TakeHit(damage, wave.direction, wave.settings.knockback, !wave.normalAttack);
+                        if (wave.attacker != null)
+                            wave.attacker.DealHit(enemy, damage, wave.direction, wave.settings.knockback, !wave.normalAttack);
+                        else enemy.TakeHit(damage, wave.direction, wave.settings.knockback, !wave.normalAttack);
                         if (!wave.notified)
                         {
                             wave.notified = true;
@@ -708,7 +712,9 @@ namespace SlashDemo
                 var enemy = collider.GetComponentInParent<SlashEnemy>();
                 if (enemy == null || !enemy.Alive || !ScarContains(scar, enemy.transform.position, enemy.Radius)
                     || !scarTargets.Add(enemy)) continue;
-                enemy.TakeHit(Mathf.Max(1, Mathf.RoundToInt(scar.damage * ratio)), scar.direction, 0, explosion, interrupt: explosion);
+                int damage = Mathf.Max(1, Mathf.RoundToInt(scar.damage * ratio));
+                if (explosion && scar.owner != null) scar.owner.DealHit(enemy, damage, scar.direction, 0, true);
+                else enemy.TakeHit(damage, scar.direction, 0, explosion, interrupt: explosion);
             }
         }
 

@@ -82,6 +82,11 @@ namespace SlashDemo
         public bool HeavyReady => heavyState.Ready && equipment.Ready;
         public int TotalSwordWaves { get; private set; }
         public int Health { get; private set; }
+        public const float BaseCriticalChance = .05f, BaseCriticalDamage = .50f;
+        public float CriticalChanceBonus { get; set; }
+        public float CriticalDamageBonus { get; set; }
+        public float CriticalChance => Mathf.Clamp01(BaseCriticalChance + CriticalChanceBonus);
+        public float CriticalDamage => Mathf.Max(0, BaseCriticalDamage + CriticalDamageBonus);
         public CultivationRealm Realm { get; private set; } = CultivationRealm.QiRefining;
         public string RealmDisplayName => GetRealmName(Realm);
         public const string TechniqueSaveKey = "SlashDemo.EquippedTechnique";
@@ -122,8 +127,18 @@ namespace SlashDemo
         public float NormalAttackSpeedMultiplier => HasFlowingCloud ? techniqueCombo.AttackSpeedMultiplier(Realm) : 1;
         public float NormalAttackMoveSpeedMultiplier => AttackMoveMultiplier
             * (HasFlowingCloud ? techniqueCombo.AttackMoveSpeedMultiplier(Realm) : 1);
-        float WalkingSpeed => moveSpeed * ((arena?.Travel?.ChallengeSlowRemaining ?? 0) > 0
+        internal float WalkingSpeed => moveSpeed * ((arena?.Travel?.ChallengeSlowRemaining ?? 0) > 0
             ? AscensionCultivator.SealSlowMultiplier : 1);
+        readonly List<AlchemyEntry> activeConditionalAlchemyEffects = new List<AlchemyEntry>();
+        internal IReadOnlyList<AlchemyEntry> ActiveConditionalAlchemyEffects => activeConditionalAlchemyEffects;
+
+        internal void SetConditionalAlchemyEffectActive(AlchemyEntry entry, bool active)
+        {
+            if (!entry.HasConditionalEffect) return;
+            if (!active) activeConditionalAlchemyEffects.Remove(entry);
+            else if (!activeConditionalAlchemyEffects.Contains(entry)) activeConditionalAlchemyEffects.Add(entry);
+        }
+
         public void CollectBuffs(CombatBuffBar buffs)
         {
             buffs.Clear();
@@ -587,7 +602,7 @@ namespace SlashDemo
                 if (enemy == null || !enemy.Alive || hitThisSwing.Contains(enemy)
                     || SwordMotion.DistanceToBlade(enemy.transform.position, from, to, out _) > radius + enemy.Radius) continue;
                 hitThisSwing.Add(enemy);
-                enemy.TakeHit(activeStrike.damage, attackAim, activeStrike.knockback);
+                DealHit(enemy, activeStrike.damage, attackAim, activeStrike.knockback);
             }
             arena.Effects.DrawCloudRush(from, to, attackAim, skillWidth, trailHDRIntensity, skillSettings.rushTrailLifetime);
             if ((to - from).sqrMagnitude > 0.001f)
@@ -806,7 +821,7 @@ namespace SlashDemo
             bool crushing = ironHeavy && chargedIronRealm >= CultivationRealm.NascentSoul;
             arena.Effects.LaunchSwordWave(origin, heavyAim, chargedSettings, heavyOwner: ironHeavy ? this : null,
                 scarHeavyBonus: crushing ? chargedIronSettings.scarHeavyBonus : 0,
-                scarSettings: scar ? chargedIronSettings : null, scarExplodes: crushing);
+                scarSettings: scar ? chargedIronSettings : null, scarExplodes: crushing, attacker: this);
             arena.Effects.PlaySwing(true);
             TotalSwordWaves++;
             if (fullIronRelease) Ultimate?.RecordQualification();
@@ -852,7 +867,7 @@ namespace SlashDemo
                 hitThisSwing.Add(enemy);
                 Vector2 side = new Vector2(-attackAim.y, attackAim.x);
                 Vector2 direction = attackAim + side * (strike.action == SwordAction.ReverseCleave ? 0.2f : strike.action == SwordAction.Cleave ? -0.12f : 0);
-                enemy.TakeHit(strike.damage, direction.normalized, strike.knockback, strike.action == SwordAction.WideCleave);
+                DealHit(enemy, strike.damage, direction.normalized, strike.knockback, strike.action == SwordAction.WideCleave);
                 if (!IsTechniqueActive) RegisterTechniqueHit(ComboIndex);
                 arena.Effects.HitStop(strike.action == SwordAction.WideCleave ? 0.045f : 0.033f);
                 arena.CameraRig.Shake(strike.action == SwordAction.WideCleave ? .018f : SwordHitShake);
@@ -911,6 +926,14 @@ namespace SlashDemo
             }
             else if (!IsDashing && !IsUltimateActive && arena.Travel != null) velocity += arena.Travel.ChallengePull(body.position);
             body.linearVelocity = velocity;
+        }
+
+        internal void DealHit(SlashEnemy enemy, int damage, Vector2 direction, float force, bool heavy = false)
+        {
+            float chance = CriticalChance;
+            bool critical = damage > 0 && (chance >= 1 || (chance > 0 && Random.value < chance));
+            if (critical) damage = Mathf.RoundToInt(damage * (1 + CriticalDamage));
+            enemy.TakeHit(damage, direction, force, heavy, critical: critical);
         }
 
         public bool TakeDamage(int damage, Vector2 direction)

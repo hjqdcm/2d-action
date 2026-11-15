@@ -93,7 +93,7 @@ namespace SlashDemo
                 waitingForMenuRelease = false;
             if (Codex != null && (Codex.IsOpen || Codex.ConsumedInputThisFrame)) return;
             if (CharacterPanel != null && (CharacterPanel.IsOpen || CharacterPanel.ConsumedInputThisFrame)) return;
-            if (Travel != null && Travel.IsChallengeDecisionOpen) return;
+            if (Travel != null && (Travel.IsChallengeDecisionOpen || Travel.IsTreatmentOpen)) return;
             if (Travel != null && Travel.IsSelectionOpen)
             {
                 if (DemoInput.PausePressed)

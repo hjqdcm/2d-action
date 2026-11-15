@@ -9,8 +9,11 @@ namespace SlashDemo.Editor
         public static void Run(SlashArena arena)
         {
             var map = arena.Travel.ActiveMap;
-            if (map.Definition.entry != new Vector2(1050, 600)
-                || Vector2.Distance(arena.Player.transform.position, ManorEnvironment.Ground(1050, 600)) > 0.001f)
+            var definition = map.Definition;
+            if (definition.WorldSize != TravelMaps.Get(TravelDestination.Wilderness).WorldSize)
+                throw new Exception("Healing lodge must use the same world size as the wilderness.");
+            if (definition.entry != new Vector2(1050, 600)
+                || Vector2.Distance(arena.Player.transform.position, definition.Entry) > 0.001f)
                 throw new Exception("Healing lodge did not spawn at annotated point 1.");
             float radius = arena.Player.GetComponent<CircleCollider2D>().radius;
             Route(map, radius, new[] { new Vector2(1050,600), new Vector2(930,520), new Vector2(925,460),
@@ -24,21 +27,25 @@ namespace SlashDemo.Editor
                 (700f,680f,600f,680f), (600f,430f,600f,530f), (620f,380f,500f,360f),
                 (820f,260f,730f,240f), (850f,270f,850f,180f), (1200f,570f,1330f,500f) })
             {
-                var a = ManorEnvironment.Ground(barrier.Item1, barrier.Item2);
-                var b = ManorEnvironment.Ground(barrier.Item3, barrier.Item4);
+                var a = definition.Ground(barrier.Item1, barrier.Item2);
+                var b = definition.Ground(barrier.Item3, barrier.Item4);
                 if (!HitsMap(map, radius, a, b)) throw new Exception("Healing lodge wall/furniture does not block: " + barrier);
             }
 
             var roof = map.transform.Find("Gate roof - overhead occlusion").GetComponent<SpriteRenderer>();
-            if (roof.GetComponent<Collider2D>() != null || roof.sprite.vertices.Length <= 4)
+            var vertices = roof.sprite.vertices;
+            if (roof.GetComponent<Collider2D>() != null || vertices.Length <= 4)
                 throw new Exception("Gate roof must use a silhouette without blocking the passage.");
+            var eave = definition.Ground(1092, 716);
+            if (!Array.Exists(vertices, vertex => Vector2.Distance(roof.transform.TransformPoint(vertex), eave) < .001f))
+                throw new Exception("Gate roof silhouette is offset from the painted eave.");
             var original = arena.Player.transform.position;
             float zoom = arena.WorldCamera.orthographicSize;
             try
             {
                 foreach (var test in new[] { (1215f,755f,true), (1235f,780f,true), (1320f,900f,false), (1050f,600f,false) })
                 {
-                    arena.Player.Teleport(ManorEnvironment.Ground(test.Item1, test.Item2));
+                    arena.Player.Teleport(definition.Ground(test.Item1, test.Item2));
                     arena.Player.GetComponent<ObliqueActor>().SetPose(Vector2.zero, 0, 0);
                     arena.CameraRig.ResetFeedback();
                     arena.WorldCamera.orthographicSize = 2.8f;
@@ -82,11 +89,11 @@ namespace SlashDemo.Editor
         {
             for (int i = 0; i < reference.Length; i++)
             {
-                Vector2 point = ManorEnvironment.Ground(reference[i].x, reference[i].y);
+                Vector2 point = map.Definition.Ground(reference[i].x, reference[i].y);
                 foreach (var collider in Physics2D.OverlapCircleAll(point, radius))
                     if (!collider.isTrigger && collider.transform.IsChildOf(map.transform))
                         throw new Exception("Healing lodge route point blocked: " + reference[i]);
-                if (i > 0 && HitsMap(map, radius, ManorEnvironment.Ground(reference[i - 1].x, reference[i - 1].y), point))
+                if (i > 0 && HitsMap(map, radius, map.Definition.Ground(reference[i - 1].x, reference[i - 1].y), point))
                     throw new Exception("Healing lodge route blocked between " + reference[i - 1] + " and " + reference[i]);
             }
         }

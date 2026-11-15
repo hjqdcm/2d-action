@@ -114,12 +114,26 @@ def main():
                                     (555, 1008), (555, 860), (580, 820), (596, 758), left[0]]
     # Widen the passage from the hall to the furnace to give the player room
     # to enter off-center.
-    clearance = {(545, 234): (545, 236), (503, 239): (503, 249),
-                 (479, 245): (479, 249), (471, 253): (471, 255),
+    clearance = {(479, 245): (479, 249), (471, 253): (471, 255),
                  (477, 222): (477, 219), (488, 227): (488, 217),
                  (503, 227): (503, 217), (515, 221): (515, 214),
                  (525, 211): (525, 209)}
     boundary = [clearance.get(point, point) for point in boundary]
+    # Widen the bedroom and alchemy entrances downward by one world unit
+    # (32 reference pixels), tapering the lower edges into the adjacent walls.
+    doorway_clearance = {
+        (474, 580): 32, (477, 573): 32, (477, 570): 32, (470, 568): 32,
+        (429, 564): 32, (423, 568): 32, (423, 576): 32, (420, 579): 32,
+        (420, 587): 26, (417, 590): 24, (419, 600): 18,
+        (479, 249): 32, (471, 255): 32, (461, 258): 32,
+        (434, 264): 32, (428, 270): 22, (423, 262): 15,
+    }
+    boundary = [(x, y + doorway_clearance.get((x, y), 0)) for x, y in boundary]
+    # Align the adjoining hall boundary with the bottom of the alchemy doorway.
+    door_bottom_y = 249 + doorway_clearance[(479, 249)]
+    hall_indent = {(548, 258), (551, 240), (545, 234), (503, 239)}
+    boundary = [(560, door_bottom_y) if point == (560, 266) else point
+                for point in boundary if point not in hall_indent]
     table = solid_outline(labels == components[2])
     data = {"referenceWidth": 1536, "referenceHeight": 1024,
             "perimeter": [{"x": x, "y": y} for x, y in boundary],

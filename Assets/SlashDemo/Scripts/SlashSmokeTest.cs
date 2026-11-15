@@ -87,6 +87,7 @@ namespace SlashDemo
             Check(!SlashPlayer.InsideArc(Vector2.zero, Vector2.right, new Vector2(-1, 0), 2, 130, 0.34f), "arc excludes rear");
             Check(!SlashPlayer.InsideArc(Vector2.zero, Vector2.right, new Vector2(3, 0), 2, 130, 0.34f), "arc excludes out of reach");
             var player = arena.Player;
+            player.CriticalChanceBonus = -SlashPlayer.BaseCriticalChance;
             Check(player.SwordSheathed && player.transform.Find("Waist scabbard") != null, "idle starts with a waist scabbard and sheathed sword");
             player.GetComponent<Rigidbody2D>().position = Vector2.zero;
             var dummy = arena.Enemies[0];
@@ -276,6 +277,7 @@ namespace SlashDemo
             Check(roundTrip.heavyAttack.width == 1.8f && roundTrip.heavyAttack.distance == 6,
                 "heavy settings survive saving and loading JSON");
             player = arena.Player;
+            player.CriticalChanceBonus = -SlashPlayer.BaseCriticalChance;
             playerBody = player.GetComponent<Rigidbody2D>();
             playerBody.position = Vector2.zero;
             dummy = arena.Enemies[0];
