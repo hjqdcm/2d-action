@@ -16,6 +16,7 @@ namespace SlashDemo
         WildernessEncounter wildernessEncounter;
         AscensionChallenge ascension;
         Transform treatmentMarker;
+        Transform pillStallMarker, treasureStallMarker;
         readonly List<(SlashEnemy enemy, bool active)> manorEnemies = new List<(SlashEnemy, bool)>();
         public TravelDestination Current { get; private set; } = TravelDestination.Manor;
         public TravelMapEnvironment ActiveMap { get; private set; }
@@ -30,14 +31,19 @@ namespace SlashDemo
         public bool ShowTreatmentPrompt => treatmentMarker != null && arena.Player.IsAlive && !arena.InputBlocked
             && (arena.Tuning == null || !arena.Tuning.IsOpen)
             && Vector2.Distance(arena.Player.transform.position, treatmentMarker.position) <= 1.35f;
+        public bool IsShopOpen { get; private set; }
+        public bool ShowShopPrompt => Current == TravelDestination.Market && arena.Player.IsAlive && !arena.InputBlocked
+            && (arena.Tuning == null || !arena.Tuning.IsOpen)
+            && (NearStall(pillStallMarker) || NearStall(treasureStallMarker));
         public const int TreatmentCost = 0;
         public const int TreatmentHealPercent = 50;
+        const int AscensionRefundRound = 3;
         public bool CanContinueChallenge => IsChallengeDecisionOpen && ascension.HasNext;
         public int ChallengeRound => ascension?.Round ?? 0;
         public int ChallengeCompletedRounds => ascension?.CompletedRounds ?? 0;
         public bool ChallengeEndedByDefeat => ascension != null && Portal != null && ascension.CompletedRounds < ascension.Round;
         public string DefeatedChallenger { get; private set; }
-        public bool HasModal => IsSelectionOpen || IsChallengeDecisionOpen || IsTreatmentOpen;
+        public bool HasModal => IsSelectionOpen || IsChallengeDecisionOpen || IsTreatmentOpen || IsShopOpen;
         public string Error => error;
         public bool BlocksGameplayInput => HasModal || waitingForRelease;
         public static Rect ManorGate => ManorEnvironment.GroundRect(new Rect(630, 770, 100, 75));
@@ -67,9 +73,26 @@ namespace SlashDemo
             if (waitingForRelease && Time.frameCount > releaseAfterFrame
                 && !DemoInput.GameplayHeld)
                 waitingForRelease = false;
+            // Finish the current encounter before exhaustion sends the player onward.
+            if (!arena.InputBlocked && arena.Player.IsAlive && (arena.Tuning == null || !arena.Tuning.IsOpen)
+                && arena.Resources.FortunePoints == 0 && !arena.Resources.FinalBattleEnteredOnExhaustion
+                && (Current == TravelDestination.Manor || Portal != null))
+            {
+                if (!EnterDestination(TravelDestination.FinalBattle))
+                {
+                    IsSelectionOpen = true;
+                    PauseForModal();
+                }
+                return;
+            }
             if (Current != TravelDestination.Manor)
             {
-                if (DemoInput.InteractPressed && !TryOpenTreatment()) TryOpenPortal();
+                if (IsShopOpen)
+                {
+                    if (DemoInput.InteractPressed && !DemoInput.PausePressed) CloseShop();
+                    return;
+                }
+                if (DemoInput.InteractPressed && !TryOpenShop() && !TryOpenTreatment()) TryOpenPortal();
                 return;
             }
             if (IsSelectionOpen) return;
@@ -118,6 +141,22 @@ namespace SlashDemo
             return true;
         }
 
+        bool NearStall(Transform marker) => marker != null
+            && Vector2.Distance(arena.Player.transform.position, marker.position) <= 1.35f;
+
+        bool TryOpenShop()
+        {
+            if (!ShowShopPrompt) return false;
+            IsShopOpen = true;
+            PauseForModal();
+            return true;
+        }
+
+        internal void CloseShop()
+        {
+            if (IsShopOpen) CloseModal();
+        }
+
         public void ResolveTreatment(bool heal)
         {
             var player = arena.Player;
@@ -143,6 +182,7 @@ namespace SlashDemo
             if (ascension != null)
             {
                 if (IsChallengeDecisionOpen || !arena.Player.IsAlive || !ascension.RecordVictory(defeated)) return;
+                if (ascension.CompletedRounds == AscensionRefundRound) arena.Resources.TryChangeFortunePoints(1);
                 if (!ascension.HasNext) HealChallengeVictory();
                 DefeatedChallenger = defeated.name;
                 IsChallengeDecisionOpen = true;
@@ -197,9 +237,30 @@ namespace SlashDemo
             CloseModal();
         }
 
+        public static int FortuneCost(TravelDestination destination) => destination switch
+        {
+            TravelDestination.Wilderness => 1,
+            TravelDestination.AscensionPlatform => 4,
+            _ => 0
+        };
+
+        public static bool UsesServiceVisit(TravelDestination destination) =>
+            destination == TravelDestination.HealingLodge || destination == TravelDestination.Market;
+
+        public bool ShowsDestination(TravelDestination destination) =>
+            !UsesServiceVisit(destination) || arena.Resources.ServicesUnlocked;
+
+        public bool CanSelectDestination(TravelDestination destination) => destination != TravelDestination.Manor
+            && ShowsDestination(destination) && arena.Resources.FortunePoints >= FortuneCost(destination)
+            && (!UsesServiceVisit(destination) || arena.Resources.ServiceVisits > 0);
+
         public void SelectDestination(TravelDestination destination)
         {
-            if (!IsSelectionOpen || destination == TravelDestination.Manor) return;
+            if (IsSelectionOpen && arena.Player.IsAlive && CanSelectDestination(destination)) EnterDestination(destination);
+        }
+
+        bool EnterDestination(TravelDestination destination)
+        {
             TravelMapEnvironment map;
             AscensionChallenge nextChallenge = null;
             try
@@ -211,7 +272,7 @@ namespace SlashDemo
             {
                 error = "场景暂时无法进入，请重试";
                 Debug.LogException(exception);
-                return;
+                return false;
             }
             // Preserve the player object, health, tuning and camera; only transient motion is cleared.
             arena.Effects.Clear();
@@ -237,9 +298,22 @@ namespace SlashDemo
             if (destination == TravelDestination.Wilderness)
                 (wildernessEncounter ??= new WildernessEncounter()).SpawnPack(arena, map);
             if (destination == TravelDestination.HealingLodge) PlaceTreatmentMarker(map);
+            if (destination == TravelDestination.Market)
+            {
+                var position = TravelMaps.MarketPortal;
+                Portal = TeleportFormation.Spawn(map, map.Definition.Ground(position.x, position.y), .9f);
+                pillStallMarker = DemoArt.InteractionLight("丹药摊光球", map.transform, map.Definition.Ground(421, 305), 1210, roundCore: true);
+                treasureStallMarker = DemoArt.InteractionLight("法器摊光球", map.transform, map.Definition.Ground(1130, 612), 1210, roundCore: true);
+            }
             if (ascension != null) ascension.SpawnNext(arena, map);
+            var resources = arena.Resources;
+            resources.TryChangeFortunePoints(-FortuneCost(destination));
+            if (UsesServiceVisit(destination)) resources.UseServiceVisit();
+            if (destination == TravelDestination.FinalBattle && resources.FortunePoints == 0)
+                resources.FinalBattleEnteredOnExhaustion = true;
             CloseModal();
             arena.CameraRig.ResetFeedback();
+            return true;
         }
 
         void CloseModal()
@@ -247,6 +321,7 @@ namespace SlashDemo
             IsSelectionOpen = false;
             IsChallengeDecisionOpen = false;
             IsTreatmentOpen = false;
+            IsShopOpen = false;
             DefeatedChallenger = null;
             error = null;
             waitingForRelease = true;
@@ -295,6 +370,7 @@ namespace SlashDemo
             ActiveMap = null;
             Portal = null;
             treatmentMarker = null;
+            pillStallMarker = treasureStallMarker = null;
             ascension = null;
         }
     }

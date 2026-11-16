@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace SlashDemo
 {
-    public enum TravelDestination { Manor, AscensionPlatform, Wilderness, HealingLodge }
+    public enum TravelDestination { Manor, AscensionPlatform, Wilderness, HealingLodge, Market, FinalBattle }
 
     // All coordinates use the artwork's 1536 x 1024 reference, like the manor.
     public sealed class TravelMapDefinition
@@ -25,7 +25,8 @@ namespace SlashDemo
         public Vector2 WorldSize => destination switch
         {
             TravelDestination.AscensionPlatform or TravelDestination.HealingLodge => ManorEnvironment.WorldSize * .75f,
-            TravelDestination.Wilderness => new Vector2(36, 24),
+            TravelDestination.Wilderness or TravelDestination.FinalBattle => new Vector2(36, 24),
+            TravelDestination.Market => new Vector2(27, 18),
             _ => ManorEnvironment.WorldSize
         };
         public Vector2 Ground(float x, float y)
@@ -42,6 +43,18 @@ namespace SlashDemo
 
     public static class TravelMaps
     {
+        public static readonly Vector2 MarketPortal = new Vector2(758, 938);
+
+        static readonly TravelMapDefinition FinalBattle = new TravelMapDefinition(
+            TravelDestination.FinalBattle, "关底战场", "SlashDemo/EvilCultivatorArena-v2",
+            new Vector2(755, 832), new Rect(660, 970, 205, 25),
+            // Trace the courtyard side of the walls, including the approach between the two posts.
+            Points(630,167, 887,167, 957,174, 1102,195, 1230,224, 1378,280, 1440,364,
+                1469,445, 1462,538, 1430,633, 1390,710, 1325,757, 1205,799, 1064,836,
+                934,871, 901,896, 896,998, 620,998, 630,887, 569,877, 438,863,
+                357,829, 315,790, 249,758, 173,703, 129,641, 97,561, 79,476, 80,384,
+                102,306, 155,245, 242,219, 386,193, 506,171, 630,167));
+
         public static readonly TravelMapDefinition[] Choices = {
             new TravelMapDefinition(TravelDestination.AscensionPlatform, "升仙台", "SlashDemo/AscensionPlatform-v1",
                 new Vector2(755, 865), new Rect(665, 955, 170, 40),
@@ -54,7 +67,17 @@ namespace SlashDemo
                     860,150, 960,180, 1120,215, 1255,300, 1285,440, 1310,560,
                     1260,655, 1145,720, 1015,745, 915,820, 925,1005, 730,1005,
                     730,850, 650,785, 455,745, 300,665, 245,525, 185,410, 300,255)),
-            HealingLodge()
+            HealingLodge(),
+            new TravelMapDefinition(TravelDestination.Market, "坊市", "SlashDemo/Market-v1",
+                new Vector2(758, 890), new Rect(1199, 950, 100, 28),
+                // Follow the inside walls, narrowing through the doorway before opening onto the street.
+                Points(110,113, 1424,113, 1424,621, 1387,667, 955,667, 923,738, 923,868,
+                    996,868, 1062,860, 1062,818, 1486,818, 1486,998, 50,998, 50,818,
+                    448,818, 448,860, 514,868, 583,868, 583,738, 551,667, 142,667, 110,621, 110,113),
+                Points(219,113, 657,113, 657,157, 584,157, 584,248, 219,248),
+                Points(923,349, 1424,349, 1424,492, 1327,492, 1327,552, 923,552),
+                Points(142,152, 186,152, 186,222, 142,222),
+                Points(1344,152, 1390,152, 1390,222, 1344,222))
         };
 
         [Serializable]
@@ -80,6 +103,7 @@ namespace SlashDemo
 
         public static TravelMapDefinition Get(TravelDestination destination)
         {
+            if (destination == TravelDestination.FinalBattle) return FinalBattle;
             foreach (var map in Choices) if (map.destination == destination) return map;
             throw new ArgumentOutOfRangeException(nameof(destination));
         }

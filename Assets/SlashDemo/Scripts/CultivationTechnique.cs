@@ -29,8 +29,8 @@ namespace SlashDemo
         public static readonly TechniqueDefinition FlowingCloud = new TechniqueDefinition(
             "flowing-cloud-sword", "流云剑诀", "连段", "以快打慢，连而不绝。",
             "流云疾斩", "消耗全部叠浪，向前突进并造成伤害，每层叠浪会额外增加伤害和突进距离，若消耗了五层叠浪，则会额外释放一次斩击，该斩击不会叠加叠浪层数。释放期间无敌，包含满层追加斩击，技能结束或取消后解除。该技能伤害视为普攻伤害。",
-            "闪避扣除一层叠浪，最低为0层；受击、改用重击或传送时清空连击层数；普攻未命中不叠层、不刷新时间，叠浪到期后清空。",
-            new TechniqueStage(CultivationRealm.QiRefining, "一式·叠浪", "每次普攻命中后会叠加一层叠浪，每层叠浪使普攻伤害提高8%、普攻移速提高3%，最多叠加5层，持续2秒，当叠浪层数为5层时，额外使普攻伤害提升20%。受击、重击都会清空叠浪层数；闪避会扣除1层叠浪。"),
+            "闪避扣除一层叠浪，最低为0层；受击打断连招，保留叠浪及其剩余时间；改用重击或传送时清空叠浪。普攻未命中不叠层、不刷新时间，叠浪到期后清空。",
+            new TechniqueStage(CultivationRealm.QiRefining, "一式·叠浪", "每次普攻命中后会叠加一层叠浪，每层叠浪使普攻伤害提高8%、普攻移速提高3%，最多叠加5层，持续2秒，当叠浪层数为5层时，额外使普攻伤害提升20%。重击清空叠浪，闪避扣除1层叠浪。"),
             new TechniqueStage(CultivationRealm.FoundationEstablishment, "二式·起风", "每层叠浪会额外提升5%的普攻攻速。释放完流云疾斩后，首次达到满层叠浪时，减少1秒流云疾斩的冷却时间，每次释放仅触发一次。"),
             new TechniqueStage(CultivationRealm.GoldenCore, "三式·风舞", "第3段普攻命中后继续普攻可以释放第4段普攻——旋风斩，该次普攻会对周围360度的敌人造成一次伤害，如果旋风斩命中了敌人，则可以叠加两次叠浪。"),
             new TechniqueStage(CultivationRealm.NascentSoul, "四式·剑潮", "旋风斩命中会额外释放一道剑气，剑气伤害视为普攻伤害，若剑气命中敌人，则会减少1秒流云疾斩的冷却时间。"));

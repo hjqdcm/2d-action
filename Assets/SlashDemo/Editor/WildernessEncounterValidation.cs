@@ -181,6 +181,8 @@ namespace SlashDemo.Editor
                             + "; no repeat in any three visits across returns, another destination and restart; snake combat and bear formation regressions passed.");
                         EditorApplication.Exit(0); break;
                     case 8:
+                        Check(arena.Resources.TryChangeFortunePoints(-3) && arena.Resources.TryChangeFortunePoints(3),
+                            "Could not unlock the lodge after two wilderness entries.");
                         arena.Travel.SelectDestination(TravelDestination.HealingLodge);
                         Check(arena.Travel.Current == TravelDestination.HealingLodge && arena.Enemies.Count == 0, "Healing lodge spawned wilderness enemies.");
                         arena.TogglePause(); arena.ReturnHome();

@@ -5,6 +5,59 @@ using UnityEngine.Rendering.Universal;
 
 namespace SlashDemo
 {
+    public sealed class GameResources
+    {
+        public const int StartingSpiritStones = 50;
+        public const int StartingFortunePoints = 15;
+        public const int FortunePerServiceVisit = 5;
+        int fortuneTowardServiceVisit;
+        public int SpiritStones { get; private set; } = StartingSpiritStones;
+        public int FortunePoints { get; private set; } = StartingFortunePoints;
+        public int ServiceVisits { get; private set; }
+        public bool ServicesUnlocked { get; private set; }
+        internal bool FinalBattleEnteredOnExhaustion { get; set; }
+
+        public bool TryChangeSpiritStones(int delta)
+        {
+            if (!TryGetBalance(SpiritStones, delta, out int balance)) return false;
+            SpiritStones = balance;
+            return true;
+        }
+
+        public bool TryChangeFortunePoints(int delta)
+        {
+            if (!TryGetBalance(FortunePoints, delta, out int balance)) return false;
+            FortunePoints = balance;
+            if (delta < 0)
+            {
+                long spent = fortuneTowardServiceVisit - (long)delta;
+                ServiceVisits += (int)(spent / FortunePerServiceVisit);
+                fortuneTowardServiceVisit = (int)(spent % FortunePerServiceVisit);
+                ServicesUnlocked |= ServiceVisits > 0;
+            }
+            return true;
+        }
+
+        internal void UseServiceVisit() => ServiceVisits--;
+
+        internal void Reset()
+        {
+            SpiritStones = StartingSpiritStones;
+            FortunePoints = StartingFortunePoints;
+            fortuneTowardServiceVisit = ServiceVisits = 0;
+            ServicesUnlocked = FinalBattleEnteredOnExhaustion = false;
+        }
+
+        static bool TryGetBalance(int current, int delta, out int balance)
+        {
+            long next = (long)current + delta;
+            balance = current;
+            if (next < 0 || next > int.MaxValue) return false;
+            balance = (int)next;
+            return true;
+        }
+    }
+
     public sealed class SlashArena : MonoBehaviour
     {
         [Header("Prototype mode")]
@@ -33,6 +86,7 @@ namespace SlashDemo
             }
         }
         public SlashPlayer Player => player;
+        public GameResources Resources { get; } = new GameResources();
         public Camera WorldCamera => worldCamera;
         public SlashCamera CameraRig => worldCamera.GetComponent<SlashCamera>();
         public SlashEffects Effects => effects;
@@ -93,6 +147,11 @@ namespace SlashDemo
                 waitingForMenuRelease = false;
             if (Codex != null && (Codex.IsOpen || Codex.ConsumedInputThisFrame)) return;
             if (CharacterPanel != null && (CharacterPanel.IsOpen || CharacterPanel.ConsumedInputThisFrame)) return;
+            if (Travel != null && Travel.IsShopOpen)
+            {
+                if (DemoInput.PausePressed) Travel.CloseShop();
+                return;
+            }
             if (Travel != null && (Travel.IsChallengeDecisionOpen || Travel.IsTreatmentOpen)) return;
             if (Travel != null && Travel.IsSelectionOpen)
             {
@@ -166,6 +225,7 @@ namespace SlashDemo
             player = CreatePlayer(actors, ManorEnvironment.SpawnPoint, character: character);
             if (Tuning != null) Tuning.ApplyPlayer(player);
             player.EquipTechnique(equipped);
+            Resources.Reset();
             CameraRig.target = player.transform;
             if (practiceMode)
             {
@@ -223,6 +283,7 @@ namespace SlashDemo
             // Death resets progression and possessions unless an explicit retention rule is added.
             player.EquipTechnique(TechniqueCatalog.FlowingCloud, true);
             player.ResetRealm();
+            Resources.Reset();
             player.Heal(player.maxHealth);
             Destroy(defeatedPlayer.gameObject);
             CameraRig.target = player.transform;

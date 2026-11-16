@@ -798,6 +798,7 @@ namespace SlashDemo.Editor
                         arena.Tuning.ApplyAll();
                         player.invincible = false;
                         playerHealth = player.Health;
+                        Check(arena.Resources.TryChangeFortunePoints(5), "Could not fund the five validation trips.");
                         view = EditorWindow.GetWindow(typeof(EditorWindow).Assembly.GetType("UnityEditor.GameView"));
                         view.position = new Rect(0, 0, 1600, 940); view.Show(); view.Focus();
                         player.Teleport(SceneTravel.ManorGate.center);
@@ -806,6 +807,8 @@ namespace SlashDemo.Editor
                     case 1:
                         Check(arena.Travel.IsSelectionOpen, "Manor gate did not open.");
                         arena.Travel.SelectDestination(TravelDestination.AscensionPlatform);
+                        Check(arena.Resources.FortunePoints == 16 && arena.Resources.ServiceVisits == 0,
+                            "First ascension trip must cost four points without unlocking services.");
                         VerifyMapSize();
                         round = 1;
                         stage = 20;
@@ -827,6 +830,8 @@ namespace SlashDemo.Editor
                         VerifyPassive(cultivator);
                         int woundedHealth = player.Health;
                         DefeatOpponent();
+                        Check(arena.Resources.FortunePoints == (round < 3 ? 16 : 17) && arena.Resources.ServiceVisits == 0,
+                            "Only the third victory must refund one point, without changing gross spending.");
                         Check(player.Health == (round < 4 ? woundedHealth : player.maxHealth),
                             "Victory applied the final round heal too early or failed to cap it at full health.");
                         Check(arena.Travel.CanContinueChallenge == (round < 4), "Continue button availability did not match the remaining pool.");
@@ -869,6 +874,8 @@ namespace SlashDemo.Editor
                         Check(arena.Travel.Portal != null && arena.Enemies.Count == 0 && !arena.Paused
                             && arena.Travel.ChallengeCompletedRounds == 4, "Completion did not open the portal with four wins.");
                         VerifyAttack(ReenterThroughPortal());
+                        Check(arena.Resources.FortunePoints == 13 && arena.Resources.ServiceVisits == 1,
+                            "Two ascension entries must count as eight gross points and earn one shared visit.");
                         DefeatOpponent();
                         float uiScale = Mathf.Min(Screen.width / 1600f, Screen.height / 900f);
                         click = new Vector2(Screen.width * .5f + 126 * uiScale, Screen.height * .5f + 72 * uiScale);

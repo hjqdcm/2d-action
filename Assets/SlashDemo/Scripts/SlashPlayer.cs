@@ -507,7 +507,7 @@ namespace SlashDemo
                 EmitHeavyWave();
             }
             CancelHeavyAttack();
-            InterruptCombo(dodging: true);
+            InterruptCombo(StackInterruption.Dodge);
             dashDirection = direction.sqrMagnitude > 0.001f ? direction.normalized : Aim;
             dashRemaining = dashDuration;
             IgnoreDashEnemyCollisions();
@@ -682,12 +682,15 @@ namespace SlashDemo
             rushIgnoredColliders.Clear();
         }
 
-        void InterruptCombo(bool dodging = false)
+        enum StackInterruption { Clear, Dodge, Preserve }
+
+        void InterruptCombo(StackInterruption stacks = StackInterruption.Clear)
         {
             ultimate?.Cancel();
             RestoreRushEnemyCollisions();
             if (arena != null && arena.Effects != null) arena.Effects.CancelWhirlwinds(this);
-            if (dodging) techniqueCombo.ApplyDodge(Time.time);
+            if (stacks == StackInterruption.Dodge) techniqueCombo.ApplyDodge(Time.time);
+            else if (stacks == StackInterruption.Preserve) techniqueCombo.ResetSequence();
             else techniqueCombo.Clear();
             ComboIndex = -1; lastAttackEnd = -10;
             IsAttacking = IsTechniqueActive = false;
@@ -952,11 +955,15 @@ namespace SlashDemo
             bool protectedCharge = IronBodyActive && IsCharging;
             if (IronBodyActive) damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1 - IronSword.bodyDamageReduction)));
             Health = Mathf.Max(0, Health - damage);
-            if (!protectedCharge) { InterruptCombo(); CancelHeavyAttack(); }
+            bool lethal = !IsAlive;
+            if (!protectedCharge)
+            {
+                InterruptCombo(lethal ? StackInterruption.Clear : StackInterruption.Preserve);
+                CancelHeavyAttack();
+            }
             if (!poison) invulnerability = 0.8f;
             flash = 0.1f;
             recoil = protectedCharge ? Vector2.zero : direction.normalized * 5;
-            bool lethal = !IsAlive;
             bool settled = lethal && challenger != null && arena.Travel != null && arena.Travel.TrySettleChallengeDefeat(challenger);
             if (settled)
             {

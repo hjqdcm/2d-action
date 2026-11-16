@@ -272,9 +272,14 @@ namespace SlashDemo.Editor
                     "damage bonus display includes the extra twenty percent exactly at five stacks");
             }
             player.RequestAttack(Vector2.right);
-            Check(player.TakeDamage(1, Vector2.left) && player.ComboStacks == 0 && !player.IsAttacking,
-                "accepted incoming damage interrupts combat and clears stacks");
+            float stackTimeBeforeHit = player.ComboStackTimeLeft;
+            Check(player.TakeDamage(1, Vector2.left) && player.ComboStacks == 5 && !player.IsAttacking
+                && player.ComboIndex == -1 && player.ComboStackTimeLeft == stackTimeBeforeHit,
+                "accepted incoming damage ends the attack sequence and preserves the existing stacks and timer");
             Check(player.RequestAttack(Vector2.right), "attack resumes after interruption"); yield return Idle(player);
+            Check(player.ComboStacks == 5, "attack after taking damage builds on the retained stack count");
+            player.ResetTechniqueCombo();
+            Check(player.RequestAttack(Vector2.right), "attack starts with a fresh stack count"); yield return Idle(player);
             Check(player.ComboStacks == 1 && player.TryDash(Vector2.left) && player.ComboStacks == 0, "dodging with one layer clamps at zero");
             yield return Idle(player);
             // Return to the target without touching player state beyond a deliberate interruption.
@@ -752,9 +757,9 @@ namespace SlashDemo.Editor
             yield return Idle(player);
             Check(hud.HoveredBuffId == null, "consuming the buff also dismisses its hover tooltip");
             player.FillTechniqueStacksForDebug();
-            Check(player.TakeDamage(1, Vector2.up) && TechniqueBuffs(hud).Count == 0, "incoming damage clears the visible buff with its layers");
-            player.FillTechniqueStacksForDebug();
             float timeLeft = player.ComboStackTimeLeft;
+            Check(player.TakeDamage(1, Vector2.up) && TechniqueBuffs(hud).Count == 1 && TechniqueBuffs(hud)[0].stacks == 5
+                && player.ComboStackTimeLeft == timeLeft, "nonlethal damage preserves the visible buff and its countdown");
             arena.TogglePause(); yield return Frames();
             Check(TechniqueBuffs(hud).Count == 1 && TechniqueBuffs(hud)[0].stacks == 5 && player.ComboStackTimeLeft == timeLeft,
                 "pause preserves the visible buff and freezes its lifetime");

@@ -11,7 +11,7 @@ namespace SlashDemo.Editor
     public static class SceneTravelValidation
     {
         const string Pending = "SlashDemo.SceneTravelValidation.Pending";
-        static int stage, choice, afterFrame, health, swings;
+        static int stage, choice, afterFrame, health, swings, expectedFortune;
         static double next;
         static SlashPlayer original;
         static Quaternion rotation;
@@ -20,6 +20,9 @@ namespace SlashDemo.Editor
         static Keyboard keyboard;
         static KeyboardState? queuedKeys;
         static MouseState? queuedMouse;
+        static CultivationRealm OutboundRealm => (CultivationRealm)(choice % (int)CultivationRealm.NascentSoul + 1);
+        static TravelMapDefinition Destination => choice < TravelMaps.Choices.Length ? TravelMaps.Choices[choice]
+            : TravelMaps.Get(TravelDestination.FinalBattle);
 
         // Inject edges into gameplay's input update, not the editor's separate state buffer.
         static void InjectGameplayInput()
@@ -145,13 +148,23 @@ namespace SlashDemo.Editor
                         Check(!travel.IsSelectionOpen && travel.Current == TravelDestination.Manor, "Spawn opened the destination picker.");
                         original = arena.Player;
                         Check(original.Realm == CultivationRealm.QiRefining, "Restart did not reset the realm.");
-                        original.SetRealm((CultivationRealm)(choice + 1));
+                        Check(arena.Resources.SpiritStones == 50 && arena.Resources.FortunePoints == 15,
+                            "A new run must start with 50 spirit stones and 15 fortune points.");
+                        Check(arena.Resources.TryChangeSpiritStones(-5) && arena.Resources.TryChangeFortunePoints(2),
+                            "Could not set non-default balances for travel validation.");
+                        Check(!travel.ShowsDestination(TravelDestination.HealingLodge) && !travel.ShowsDestination(TravelDestination.Market),
+                            "Services were visible before spending fortune.");
+                        if (SceneTravel.UsesServiceVisit(Destination.destination))
+                            Check(arena.Resources.TryChangeFortunePoints(-10) && arena.Resources.TryChangeFortunePoints(10)
+                                && arena.Resources.ServiceVisits == 2, "Gross spending did not grant two shared visits.");
+                        expectedFortune = arena.Resources.FortunePoints - SceneTravel.FortuneCost(Destination.destination);
+                        original.SetRealm(OutboundRealm);
                         original.invincible = false;
                         original.TakeDamage(12, Vector2.right);
                         health = original.Health;
                         arena.Tuning.Settings.moveSpeed = 7.1f;
                         arena.Tuning.ApplyAll();
-                        Check(original.Realm == (CultivationRealm)(choice + 1), "Applying tuning overwrote the current realm.");
+                        Check(original.Realm == OutboundRealm, "Applying tuning overwrote the current realm.");
                         rotation = arena.WorldCamera.transform.rotation;
                         zoom = arena.View.zoom;
                         QueueKeys(new KeyboardState(Key.R, Key.T));
@@ -182,12 +195,16 @@ namespace SlashDemo.Editor
                         break;
                     case 5:
                         Check(original.TotalSwings == swings, "Clicking while choosing triggered an attack.");
-                        travel.SelectDestination(TravelMaps.Choices[choice].destination);
+                        travel.SelectDestination(Destination.destination);
                         Check(!travel.IsSelectionOpen && !arena.Paused, "Destination selection did not close picker.");
+                        Check(arena.Resources.SpiritStones == 45 && arena.Resources.FortunePoints == expectedFortune,
+                            "Selecting a route charged the wrong balance.");
+                        if (SceneTravel.UsesServiceVisit(Destination.destination))
+                            Check(arena.Resources.ServiceVisits == 1, "Service entry did not use one shared visit.");
                         Check(arena.Player == original && original.Health == health, "Travel replaced the character or changed health.");
-                        Check(original.Realm == (CultivationRealm)(choice + 1), "Outbound travel changed the realm.");
+                        Check(original.Realm == OutboundRealm, "Outbound travel changed the realm.");
                         Check(Mathf.Abs(original.moveSpeed - 7.1f) < 0.001f, "Travel lost character tuning.");
-                        Check(Vector2.Distance(original.transform.position, TravelMaps.Choices[choice].Entry) < 0.001f, "Travel did not arrive at map entrance.");
+                        Check(Vector2.Distance(original.transform.position, Destination.Entry) < 0.001f, "Travel did not arrive at map entrance.");
                         Check(Quaternion.Angle(rotation, arena.WorldCamera.transform.rotation) < 0.001f && arena.View.zoom == zoom, "Travel changed camera projection.");
                         Check(arena.InputBlocked, "Selection click can leak through into combat.");
                         Advance(6);
@@ -206,11 +223,11 @@ namespace SlashDemo.Editor
                         arena.CameraRig.ResetFeedback();
                         ManorValidation.Render(arena, Path.GetFullPath("Verification/Artifacts/Travel-" + travel.Current + ".png"));
                         if (travel.Current == TravelDestination.HealingLodge) HealingLodgeValidation.Run(arena);
-                        original.Teleport(ManorEnvironment.GroundRect(travel.ActiveMap.Definition.reservedExit).center);
+                        original.Teleport(travel.ActiveMap.ReservedExit.transform.position);
                         Advance(8);
                         break;
                     case 8:
-                        Check(travel.Current == TravelMaps.Choices[choice].destination && !travel.IsSelectionOpen, "Reserved exit unexpectedly teleported the player.");
+                        Check(travel.Current == Destination.destination && !travel.IsSelectionOpen, "Reserved exit unexpectedly teleported the player.");
                         Debug.Log("SCENE_TRAVEL_DESTINATION_PASS: " + travel.Current + "; entry, routes, character state, camera, click suppression, inactive reserved exit.");
                         if (travel.Current == TravelDestination.HealingLodge)
                         {
@@ -220,13 +237,84 @@ namespace SlashDemo.Editor
                             Advance(20);
                             break;
                         }
+                        if (travel.Current == TravelDestination.Market)
+                        {
+                            var definition = travel.ActiveMap.Definition;
+                            Check(definition.WorldSize == new Vector2(27, 18), "The market must be 27 by 18 world units.");
+                            Check(arena.Enemies.Count == 0 && travel.Portal != null &&
+                                travel.ActiveMap.GetComponentsInChildren<TeleportFormation>().Length == 1,
+                                "The market must start with one portal and no enemies.");
+                            var marker = TravelMaps.MarketPortal;
+                            Check(Vector2.Distance(travel.Portal.transform.position, definition.Ground(marker.x, marker.y)) < .01f,
+                                "The market portal did not fit at the foot of the entrance steps.");
+                            original.Teleport(definition.Entry);
+                            Check(travel.ShowPortalPrompt, "The market arrival point is out of reach of its portal.");
+                            QueueKeys(new KeyboardState(Key.F));
+                            Advance(30);
+                            break;
+                        }
+                        QueueKeys(new KeyboardState(Key.Escape));
+                        Advance(9);
+                        break;
+                    case 30:
+                        Check(travel.IsSelectionOpen && arena.Paused, "The market portal did not open the route picker.");
+                        travel.CancelSelection();
+                        QueueKeys(new KeyboardState());
+                        Advance(31);
+                        break;
+                    case 31:
+                        var pillOrb = travel.ActiveMap.transform.Find("丹药摊光球");
+                        Check(pillOrb != null && travel.ActiveMap.transform.Find("法器摊光球") != null,
+                            "Both market stalls must have an interaction orb.");
+                        Check(!travel.ShowShopPrompt, "The shop prompt is visible from the entrance portal.");
+                        original.Teleport(pillOrb.position);
+                        Check(travel.ShowShopPrompt && !travel.ShowPortalPrompt, "Wrong F prompt at the pill stall.");
+                        QueueKeys(new KeyboardState(Key.F));
+                        Advance(32);
+                        break;
+                    case 32:
+                        Check(travel.IsShopOpen && arena.Paused && arena.InputBlocked && !arena.PauseMenuOpen,
+                            "F at the pill stall did not open the shop.");
+                        QueueKeys(new KeyboardState());
+                        Advance(33);
+                        break;
+                    case 33:
+                        Check(travel.IsShopOpen, "Releasing F closed the shop.");
+                        QueueKeys(new KeyboardState(Key.F));
+                        Advance(34);
+                        break;
+                    case 34:
+                        Check(!travel.IsShopOpen && !arena.Paused && arena.InputBlocked,
+                            "Pressing F again did not close the shop and consume the held key.");
+                        QueueKeys(new KeyboardState());
+                        Advance(35);
+                        break;
+                    case 35:
+                        original.Teleport(travel.ActiveMap.transform.Find("法器摊光球").position);
+                        Check(travel.ShowShopPrompt, "Missing F prompt at the treasure stall.");
+                        QueueKeys(new KeyboardState(Key.F));
+                        Advance(36);
+                        break;
+                    case 36:
+                        Check(travel.IsShopOpen && arena.Paused && arena.InputBlocked, "F at the treasure stall did not open the shop.");
+                        Check(arena.Resources.SpiritStones == 45, "Browsing the shop changed the spirit stone balance.");
+                        QueueKeys(new KeyboardState(Key.Escape));
+                        Advance(37);
+                        break;
+                    case 37:
+                        Check(!travel.IsShopOpen && !arena.Paused, "Esc did not close the treasure stall shop.");
+                        QueueKeys(new KeyboardState());
+                        Advance(38);
+                        break;
+                    case 38:
+                        Debug.Log("MARKET_SHOP_PASS: F opens at both orbs, F and Esc close the shop, balance is preserved.");
                         QueueKeys(new KeyboardState(Key.Escape));
                         Advance(9);
                         break;
                     case 20:
                         Check(travel.IsTreatmentOpen && arena.Paused && arena.InputBlocked && !arena.PauseMenuOpen,
                             "F at the bed did not open a modal treatment choice.");
-                        Check(SceneTravel.TreatmentCost == 0, "Treatment must be free until spirit stones are available.");
+                        Check(SceneTravel.TreatmentCost == 0, "Treatment must be free.");
                         travel.ResolveTreatment(false);
                         Check(original.Health == health && travel.Portal != null && !arena.Paused && !travel.IsTreatmentOpen,
                             "Declining treatment changed health or failed to spawn the portal.");
@@ -244,6 +332,8 @@ namespace SlashDemo.Editor
                     case 22:
                         Check(travel.IsSelectionOpen && arena.Paused, "The lodge portal did not open the standard travel picker.");
                         travel.SelectDestination(TravelDestination.HealingLodge);
+                        Check(arena.Resources.ServiceVisits == 0 && travel.ShowsDestination(TravelDestination.Market)
+                            && !travel.CanSelectDestination(TravelDestination.Market), "Both services must share the same pool after unlocking.");
                         Check(travel.Portal == null, "Revisiting the lodge reused its previous portal.");
                         original.Teleport(travel.ActiveMap.Definition.Ground(550, 310));
                         original.TakePoisonDamage(original.Health - Mathf.CeilToInt(original.maxHealth * .25f));
@@ -292,23 +382,49 @@ namespace SlashDemo.Editor
                         break;
                     case 11:
                         Check(!arena.InputBlocked && !travel.IsSelectionOpen, "Controls did not resume after returning home.");
-                        Debug.Log("PAUSE_RETURN_HOME_PASS: " + TravelMaps.Choices[choice].destination + "; same player/health/tuning/camera, manor and dummies restored, menu closed, no click-through.");
+                        Check(arena.Resources.SpiritStones == 45 && arena.Resources.FortunePoints == expectedFortune,
+                            "Returning home must preserve both resource balances.");
+                        Debug.Log("PAUSE_RETURN_HOME_PASS: " + Destination.destination + "; same player/health/tuning/camera, manor and dummies restored, menu closed, no click-through.");
                         choice++;
-                        if (choice < TravelMaps.Choices.Length)
+                        if (choice <= TravelMaps.Choices.Length)
                         {
                             arena.Restart();
                             Advance(0);
                         }
                         else
                         {
-                            SessionState.SetBool(Pending, false);
-                            InputSystem.onBeforeUpdate -= InjectGameplayInput;
-                            InputSystem.RemoveDevice(mouse);
-                            InputSystem.RemoveDevice(keyboard);
-                            Debug.Log("CULTIVATION_REALM_PASS: starts/restarts in Qi Refining, all three higher realms survive outbound travel and tuning, every return home resets to Qi Refining.");
-                            Debug.Log("SCENE_TRAVEL_PASS: all three destinations, gate/cancel/rearm, R/T disabled, reserved exits have no destination.");
-                            EditorApplication.Exit(0);
+                            arena.Restart();
+                            Check(arena.Resources.TryChangeFortunePoints(1 - arena.Resources.FortunePoints), "Could not set up last wilderness trip.");
+                            arena.Player.Teleport(SceneTravel.ManorGate.center);
+                            Advance(40);
                         }
+                        break;
+                    case 40:
+                        Check(travel.IsSelectionOpen && !travel.CanSelectDestination(TravelDestination.AscensionPlatform),
+                            "Picker did not reject the unaffordable ascension trip.");
+                        travel.SelectDestination(TravelDestination.Wilderness);
+                        Check(arena.Resources.FortunePoints == 0 && travel.Current == TravelDestination.Wilderness,
+                            "Last fortune point must pay for the wilderness encounter.");
+                        Advance(41);
+                        break;
+                    case 41:
+                        Check(travel.Current == TravelDestination.Wilderness && arena.Enemies.Count > 0,
+                            "Exhaustion interrupted an active encounter.");
+                        foreach (var enemy in new System.Collections.Generic.List<SlashEnemy>(arena.Enemies))
+                            enemy.TakeHit(100000, Vector2.zero, 0);
+                        Advance(42);
+                        break;
+                    case 42:
+                        Check(travel.Current == TravelDestination.FinalBattle && travel.ActiveMap != null,
+                            "Exhaustion did not send the player to the final arena after combat.");
+                        SessionState.SetBool(Pending, false);
+                        InputSystem.onBeforeUpdate -= InjectGameplayInput;
+                        InputSystem.RemoveDevice(mouse);
+                        InputSystem.RemoveDevice(keyboard);
+                        Debug.Log("CULTIVATION_REALM_PASS: starts/restarts in Qi Refining, all three higher realms survive outbound travel and tuning, every return home resets to Qi Refining.");
+                        Debug.Log("SCENE_TRAVEL_PASS: all destinations, gate/cancel/rearm, R/T disabled, reserved exits have no destination, market portal and shop access.");
+                        Debug.Log("FORTUNE_TRAVEL_PASS: route costs, shared visits, voluntary and automatic final battle travel.");
+                        EditorApplication.Exit(0);
                         break;
                 }
             }
@@ -334,6 +450,23 @@ namespace SlashDemo.Editor
                     break;
                 case TravelDestination.Wilderness:
                     route = new[] { entry, new Vector2(800, 740), new Vector2(800, 520), new Vector2(800, 270) };
+                    break;
+                case TravelDestination.FinalBattle:
+                    Check(map.Definition.WorldSize == TravelMaps.Get(TravelDestination.Wilderness).WorldSize,
+                        "Final arena is not sized like the other battle maps.");
+                    route = new[] { entry, new Vector2(755, 500), new Vector2(755, 255) };
+                    var center = map.Definition.Ground(755, 500);
+                    foreach (var direction in new[] { Vector2.up, Vector2.down, Vector2.left, Vector2.right })
+                    {
+                        bool blocked = false;
+                        foreach (var hit in Physics2D.CircleCastAll(center, radius, direction, map.Definition.WorldSize.x))
+                            blocked |= BlocksRoute(hit.collider, map);
+                        Check(blocked, "Final arena boundary did not block travel toward " + direction);
+                    }
+                    break;
+                case TravelDestination.Market:
+                    route = new[] { entry, new Vector2(758, 313), new Vector2(421, 305),
+                        new Vector2(758, 313), new Vector2(758, 612), new Vector2(1130, 612) };
                     break;
                 default:
                     route = new[] { entry, new Vector2(1170, 740), new Vector2(1235, 815),

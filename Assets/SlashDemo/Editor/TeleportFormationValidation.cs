@@ -81,6 +81,9 @@ namespace SlashDemo.Editor
                 {
                     case 0:
                         Check(travel.Portal == null, "Portal leaked into manor.");
+                        if (choice == 0)
+                            Check(arena.Resources.TryChangeFortunePoints(-1) && arena.Resources.TryChangeFortunePoints(1),
+                                "Could not seed the spending required for both service destinations.");
                         player.Teleport(SceneTravel.ManorGate.center); Advance(1); break;
                     case 1:
                         if (!travel.IsSelectionOpen) return;
@@ -139,7 +142,10 @@ namespace SlashDemo.Editor
                         travel.SelectDestination(destination);
                         Check(travel.Current == destination && travel.ActiveMap != oldMap && !oldMap.gameObject.activeSelf,
                             "Direct map travel retained old map.");
-                        Check(!portal.gameObject.activeInHierarchy && travel.Portal == null, "Old portal survived travel.");
+                        Check(!portal.gameObject.activeInHierarchy, "Old portal survived travel.");
+                        Check(destination == TravelDestination.Market
+                            ? travel.Portal != null && travel.Portal.transform.IsChildOf(travel.ActiveMap.transform)
+                            : travel.Portal == null, "Travel created an incorrect arrival portal.");
                         Check(arena.Player == player && player.Health == health, "Travel changed character or health.");
                         if (destination == TravelDestination.AscensionPlatform)
                             Check(arena.Enemies.Count == 1 && arena.Enemies[0].GetComponent<AscensionCultivator>() != null, "Ascension entry did not spawn one cultivator.");

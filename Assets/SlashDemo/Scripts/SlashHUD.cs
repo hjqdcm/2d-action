@@ -327,6 +327,12 @@ namespace SlashDemo
                 DrawFrame(prompt);
                 Label(prompt, "F  床边疗伤", status, Ink);
             }
+            if (arena.Travel != null && arena.Travel.ShowShopPrompt)
+            {
+                var prompt = new Rect(width / 2 - 175, height / 2 + 80, 350, 50);
+                DrawFrame(prompt);
+                Label(prompt, "F  购买", status, Ink);
+            }
             if (arena.Codex != null && arena.Codex.ShowPrompt)
             {
                 var prompt = new Rect(width / 2 - 175, height / 2 - 25, 350, 50);
@@ -364,6 +370,7 @@ namespace SlashDemo
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsOpen) DrawCharacterPanel(width, height);
             else if (arena.Travel != null && arena.Travel.IsChallengeDecisionOpen) DrawChallengeDecision(width, height);
             else if (arena.Travel != null && arena.Travel.IsTreatmentOpen) DrawTreatmentDecision(width, height);
+            else if (arena.Travel != null && arena.Travel.IsShopOpen) DrawShop(width, height);
             else if (arena.Travel != null && arena.Travel.IsSelectionOpen) DrawTravelSelection(width, height);
             else if (arena.PauseMenuOpen) DrawPauseMenu(width, height);
             GUI.matrix = previous;
@@ -526,14 +533,20 @@ namespace SlashDemo
             return clicked;
         }
 
-        void DrawCharacterPanel(float width, float height)
+        Rect DrawPaperModal(float width, float height)
         {
-            int previousDepth = GUI.depth;
-            GUI.depth = -30;
             Box(new Rect(0, 0, width, height), new Color(0.06f, 0.11f, 0.09f, 0.72f));
             var panel = new Rect(width / 2 - 540, height / 2 - 360, 1080, 720);
             Box(panel, new Color(0.90f, 0.86f, 0.74f, 1));
             DrawFrame(panel);
+            return panel;
+        }
+
+        void DrawCharacterPanel(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -30;
+            var panel = DrawPaperModal(width, height);
             for (int i = 0; i < CharacterPageNames.Length; i++)
                 if (DrawCharacterButton(new Rect(panel.x + 28 + i * 192, panel.y + 22, 180, 46),
                     CharacterPageNames[i], arena.CharacterPanel.ActivePage == (CharacterPanelPage)i))
@@ -548,7 +561,26 @@ namespace SlashDemo
             if (arena.CharacterPanel.ActivePage == CharacterPanelPage.Techniques) DrawCharacterTechniques(panel);
             else if (arena.CharacterPanel.ActivePage == CharacterPanelPage.Attributes)
                 DrawCharacterAttributes(panel);
+            else if (arena.CharacterPanel.ActivePage == CharacterPanelPage.Items)
+                DrawCharacterItems(panel);
             GUI.depth = previousDepth;
+        }
+
+        void DrawCharacterItems(Rect panel)
+        {
+            const float margin = 28, gap = 16;
+            float width = (panel.width - margin * 2 - gap) / 2;
+            var stones = new Rect(panel.x + margin, panel.y + 106, width, 68);
+            var fortune = new Rect(stones.xMax + gap, stones.y, stones.width, stones.height);
+            DrawResourceBalance(stones, "灵石", arena.Resources.SpiritStones);
+            DrawResourceBalance(fortune, "机缘点", arena.Resources.FortunePoints);
+        }
+
+        void DrawResourceBalance(Rect card, string name, int balance)
+        {
+            DrawFrame(card);
+            Label(new Rect(card.x + 20, card.y, card.width - 200, card.height), name, codexHeading, Ink);
+            Label(new Rect(card.xMax - 176, card.y, 156, card.height), balance.ToString(), travelTitle, Jade);
         }
 
         void DrawCharacterAttributes(Rect panel)
@@ -933,35 +965,65 @@ namespace SlashDemo
             GUI.depth = previousDepth;
         }
 
+        void DrawShop(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -30;
+            var panel = DrawPaperModal(width, height);
+            DrawResourceBalance(new Rect(panel.x + 28, panel.y + 22, 330, 68), "剩余灵石", arena.Resources.SpiritStones);
+            if (GUI.Button(new Rect(panel.xMax - 212, panel.y + 24, 184, 42), "关闭 F / Esc", travelButton))
+                arena.Travel.CloseShop();
+            // TODO: Display the selected stall's goods once the shop catalog is available.
+            GUI.depth = previousDepth;
+        }
+
         void DrawTravelSelection(float width, float height)
         {
             int previousDepth = GUI.depth;
             GUI.depth = -30;
             Box(new Rect(0, 0, width, height), new Color(0.08f, 0.12f, 0.10f, 0.65f));
-            var panel = new Rect(width / 2 - 450, height / 2 - 220, 900, 440);
+            const float margin = 30, cardWidth = 270, gap = 15;
+            var travel = arena.Travel;
+            int choiceCount = 0;
+            foreach (var choice in TravelMaps.Choices)
+                if (travel.ShowsDestination(choice.destination)) choiceCount++;
+            float panelWidth = margin * 2 + cardWidth * choiceCount + gap * (choiceCount - 1);
+            var panel = new Rect((width - panelWidth) / 2, height / 2 - 220, panelWidth, 440);
             // Give the choice panel a legible backing while the two HUD frames stay translucent.
             Box(panel, new Color(0.88f, 0.83f, 0.70f, 0.96f));
             DrawFrame(panel);
             Label(new Rect(panel.x, panel.y + 15, panel.width, 45), "选择去处", travelTitle, Ink);
-            for (int i = 0; i < TravelMaps.Choices.Length; i++)
+            string balances = $"机缘点 {arena.Resources.FortunePoints}";
+            if (arena.Resources.ServicesUnlocked) balances += $"　医庐与坊市共用次数 {arena.Resources.ServiceVisits}";
+            Label(new Rect(panel.x, panel.y + 52, panel.width, 24), balances, status, Ink);
+            int i = 0;
+            foreach (var choice in TravelMaps.Choices)
             {
-                var choice = TravelMaps.Choices[i];
-                var card = new Rect(panel.x + 30 + i * 285, panel.y + 80, 270, 250);
+                if (!travel.ShowsDestination(choice.destination)) continue;
+                var card = new Rect(panel.x + margin + i++ * (cardWidth + gap), panel.y + 80, cardWidth, 250);
                 DrawFrame(card);
                 var thumbnail = Resources.Load<Texture2D>(choice.resource);
                 if (thumbnail != null)
                     GUI.DrawTexture(new Rect(card.x + 12, card.y + 12, 246, 164), thumbnail, ScaleMode.ScaleToFit);
-                if (GUI.Button(new Rect(card.x + 12, card.y + 190, 246, 44), choice.title, travelButton))
+                string cost = SceneTravel.UsesServiceVisit(choice.destination)
+                    ? "共用次数 1" : $"机缘点 {SceneTravel.FortuneCost(choice.destination)}";
+                bool previousEnabled = GUI.enabled;
+                GUI.enabled = previousEnabled && travel.CanSelectDestination(choice.destination);
+                bool selected = GUI.Button(new Rect(card.x + 12, card.y + 190, 246, 44), $"{choice.title} · {cost}", travelButton);
+                GUI.enabled = previousEnabled;
+                if (selected)
                 {
-                    arena.Travel.SelectDestination(choice.destination);
+                    travel.SelectDestination(choice.destination);
                     GUI.depth = previousDepth;
                     return;
                 }
             }
-            if (!string.IsNullOrEmpty(arena.Travel.Error))
-                Label(new Rect(panel.x + 20, panel.y + 330, panel.width - 40, 28), arena.Travel.Error, status, Cinnabar);
-            if (GUI.Button(new Rect(panel.center.x - 95, panel.y + 365, 190, 44), "暂不出发", travelButton))
-                arena.Travel.CancelSelection();
+            if (!string.IsNullOrEmpty(travel.Error))
+                Label(new Rect(panel.x + 20, panel.y + 330, panel.width - 40, 28), travel.Error, status, Cinnabar);
+            if (GUI.Button(new Rect(panel.center.x - 206, panel.y + 365, 198, 44), "暂不出发", travelButton))
+                travel.CancelSelection();
+            if (GUI.Button(new Rect(panel.center.x + 8, panel.y + 365, 198, 44), "直接挑战关底 Boss", travelButton))
+                travel.SelectDestination(TravelDestination.FinalBattle);
             GUI.depth = previousDepth;
         }
 
