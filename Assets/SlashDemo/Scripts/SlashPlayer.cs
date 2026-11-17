@@ -202,6 +202,8 @@ namespace SlashDemo
         public bool IsAlive => Health > 0;
         public float DashReady => Mathf.Clamp01(1 - dashCooldownLeft / Mathf.Max(0.01f, dashCooldown));
         public Vector2 Aim { get; private set; } = Vector2.right;
+        internal Vector2 FacingDirection => IsUltimateActive ? Ultimate.Aim
+            : (IsAttacking || IsComboRecovering) ? attackAim : IsHeavyRecovering ? heavyAim : Aim;
         public int TotalSwings { get; private set; }
 
         SlashArena arena;
@@ -1309,11 +1311,10 @@ namespace SlashDemo
                 pose = SwordMotion.HeavyPose(ChargeProgress, heavyRelease.Active, heavyRelease.SweepProgress,
                     heavyRelease.RecoveryProgress, Time.time);
             }
-            Vector2 facing = IsAttacking || IsComboRecovering ? attackAim : IsHeavyRecovering ? heavyAim : Aim;
+            Vector2 facing = FacingDirection;
             if (IsUltimateActive)
             {
                 pose = SwordMotion.HeavyPose(1, true, Ultimate.PoseProgress, Ultimate.PoseRecovery, Time.time);
-                facing = Ultimate.Aim;
             }
             Vector2 socket = SwordMotion.CarryGrip;
             Vector2 side = new Vector2(-facing.y, facing.x);

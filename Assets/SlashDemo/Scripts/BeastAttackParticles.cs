@@ -163,7 +163,7 @@ namespace SlashDemo
             }
         }
 
-        internal enum SkillParticle { Stone = 1, Mote = 2, Spark = 4, Paper = 6, Star = 7 }
+        internal enum SkillParticle { Stone = 1, Mote = 2, Mist = 3, Spark = 4, Paper = 6, Star = 7 }
 
         internal void SkillMote(Vector2 ground, float height, Vector2 velocity, float rise,
             SkillParticle shape, Color color, float size, float life)

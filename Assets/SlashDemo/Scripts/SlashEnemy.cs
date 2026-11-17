@@ -14,7 +14,8 @@ namespace SlashDemo
         public bool rockBear;
         public int Health { get; private set; }
         public bool Alive => Health > 0;
-        public bool IsChasing => Alive && !trainingDummy && (bearCombat != null ? bearCombat.IsChasing : snakeCombat != null ? snakeCombat.IsChasing : apeCombat != null ? apeCombat.IsChasing : cultivator != null ? cultivator.IsChasing : phase == Phase.Chase);
+        public bool IsChasing => Alive && !trainingDummy && (bearCombat?.IsChasing ?? snakeCombat?.IsChasing
+            ?? apeCombat?.IsChasing ?? cultivator?.IsChasing ?? finalBoss?.IsChasing ?? phase == Phase.Chase);
         public float Radius => GetComponent<CircleCollider2D>().radius;
 
         enum Phase { Chase, Windup, Recover, Dead }
@@ -38,6 +39,7 @@ namespace SlashDemo
         ApeDemon ape;
         ApeCombat apeCombat;
         AscensionCultivator cultivator;
+        EvilCultivatorBoss finalBoss;
 
         void Awake()
         {
@@ -47,6 +49,7 @@ namespace SlashDemo
             snake = GetComponent<SnakeDemon>();
             ape = GetComponent<ApeDemon>();
             cultivator = GetComponent<AscensionCultivator>();
+            finalBoss = GetComponent<EvilCultivatorBoss>();
             visual = transform.Find("Visual");
             Health = maxHealth;
             presentation = GetComponent<ObliqueActor>();
@@ -82,6 +85,7 @@ namespace SlashDemo
                 apeCombat.Initialize(this, arena, presentation, warning);
             }
             if (cultivator != null) cultivator.InitializeCombat(arena, presentation, warning);
+            if (finalBoss != null) finalBoss.InitializeCombat(arena, presentation, warning);
         }
 
         void Update()
@@ -113,6 +117,7 @@ namespace SlashDemo
             if (snakeCombat != null) { snakeCombat.Tick(Time.deltaTime); return; }
             if (apeCombat != null) { apeCombat.Tick(Time.deltaTime); return; }
             if (cultivator != null) { cultivator.Tick(Time.deltaTime); return; }
+            if (finalBoss != null) { finalBoss.Tick(Time.deltaTime); return; }
             if (trainingDummy || arena.Player == null || !arena.Player.IsAlive) return;
             Vector2 toPlayer = arena.Player.transform.position - transform.position;
             if (phase == Phase.Recover)
@@ -155,6 +160,7 @@ namespace SlashDemo
             if (!Alive || arena == null || arena.Paused) { body.linearVelocity = Vector2.zero; return; }
             if (bearCombat != null) { bearCombat.FixedTick(Vector2.zero); return; }
             if (cultivator != null) { cultivator.FixedTick(Time.fixedDeltaTime); return; }
+            if (finalBoss != null) { finalBoss.FixedTick(Time.fixedDeltaTime); return; }
             var navigation = snake != null ? snake.Navigation : ape?.Navigation;
             Vector2 velocity = Vector2.zero;
             if (IsChasing && arena.Player != null && arena.Player.IsAlive)
@@ -200,12 +206,18 @@ namespace SlashDemo
             if (snakeCombat != null) snakeCombat.Stop();
             if (apeCombat != null) apeCombat.Stop();
             if (cultivator != null) cultivator.Stop();
+            if (finalBoss != null) finalBoss.Stop();
             GetComponent<Collider2D>().enabled = false;
             body.linearVelocity = Vector2.zero;
             arena.Effects.Burst(transform.position, DemoArt.Gold, 18, 1.2f);
             arena.EnemyKilled(this);
             deathAge = 0;
             presentation.SetDeathProgress(0);
+        }
+
+        internal void Heal(int amount)
+        {
+            if (Alive && amount > 0) Health = Mathf.Min(maxHealth, Health + amount);
         }
 
         public void ApplyTuning(SlashTuningSettings settings)
@@ -220,6 +232,7 @@ namespace SlashDemo
             moveSpeed = snake != null ? settings.moveSpeed * SnakeDemon.MoveSpeedScale
                 : ape != null ? settings.moveSpeed * ApeDemon.MoveSpeedScale : baseSpeed * settings.enemySpeedMultiplier;
             if (cultivator != null) { cultivator.ApplyAttackTuning(settings); return; }
+            if (finalBoss != null) { finalBoss.ApplyAttackTuning(settings); return; }
             windupTime = settings.enemyWindup * (rockBear ? 1.45f : snake != null ? SnakeDemon.WindupScale : ape != null ? ApeDemon.WindupScale : 1);
             damage = snake != null ? SnakeDemon.BaseDamage : ape != null ? ApeDemon.BaseDamage : settings.enemyDamage;
             attackRange = settings.enemyRange * (rockBear ? BearDemon.RangeScale : snake != null ? SnakeDemon.RangeScale : ape != null ? ApeDemon.RangeScale : 1);

@@ -263,9 +263,13 @@ namespace SlashDemo
         {
             TravelMapEnvironment map;
             AscensionChallenge nextChallenge = null;
+            Texture2D finalBossArt = null;
+            const EvilCultivatorBoss.Style finalBossStyle = EvilCultivatorBoss.Style.BloodSaber;
             try
             {
                 if (destination == TravelDestination.AscensionPlatform) nextChallenge = new AscensionChallenge();
+                if (destination == TravelDestination.FinalBattle)
+                    finalBossArt = EvilCultivatorBoss.LoadArt(finalBossStyle);
                 map = TravelMapEnvironment.Build(manor.parent, TravelMaps.Get(destination));
             }
             catch (System.Exception exception)
@@ -297,6 +301,8 @@ namespace SlashDemo
             Physics2D.SyncTransforms();
             if (destination == TravelDestination.Wilderness)
                 (wildernessEncounter ??= new WildernessEncounter()).SpawnPack(arena, map);
+            if (destination == TravelDestination.FinalBattle)
+                EvilCultivatorBoss.Spawn(arena, map, finalBossStyle, finalBossArt);
             if (destination == TravelDestination.HealingLodge) PlaceTreatmentMarker(map);
             if (destination == TravelDestination.Market)
             {

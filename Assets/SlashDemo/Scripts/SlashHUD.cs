@@ -315,6 +315,24 @@ namespace SlashDemo
                     "升仙台 · 本轮完成 " + arena.Travel.ChallengeCompletedRounds + " 战", status, Ink);
                 Label(new Rect(result.x, result.y + 35, result.width, 28), "已恢复一半气血 · 可使用传送阵离开", status, Jade);
             }
+            if (arena.Travel?.Current == TravelDestination.FinalBattle && arena.Enemies.Count > 0)
+            {
+                var opponent = arena.Enemies[0];
+                var boss = opponent.GetComponent<EvilCultivatorBoss>();
+                if (boss != null && opponent.Alive)
+                {
+                    var panel = new Rect(width / 2 - 220, 25, 440, 81);
+                    DrawFrame(panel);
+                    Label(new Rect(panel.x, panel.y + 3, panel.width, 26),
+                        opponent.name + " · " + opponent.Health + " / " + opponent.maxHealth, status, Ink);
+                    DrawGauge(new Rect(panel.x + 24, panel.y + 34, panel.width - 48, 8),
+                        opponent.Health / (float)opponent.maxHealth, Cinnabar);
+                    if (boss.PassiveBuff is CombatBuffView passive)
+                        DrawPassiveBuff(new Rect(panel.x + 24, panel.y + 48, 48, 22), passive, scale);
+                    if (boss.CastingSkill != null)
+                        Label(new Rect(panel.x, panel.y + 48, panel.width, 27), boss.CastingSkill, status, Cinnabar);
+                }
+            }
             if (arena.Travel != null && arena.Travel.ShowPortalPrompt)
             {
                 var prompt = new Rect(width / 2 - 175, height / 2 + 80, 350, 50);
@@ -1033,6 +1051,7 @@ namespace SlashDemo
             foreach (var enemy in arena.Enemies)
             {
                 if (enemy == null || !enemy.gameObject.activeInHierarchy) continue;
+                if (enemy.TryGetComponent<EvilCultivatorBoss>(out var boss) && !boss.ShowsWorldHealth) continue;
                 float labelHeight = enemy.GetComponent<ObliqueActor>().LabelHeight;
                 Vector3 p = arena.WorldCamera.WorldToScreenPoint(arena.View.LiftPoint(enemy.transform.position, labelHeight));
                 Label(new Rect(p.x / scale - 70, (Screen.height - p.y) / scale - 12, 140, 24), enemy.Health.ToString(), health, DemoArt.Gold);
@@ -1046,10 +1065,14 @@ namespace SlashDemo
             if (point.z <= 0) return;
             const float size = BuffBarLayout.CellSize * .4f;
             var slot = new Rect(point.x / scale, (Screen.height - point.y) / scale + 4, size, size);
-            var buff = challenger.PassiveBuff;
+            DrawPassiveBuff(slot, challenger.PassiveBuff, scale);
+        }
+
+        void DrawPassiveBuff(Rect slot, CombatBuffView buff, float scale)
+        {
             Box(slot, new Color(.08f, .11f, .11f, .92f));
             Outline(slot, Bronze);
-            DrawHudIcon(slot, buff.iconResource);
+            if (!DrawHudIcon(slot, buff.iconResource)) Label(slot, buff.name, buffName, Cinnabar);
             if (buff.stacks > 0)
             {
                 DrawBuffCountdown(slot, buff);

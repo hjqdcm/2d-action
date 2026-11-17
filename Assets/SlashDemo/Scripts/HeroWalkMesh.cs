@@ -17,9 +17,15 @@ namespace SlashDemo
         public struct Rig
         {
             public Leg left, right; public bool reversePhase; public int direction;
-            internal bool keepFeetLevel;
+            internal bool keepFeetLevel, preserveBootShape;
             public Rig(Leg left, Leg right, bool reversePhase)
-            { this.left = left; this.right = right; this.reversePhase = reversePhase; direction = 0; keepFeetLevel = false; }
+            {
+                this.left = left; this.right = right; this.reversePhase = reversePhase;
+                direction = 0; keepFeetLevel = preserveBootShape = false;
+            }
+
+            internal bool BootsOverlap => direction == 2 || direction == 6;
+            internal float BootSeparation => right.sole.x - left.sole.x;
         }
         public struct LegPose { public Leg rest; public Vector2 knee, ankle, sole; public float roll, depth; }
         public struct Frame { public LegPose left, right; public float phase, blend, upperBlend; public Vector2 motion; public int direction; }
@@ -151,6 +157,16 @@ namespace SlashDemo
 
         public static Binding Bind(Vector2 point,Rig rig)
         {
+            if (rig.preserveBootShape)
+            {
+                float center = (rig.left.sole.x + rig.right.sole.x) * .5f;
+                float transition = rig.BootSeparation * .36f;
+                float rightBoot = rig.BootsOverlap ? (rig.left.sole.y > rig.right.sole.y ? 1 : 0)
+                    : Mathf.SmoothStep(0, 1, Mathf.InverseLerp(center - transition, center + transition, point.x));
+                // Keep each boot rigid below the shin. Fade the leg motion into the hip.
+                float leg = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.14f, .46f, point.y));
+                return new Binding { left = (1 - rightBoot) * leg, right = rightBoot * leg };
+            }
             float leftDistance=Mathf.Abs(point.x-CenterX(rig.left,point.y));
             float rightDistance=Mathf.Abs(point.x-CenterX(rig.right,point.y));
             if (rig.keepFeetLevel)
@@ -239,16 +255,53 @@ namespace SlashDemo
             Vector2 offset = leftStep * binding.left + rightStep * binding.right;
             return cloth + (Vector3)(offset * frame.blend);
         }
+
+        internal static void FitPaintedStride(Rig rig, Frame frame, ref Vector2 leftFoot, ref Vector2 rightFoot,
+            out Vector2 leftKnee, out Vector2 rightKnee)
+        {
+            // Retain the hero's lift and knee bend. Cap the horizontal separation
+            // independently so the painted gap cannot pinch as the feet pass.
+            float bob = BodyBob(frame.phase);
+            const float footLiftScale = .84f;
+            leftFoot.y = (leftFoot.y + bob) * footLiftScale - bob;
+            rightFoot.y = (rightFoot.y + bob) * footLiftScale - bob;
+            leftKnee = (frame.left.knee - rig.left.knee) * .8f;
+            rightKnee = (frame.right.knee - rig.right.knee) * .8f;
+            if (rig.BootsOverlap) return;
+
+            float sideways = rig.BootSeparation * .14f;
+            LimitPaintedSeparation(ref leftFoot, ref rightFoot, sideways, Mathf.Min(.07f, rig.BootSeparation * .8f));
+            LimitPaintedSeparation(ref leftKnee, ref rightKnee, sideways, .04f);
+        }
+
+        static void LimitPaintedSeparation(ref Vector2 left, ref Vector2 right, float sideways, float vertical)
+        {
+            Vector2 midpoint = (left + right) * .5f;
+            Vector2 separation = (right - left) * .5f;
+            separation.x = Mathf.Clamp(separation.x, -sideways, sideways);
+            separation.y = Mathf.Clamp(separation.y, -vertical, vertical);
+            left = midpoint - separation;
+            right = midpoint + separation;
+        }
+
+        internal static Vector2 PaintedShinOffset(float height, Vector2 foot, Vector2 knee)
+        {
+            float bend = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.14f, .36f, height));
+            return Vector2.Lerp(foot, knee, bend);
+        }
     }
 
     public static class HeroLayerMath
     {
+        internal static float PlantedSupport(float height)
+            => Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.08f, .50f, height));
+
         public static Vector3 KineticDeform(Vector3 position, Vector2 uv, Vector2 waist, Vector2 hipOffset,
             float torsoShear, float shoulderShear, float torsoTurn, float shoulderTurn, float follow, bool headLock = false,
             float bodyHeight = 1)
         {
             Vector3 rest = position;
-            float support = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.08f, 0.50f, uv.y));
+            float support = PlantedSupport(uv.y);
             float shoulder = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.66f, 0.80f, uv.y));
             float upper = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.24f, 0.58f, uv.y));
             float shear = Mathf.Lerp(torsoShear, shoulderShear, shoulder);
@@ -307,6 +360,357 @@ namespace SlashDemo
         }
     }
 
+    internal readonly struct PaintedSaberArm
+    {
+        const float BladeLengthScale = 1.12f;
+        internal const float SecondGripSpacing = .043f;
+        public readonly int[] Outline;
+        public readonly int PatchEdge, PatchBottom;
+        public readonly bool BehindBody;
+        public readonly float Side;
+        readonly Vector2 shoulder, elbow, grip, tip;
+        public readonly SupportArm Support;
+        public Vector2 Shoulder => shoulder;
+        public Vector2 Grip => grip;
+        public Vector2 ExtendedTip => grip + (tip - grip) * BladeLengthScale;
+        public int BladeSourceFacing => Side > 0 ? 4 : 0;
+
+        static readonly int[] LeftBladeOutline = {
+            179, 268, 198, 266, 207, 282, 193, 309, 172, 355, 147, 385, 113, 395, 99, 389,
+            125, 360, 145, 328, 168, 286
+        };
+        static readonly int[] RightBladeOutline = {
+            322, 273, 349, 270, 354, 287, 360, 313, 376, 362, 397, 400, 387, 407,
+            358, 387, 340, 345, 322, 306
+        };
+        // Follow the steel and guard where the red cloak falls behind the blade.
+        static readonly Vector3[] SouthBladeEdges = {
+            new Vector3(172, 191, 280), new Vector3(169, 195, 287), new Vector3(168, 195, 297),
+            new Vector3(164, 185, 310), new Vector3(154, 176, 330), new Vector3(143, 164, 350),
+            new Vector3(128, 149, 370), new Vector3(104, 119, 387)
+        };
+        static readonly Vector3[] SoutheastBladeEdges = {
+            new Vector3(178, 204, 290), new Vector3(173, 207, 300), new Vector3(171, 204, 310),
+            new Vector3(163, 190, 330), new Vector3(152, 179, 350), new Vector3(141, 165, 370),
+            new Vector3(124, 150, 390), new Vector3(108, 126, 407)
+        };
+        static readonly Vector3[] SouthwestBladeEdges = {
+            new Vector3(174, 201, 289), new Vector3(169, 202, 298), new Vector3(174, 198, 306),
+            new Vector3(164, 186, 325), new Vector3(155, 177, 345), new Vector3(143, 164, 365),
+            new Vector3(126, 148, 385), new Vector3(113, 131, 399)
+        };
+        // The east blade is painted over the greaves. Crop the moving pixels more
+        // tightly than the body cutout so the exposed cloth can be filled in behind it.
+        static readonly Vector3[] EastBladeEdges = {
+            new Vector3(251, 281, 298), new Vector3(260, 282, 320), new Vector3(270, 291, 345),
+            new Vector3(281, 304, 368), new Vector3(290, 316, 386), new Vector3(303, 330, 401),
+            new Vector3(323, 342, 416)
+        };
+
+        public PaintedSaberArm(Vector2 shoulder, Vector2 elbow, Vector2 grip, Vector2 tip, float side,
+            int[] outline, int patchEdge, int patchBottom, bool behindBody, SupportArm support)
+        {
+            this.shoulder = shoulder;
+            this.elbow = elbow;
+            this.grip = grip;
+            this.tip = tip;
+            Side = side;
+            Outline = outline;
+            PatchEdge = patchEdge;
+            PatchBottom = patchBottom;
+            BehindBody = behindBody;
+            Support = support;
+        }
+
+        public Vector3 Bind(Vector2 point)
+            => Bind(point, shoulder, elbow, grip);
+
+        public Vector2 ExtendBlade(Vector2 point)
+        {
+            Vector2 axis = (tip - grip).normalized;
+            return point + axis * (Mathf.Max(0, Vector2.Dot(point - grip, axis)) * (BladeLengthScale - 1));
+        }
+
+        static Vector3 Bind(Vector2 point, Vector2 shoulder, Vector2 elbow, Vector2 grip)
+        {
+            Vector2 axis = (grip - shoulder).normalized;
+            float forearm = Mathf.SmoothStep(0, 1,
+                Mathf.InverseLerp(-.04f, .04f, Vector2.Dot(point - elbow, axis)));
+            float hand = Mathf.SmoothStep(0, 1,
+                Mathf.InverseLerp(-.054f, -.019f, Vector2.Dot(point - grip, axis)));
+            return new Vector3(1 - forearm, forearm, hand);
+        }
+
+        public Texture2D CreateMask(int facing)
+        {
+            Vector3[] bladeEdges = facing switch
+            {
+                0 => SouthBladeEdges,
+                1 => SoutheastBladeEdges,
+                2 => EastBladeEdges,
+                7 => SouthwestBladeEdges,
+                _ => null
+            };
+            return Rasterize(Outline, Side, PatchEdge, PatchBottom, bladeEdges,
+                bladeY: 480 - grip.y * 448 + 8, shoulderY: 480 - shoulder.y * 448);
+        }
+
+        public Texture2D CreateWholeBladeMask()
+            => Side > 0 ? Rasterize(RightBladeOutline, Side, 0, 0, null, bladeY: 0)
+                : Rasterize(LeftBladeOutline, Side, 0, 0, SouthBladeEdges, bladeY: 280);
+
+        // The west portrait only shows the blade tip under the cape. For the full
+        // raised stroke, fit the east sleeve and saber to its west-facing joints.
+        static readonly Vector2 EastShoulder = AtlasPoint(252, 179), EastElbow = AtlasPoint(258, 231),
+            EastGrip = AtlasPoint(255, 282), EastTip = AtlasPoint(332, 410);
+
+        internal static readonly int[] EastArmOutline = {
+            240, 182, 261, 175, 272, 186, 274, 226, 270, 271, 285, 295, 303, 335,
+            326, 385, 344, 413, 323, 420, 302, 405, 272, 366, 255, 324, 241, 302, 240, 271, 239, 217
+        };
+
+        static Vector2 AtlasPoint(int x, int y) => new Vector2(x - 256, 480 - y) / 448;
+
+        public static Texture2D CreateWestArmMask()
+            => Rasterize(EastArmOutline, 1, 0, 0, EastBladeEdges, bladeY: 290);
+
+        public Vector3 FitWestArm(Vector2 point, out Vector3 weights)
+        {
+            weights = Bind(point, EastShoulder, EastElbow, EastGrip);
+            return FitSection(point, EastShoulder, EastElbow, shoulder, elbow, -1, preserveWidth: true) * weights.x
+                + FitSection(point, EastElbow, EastGrip, elbow, grip, -1, preserveWidth: true) * weights.y;
+        }
+
+        public Vector2 FitWestBlade(Vector2 point) => FitSection(point, EastGrip, EastTip, grip, tip, -1);
+
+        public Vector3 FitWholeBlade(Vector2 point)
+        {
+            // Align a fully visible blade from the same atlas to the obscured grip and tip.
+            var sourceGrip = Side > 0 ? new Vector2(80, 200) / 448 : new Vector2(-66, 208) / 448;
+            var sourceTip = Side > 0 ? new Vector2(134, 80) / 448 : new Vector2(-144, 93) / 448;
+            return FitSection(point, sourceGrip, sourceTip, grip, tip, 1);
+        }
+
+        static Vector2 FitSection(Vector2 point, Vector2 source, Vector2 sourceEnd,
+            Vector2 target, Vector2 targetEnd, float mirror, bool preserveWidth = false)
+        {
+            Vector2 sourceAxis = sourceEnd - source;
+            Vector2 targetAxis = targetEnd - target;
+            Vector2 delta = point - source;
+            Vector2 across = Vector2.Perpendicular(targetAxis);
+            // Match the joint spacing without widening the painted sleeve as the bones get longer.
+            if (preserveWidth) across = across.normalized * sourceAxis.magnitude;
+            return target + (targetAxis * Vector2.Dot(delta, sourceAxis)
+                + across * (mirror * Vector2.Dot(delta, Vector2.Perpendicular(sourceAxis))))
+                / sourceAxis.sqrMagnitude;
+        }
+
+        static Texture2D Rasterize(int[] outline, float side, int patchEdge, int patchBottom, Vector3[] movingEdges,
+            float bladeY = float.PositiveInfinity, float shoulderY = -512)
+        {
+            // The red channel extracts the painted arm. Green marks where the torso needs
+            // underpainting. Blue selects the sleeve and alpha selects the rigid blade.
+            const int size = 256;
+            var pixels = new Color32[size * size];
+            var intersections = new float[outline.Length / 2];
+            for (int row = 0; row < size; row++)
+            {
+                float y = (size - row - .5f) * 2;
+                Vector3 movingSpan = new Vector3(0, 512, y);
+                if (movingEdges != null && y >= movingEdges[0].z)
+                {
+                    int edge = 1;
+                    while (edge < movingEdges.Length - 1 && y > movingEdges[edge].z) edge++;
+                    var low = movingEdges[edge - 1];
+                    var high = movingEdges[edge];
+                    movingSpan = Vector3.Lerp(low, high, Mathf.InverseLerp(low.z, high.z, y));
+                }
+                int count = 0;
+                for (int i = 0, j = outline.Length - 2; i < outline.Length; j = i, i += 2)
+                {
+                    int ay = outline[i + 1], by = outline[j + 1];
+                    if ((ay > y) == (by > y)) continue;
+                    intersections[count++] = Mathf.Lerp(outline[i], outline[j], (y - ay) / (by - ay));
+                }
+                System.Array.Sort(intersections, 0, count);
+                for (int i = 0; i + 1 < count; i += 2)
+                {
+                    int from = Mathf.Clamp(Mathf.CeilToInt((intersections[i] - 1) / 2), 0, size);
+                    int to = Mathf.Clamp(Mathf.CeilToInt((intersections[i + 1] - 1) / 2), 0, size);
+                    for (int column = from; column < to; column++)
+                    {
+                        float x = column * 2 + 1;
+                        float fill = Mathf.InverseLerp(-5, 5, (patchEdge - x) * side)
+                            * Mathf.InverseLerp(0, 16, patchBottom + 8 - y);
+                        float inside = Mathf.Min(x - movingSpan.x, movingSpan.y - x);
+                        float moving = Mathf.InverseLerp(-1, 1, inside) * 255;
+                        byte sleeve = y < bladeY ? (byte)Mathf.RoundToInt(moving) : (byte)0;
+                        byte blade = y < bladeY ? (byte)0 : (byte)Mathf.RoundToInt(moving);
+                        // Keep the painted pauldron on the torso and overlap the moving sleeve beneath it.
+                        float cut = Mathf.InverseLerp(shoulderY + 4, shoulderY + 18, y);
+                        float sleeveRoot = Mathf.InverseLerp(shoulderY - 9, shoulderY + 8, y);
+                        pixels[row * size + column] = new Color32((byte)Mathf.RoundToInt(cut * 255),
+                            (byte)Mathf.RoundToInt(cut * fill * 255), (byte)Mathf.RoundToInt(sleeveRoot * sleeve), blade);
+                    }
+                }
+            }
+            var mask = new Texture2D(size, size, TextureFormat.RGBA32, false, true)
+            {
+                name = "Painted saber arm cutout", wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear, hideFlags = HideFlags.DontSave
+            };
+            mask.SetPixels32(pixels);
+            mask.Apply(false, true);
+            return mask;
+        }
+
+        public Pose Articulate(Vector2 target, Vector3 axis, float twoHanded, out Pose supportPose,
+            out WeaponPose weaponPose)
+        {
+            float restAngle = Mathf.Atan2(tip.y - grip.y, tip.x - grip.x) * Mathf.Rad2Deg;
+            float targetAngle = Mathf.Atan2(axis.y, axis.x) * Mathf.Rad2Deg;
+            float bladeTurn = Mathf.DeltaAngle(restAngle, targetAngle) * twoHanded;
+            float depth = Mathf.Asin(Mathf.Clamp(axis.z, -1, 1)) * Mathf.Rad2Deg * twoHanded;
+            Quaternion bladeRotation = Quaternion.Euler(0, 0, restAngle + bladeTurn)
+                * Quaternion.Euler(0, -depth, 0) * Quaternion.Euler(0, 0, -restAngle);
+            Vector2 gripAxis = bladeRotation * (Vector3)DemoArt.Direction(restAngle);
+            Vector2 secondGrip = -gripAxis * SecondGripSpacing;
+            Vector2 posedGrip = Vector2.Lerp(grip, target, twoHanded);
+            SolveArm(shoulder, elbow, grip, posedGrip, twoHanded, out Bone upperBone, out Bone lowerBone);
+            Vector2 offhand = Vector2.Lerp(Support.Grip, target + secondGrip, twoHanded);
+            supportPose = Support.PoseAt(offhand, gripAxis, twoHanded);
+            weaponPose = new WeaponPose(grip, posedGrip, bladeRotation);
+            return new Pose(upperBone, lowerBone, new Bone(grip, posedGrip, bladeTurn));
+        }
+
+        static void SolveArm(Vector2 shoulder, Vector2 elbow, Vector2 hand, Vector2 target, float extension,
+            out Bone upper, out Bone lower)
+        {
+            float upperLength = Vector2.Distance(shoulder, elbow);
+            float fraction = upperLength / (upperLength + Vector2.Distance(elbow, hand));
+            Vector2 joint = Vector2.Lerp(elbow + (target - hand) * fraction,
+                Vector2.Lerp(shoulder, target, fraction), extension);
+            // Fit the projected sleeve length while preserving its width. Both sections
+            // share one straight axis at full extension, so the elbow cannot fold over.
+            upper = new Bone(shoulder, elbow, shoulder, joint);
+            lower = new Bone(elbow, hand, joint, target);
+        }
+
+        internal readonly struct SupportArm
+        {
+            public readonly Vector2 Shoulder, Grip;
+            public readonly int[] Outline;
+            public readonly float Side;
+            public readonly int PatchEdge;
+            readonly Vector2 elbow;
+
+            static readonly Vector2 DonorShoulder = AtlasPoint(206, 178), DonorElbow = AtlasPoint(193, 225),
+                DonorGrip = AtlasPoint(190, 272);
+            static readonly int[] DonorOutline = {
+                188, 179, 207, 171, 222, 180, 212, 219, 207, 248, 204, 275, 196, 282,
+                184, 282, 176, 274, 176, 245, 183, 211
+            };
+
+            public SupportArm(int shoulderX, int shoulderY, int elbowX, int elbowY, int gripX, int gripY,
+                float side, int patchEdge, params int[] outline)
+            {
+                Shoulder = AtlasPoint(shoulderX, shoulderY);
+                elbow = AtlasPoint(elbowX, elbowY);
+                Grip = AtlasPoint(gripX, gripY);
+                Side = side;
+                PatchEdge = patchEdge;
+                Outline = outline;
+            }
+
+            public bool Hidden => Outline.Length == 0;
+            public static Texture2D CreateDonorMask() => Rasterize(DonorOutline, 1, 0, 0, null);
+            public Texture2D CreateBodyMask() => Rasterize(Outline, Side, PatchEdge, 310, null,
+                shoulderY: 480 - Shoulder.y * 448);
+
+            public Vector3 Fit(Vector2 point, out Vector3 weights)
+            {
+                weights = Bind(point, DonorShoulder, DonorElbow, DonorGrip);
+                float mirror = -Side;
+                return Vector2.Lerp(
+                    FitSection(point, DonorShoulder, DonorElbow, Shoulder, elbow, mirror, preserveWidth: true),
+                    FitSection(point, DonorElbow, DonorGrip, elbow, Grip, mirror, preserveWidth: true), weights.y);
+            }
+
+            public Pose PoseAt(Vector2 hand, Vector2 bladeAxis, float extension)
+            {
+                SolveArm(Shoulder, elbow, Grip, hand, extension, out Bone upper, out Bone forearm);
+                Vector2 donorAxis = AtlasPoint(112, 387) - DonorGrip;
+                Vector2 gripAxis = FitSection(DonorGrip + donorAxis, DonorElbow, DonorGrip,
+                    elbow, Grip, -Side, preserveWidth: true) - Grip;
+                float turn = Vector2.SignedAngle(gripAxis, bladeAxis) * extension;
+                return new Pose(upper, forearm, new Bone(Grip, hand, turn));
+            }
+        }
+
+        internal readonly struct Bone
+        {
+            readonly Vector2 rest, posed;
+            readonly float cosine, sine;
+            readonly Vector2 restAxis;
+            readonly float stretch;
+
+            public Bone(Vector2 rest, Vector2 posed, float angle) : this()
+            {
+                this.rest = rest;
+                this.posed = posed;
+                cosine = Mathf.Cos(angle * Mathf.Deg2Rad);
+                sine = Mathf.Sin(angle * Mathf.Deg2Rad);
+            }
+
+            public Bone(Vector2 rest, Vector2 restEnd, Vector2 posed, Vector2 posedEnd)
+                : this(rest, posed, Vector2.SignedAngle(restEnd - rest, posedEnd - posed))
+            {
+                restAxis = (restEnd - rest).normalized;
+                stretch = Vector2.Distance(posed, posedEnd) / Vector2.Distance(rest, restEnd) - 1;
+            }
+
+            public Vector2 Offset(Vector2 point)
+            {
+                Vector2 delta = point - rest;
+                delta += restAxis * (Vector2.Dot(delta, restAxis) * stretch);
+                return posed + new Vector2(cosine * delta.x - sine * delta.y,
+                    sine * delta.x + cosine * delta.y) - point;
+            }
+        }
+
+        internal readonly struct Pose
+        {
+            readonly Bone upper, forearm, hand;
+
+            public Pose(Bone upper, Bone forearm, Bone hand)
+            {
+                this.upper = upper;
+                this.forearm = forearm;
+                this.hand = hand;
+            }
+
+            public Vector2 Offset(Vector2 point, Vector3 binding)
+                => Vector2.Lerp(upper.Offset(point) * binding.x + forearm.Offset(point) * binding.y,
+                    hand.Offset(point), binding.z);
+        }
+
+        internal readonly struct WeaponPose
+        {
+            readonly Vector2 restGrip;
+            public readonly Quaternion Rotation;
+            public readonly Vector2 Grip;
+
+            public WeaponPose(Vector2 grip, Vector2 target, Quaternion rotation)
+            {
+                restGrip = grip;
+                Rotation = rotation;
+                Grip = target;
+            }
+
+            public Vector3 Point(Vector2 point) => (Vector3)Grip + Rotation * (Vector3)(point - restGrip);
+        }
+    }
+
     // Procedural walking with a shorter stride; cadence is controlled independently.
     [DefaultExecutionOrder(70)]
     [DisallowMultipleComponent]
@@ -315,12 +719,24 @@ namespace SlashDemo
         internal readonly struct PaintedGesture
         {
             public readonly Vector2 Grip;
+            public readonly bool KeepsBodyShape;
+            public readonly PaintedSaberArm? SaberArm;
             readonly Vector2 end;
+            readonly Vector2 head, chest;
             readonly float solidRadius, falloffRadius;
 
-            public PaintedGesture(Vector2 grip, Vector2 end, float solidRadius, float falloffRadius)
+            public PaintedGesture(Vector2 grip, Vector2 end, float solidRadius, float falloffRadius) : this()
             {
                 Grip = grip; this.end = end; this.solidRadius = solidRadius; this.falloffRadius = falloffRadius;
+            }
+
+            public PaintedGesture(Vector2 grip, Vector2 end, float solidRadius, float falloffRadius,
+                Vector2 head, Vector2 chest, PaintedSaberArm? saberArm = null) : this(grip, end, solidRadius, falloffRadius)
+            {
+                this.head = head;
+                this.chest = chest;
+                KeepsBodyShape = true;
+                SaberArm = saberArm;
             }
 
             public float Weight(Vector2 point)
@@ -328,8 +744,24 @@ namespace SlashDemo
                 Vector2 axis = end - Grip;
                 float along = Mathf.Clamp01(Vector2.Dot(point - Grip, axis) / Mathf.Max(.0001f, axis.sqrMagnitude));
                 float distance = Vector2.Distance(point, Grip + axis * along);
-                return 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(solidRadius, falloffRadius, distance));
+                float weight = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(solidRadius, falloffRadius, distance));
+                if (KeepsBodyShape)
+                {
+                    // Use the tightest limit so overlapping fades cannot compound into a sharp bend.
+                    weight = Mathf.Min(weight, Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.10f, .27f, point.y)));
+                    weight = Mathf.Min(weight, ArmInfluence(point - head, 32f / 448, 47f / 448));
+                    weight = Mathf.Min(weight, ArmInfluence(point - chest, 34f / 448, 42f / 448));
+                }
+                return weight;
             }
+
+            static float ArmInfluence(Vector2 offset, float width, float height)
+            {
+                var relative = new Vector2(offset.x / width, offset.y / height);
+                float distance = (relative.magnitude - 1) * Mathf.Min(width, height);
+                return Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0, .125f, distance));
+            }
+
         }
 
         const int Columns=40, Rows=56;
@@ -337,6 +769,11 @@ namespace SlashDemo
         Sprite sprite;
         Mesh mesh;
         MeshRenderer meshRenderer;
+        Mesh profileLegMesh;
+        MeshRenderer profileLegRenderer;
+        Vector3[] profileLegRest, profileLegPose;
+        Vector3[] visibleProfileLegRows;
+        MaterialPropertyBlock profileLegProperties;
         Material material;
         MaterialPropertyBlock properties;
         Vector3[] rest,vertices;
@@ -346,6 +783,29 @@ namespace SlashDemo
         HeroGaitMath.Rig? paintedRig;
         PaintedGesture paintedGesture;
         float[] gestureWeights;
+        Vector3[] saberArmBindings;
+        Vector3[] saberArmVertices;
+        Vector3[] saberArmRest;
+        Mesh saberArmMesh;
+        MeshRenderer saberArmRenderer;
+        MaterialPropertyBlock saberArmProperties;
+        Mesh saberBladeMesh;
+        MeshRenderer saberBladeRenderer;
+        MaterialPropertyBlock saberBladeProperties;
+        PaintedSaberArm.WeaponPose saberWeaponPose;
+        Texture2D[] saberMasks;
+        Texture2D[] wholeBladeMasks;
+        Texture2D westArmMask;
+        PaintedSaberArm.Pose saberArmPose;
+        PaintedSaberArm.Pose supportArmPose;
+        Mesh supportArmMesh;
+        MeshRenderer supportArmRenderer;
+        MaterialPropertyBlock supportArmProperties;
+        Vector3[] supportArmRest, supportArmVertices, supportArmBindings;
+        Texture2D supportDonorMask;
+        Texture2D[] supportBodyMasks;
+        float twoHandedGrip;
+        bool saberArmMoving;
         Vector2 castTorso, castHand;
         float castAngle;
         int gridVertexCount;
@@ -379,7 +839,7 @@ namespace SlashDemo
         public float Bob=>HeroGaitMath.BodyBob(phase)*BodyHeight*characterScale*blend;
         public void Initialize(SpriteRenderer body) => Initialize(body, null, default);
 
-        internal void Initialize(SpriteRenderer body, HeroGaitMath.Rig? painted, PaintedGesture gesture)
+        internal void Initialize(SpriteRenderer body, HeroGaitMath.Rig? painted, PaintedGesture gesture, bool fitStance = true)
         {
             source=body;
             paintedRig = painted;
@@ -399,17 +859,120 @@ namespace SlashDemo
                 float stanceWidth = rig.right.sole.x - rig.left.sole.x;
                 float stanceDifference = stanceWidth - (hero.right.sole.x - hero.left.sole.x);
                 float heelStrikeTravel = HeroGaitMath.StrideDistance / (2 * HeroAppearance.BodyHeight);
-                float fittedStride = Mathf.Clamp(1 - stanceDifference / heelStrikeTravel, .5f, 1);
-                walkStrideScale = fittedStride * .6f;
+                float fittedStride = fitStance ? Mathf.Clamp(1 - stanceDifference / heelStrikeTravel, .5f, 1) : 1;
+                walkStrideScale = fittedStride * (fitStance ? .6f : .8f);
                 walkCadenceScale = 1 / fittedStride;
                 strideScale = walkStrideScale;
                 cadenceScale = walkCadenceScale;
-                stanceInset = stanceWidth * .10f;
+                stanceInset = fitStance ? stanceWidth * .10f : 0;
                 material.SetFloat("_PaintedPortrait", 1);
                 meshRenderer.sharedMaterial = material;
             }
             else meshRenderer.sharedMaterials = new[] { material, material, material };
             properties=new MaterialPropertyBlock();source.forceRenderingOff=true;Refresh();
+        }
+
+        internal void SetPaintedRig(HeroGaitMath.Rig rig, PaintedGesture gesture)
+        {
+            paintedRig = rig;
+            paintedGesture = gesture;
+            // The new facing needs fresh weights. Keep the walk phase continuous.
+            sprite = null;
+        }
+
+        internal void SetProfileLeg(Vector3[] rows, bool bindVisibleLeg = false)
+        {
+            visibleProfileLegRows = bindVisibleLeg ? rows : null;
+            if (rows == null)
+            {
+                profileLegRest = null;
+                if (profileLegRenderer != null) profileLegRenderer.enabled = false;
+                return;
+            }
+
+            if (profileLegMesh == null)
+            {
+                var layer = new GameObject("Far profile leg");
+                layer.transform.SetParent(transform, false);
+                profileLegMesh = new Mesh { name = "Painted far leg", hideFlags = HideFlags.DontSave };
+                profileLegMesh.MarkDynamic();
+                layer.AddComponent<MeshFilter>().sharedMesh = profileLegMesh;
+                profileLegRenderer = layer.AddComponent<MeshRenderer>();
+                profileLegRenderer.sharedMaterial = material;
+                profileLegProperties = new MaterialPropertyBlock();
+                profileLegProperties.SetFloat("_ProfileLegMask", 1);
+            }
+
+            var frameSprite = source.sprite;
+            var texture = frameSprite.texture;
+            var center = frameSprite.rect.min + frameSprite.pivot;
+            float pixelsPerUnit = frameSprite.pixelsPerUnit;
+            int count = rows.Length * 2;
+            profileLegRest = new Vector3[count];
+            profileLegPose = new Vector3[count];
+            var uv = new Vector2[count];
+            var colors = new Color[count];
+            var triangles = new List<int>((rows.Length - 1) * 6);
+            for (int row = 0; row < rows.Length; row++)
+            {
+                Vector3 span = rows[row];
+                float alpha = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(rows[rows.Length - 3].z,
+                    rows[rows.Length - 1].z, span.z));
+                for (int edge = 0; edge < 2; edge++)
+                {
+                    int vertex = row * 2 + edge;
+                    float x = edge == 0 ? span.x : span.y;
+                    profileLegRest[vertex] = new Vector3(x, span.z) / pixelsPerUnit * .94f + Vector3.up * .018f;
+                    uv[vertex] = new Vector2((center.x + x) / texture.width, (center.y + span.z) / texture.height);
+                    colors[vertex] = new Color(1, 1, 1, alpha);
+                }
+                if (row < rows.Length - 1) AddLegQuad(triangles, row * 2, row * 2 + 2);
+            }
+            profileLegMesh.Clear();
+            profileLegMesh.vertices = profileLegRest;
+            profileLegMesh.uv = uv;
+            profileLegMesh.colors = colors;
+            profileLegMesh.SetTriangles(triangles, 0);
+        }
+
+        float VisibleProfileLegWeight(Vector2 point)
+        {
+            var rows = visibleProfileLegRows;
+            float pixelsPerUnit = sprite.pixelsPerUnit;
+            float height = point.y * pixelsPerUnit;
+            int row = 1;
+            while (row < rows.Length - 1 && height > rows[row].z) row++;
+            Vector3 lower = rows[row - 1], upper = rows[row];
+            Vector3 span = Vector3.Lerp(lower, upper, Mathf.InverseLerp(lower.z, upper.z, height));
+            float x = point.x * pixelsPerUnit;
+            float outside = Mathf.Max(span.x - x, x - span.y) / pixelsPerUnit;
+            float edge = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0, .16f, outside));
+            float cuff = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(rows[rows.Length - 2].z / pixelsPerUnit,
+                rows[rows.Length - 1].z / pixelsPerUnit + .12f, point.y));
+            return 1 - Mathf.Max(edge, cuff);
+        }
+
+        void RefreshProfileLeg(Vector2 foot, Vector2 knee)
+        {
+            profileLegRenderer.enabled = source.enabled && blend > .002f;
+            if (!profileLegRenderer.enabled) return;
+            for (int i = 0; i < profileLegRest.Length; i++)
+            {
+                Vector3 restPoint = profileLegRest[i];
+                float height = restPoint.y - .018f;
+                profileLegPose[i] = restPoint + (Vector3)(HeroGaitMath.PaintedShinOffset(height, foot, knee) * blend);
+            }
+            profileLegMesh.vertices = profileLegPose;
+            profileLegMesh.RecalculateBounds();
+            profileLegRenderer.sortingLayerID = source.sortingLayerID;
+            profileLegRenderer.sortingOrder = source.sortingOrder - 1;
+            Color tint = source.color;
+            tint.r *= .72f;
+            tint.g *= .72f;
+            tint.b *= .72f;
+            tint.a *= Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.002f, .25f, blend));
+            profileLegProperties.SetColor("_Color", tint);
+            profileLegRenderer.SetPropertyBlock(profileLegProperties);
         }
         public void Advance(Vector2 distance,float dt,bool dashing,ObliqueView view)
         {
@@ -447,10 +1010,218 @@ namespace SlashDemo
             castTorso = torso;
             castHand = hand;
             castAngle = angle * Mathf.Deg2Rad;
+            saberArmMoving = false;
+            twoHandedGrip = 0;
+        }
+
+        internal void SetSaberCastPose(Vector2 torso, Vector2 hand, Vector3 axis, float twoHanded)
+        {
+            castTorso = torso;
+            twoHandedGrip = twoHanded;
+            saberArmMoving = twoHanded > 0;
+            if (saberArmMoving)
+                saberArmPose = paintedGesture.SaberArm.Value.Articulate(hand, axis, twoHanded, out supportArmPose, out saberWeaponPose);
         }
 
         static float CastTorsoWeight(float height)
             => Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.40f, .78f, height));
+
+        internal Vector3 PaintedCastWorldPoint(Vector2 point)
+        {
+            var bounds = source.sprite.bounds;
+            float height = Mathf.InverseLerp(bounds.min.y, bounds.max.y, point.y);
+            if (paintedGesture.SaberArm.HasValue)
+                return transform.TransformPoint((Vector3)castTorso + (saberArmMoving ? saberWeaponPose.Point(point) : (Vector3)point));
+            float gripWeight = CastTorsoWeight(paintedGesture.Grip.y - bounds.min.y);
+            return transform.TransformPoint(point + CastOffset(point, paintedGesture.Weight(point),
+                height, gripWeight, Mathf.Sin(castAngle), Mathf.Cos(castAngle)));
+        }
+
+        Vector2 SaberArmOffset(Vector2 point, Vector3 binding)
+            => castTorso + (saberArmMoving ? saberArmPose.Offset(point, binding) : Vector2.zero);
+
+        void BuildSaberArm(PaintedSaberArm arm, Vector2[] uv, List<int> triangles)
+        {
+            if (saberArmMesh == null)
+            {
+                var layer = new GameObject("Saber arm");
+                layer.transform.SetParent(transform, false);
+                saberArmMesh = new Mesh { name = "Saber sleeve", hideFlags = HideFlags.DontSave };
+                saberArmMesh.MarkDynamic();
+                layer.AddComponent<MeshFilter>().sharedMesh = saberArmMesh;
+                saberArmRenderer = layer.AddComponent<MeshRenderer>();
+                saberArmRenderer.sharedMaterial = material;
+                saberArmProperties = new MaterialPropertyBlock();
+                saberArmProperties.SetFloat("_SaberCutMode", 2);
+                var blade = new GameObject("Saber blade");
+                blade.transform.SetParent(transform, false);
+                saberBladeMesh = new Mesh { name = "Rigid saber blade", hideFlags = HideFlags.DontSave };
+                blade.AddComponent<MeshFilter>().sharedMesh = saberBladeMesh;
+                saberBladeRenderer = blade.AddComponent<MeshRenderer>();
+                saberBladeRenderer.sharedMaterial = material;
+                saberBladeProperties = new MaterialPropertyBlock();
+                saberBladeProperties.SetFloat("_SaberCutMode", 3);
+                saberMasks = new Texture2D[8];
+                wholeBladeMasks = new Texture2D[2];
+            }
+            int facing = legRig.direction;
+            if (saberMasks[facing] == null) saberMasks[facing] = arm.CreateMask(facing);
+            properties.SetTexture("_SaberCutMask", saberMasks[facing]);
+            properties.SetFloat("_SaberPatchOffset", -arm.Side * 32 / sprite.texture.width);
+            var armMask = saberMasks[facing];
+            saberArmRest = new Vector3[rest.Length];
+            var bladeRest = new Vector3[rest.Length];
+            if (arm.BehindBody)
+            {
+                bool west = facing == 6;
+                int donor = west ? 2 : arm.BladeSourceFacing;
+                int donorSlot = donor / 4;
+                if (west)
+                {
+                    if (westArmMask == null) westArmMask = PaintedSaberArm.CreateWestArmMask();
+                    armMask = westArmMask;
+                }
+                else
+                {
+                    if (wholeBladeMasks[donorSlot] == null) wholeBladeMasks[donorSlot] = arm.CreateWholeBladeMask();
+                    armMask = wholeBladeMasks[donorSlot];
+                }
+                var rect = sprite.rect;
+                var atlas = sprite.texture;
+                var origin = new Vector2(donor % 4 * rect.width / atlas.width, (1 - donorSlot) * rect.height / atlas.height);
+                var size = new Vector2(rect.width / atlas.width, rect.height / atlas.height);
+                uv = new Vector2[rest.Length];
+                for (int i = 0; i < rest.Length; i++)
+                {
+                    uv[i] = origin + Vector2.Scale(weights[i], size);
+                    if (west) saberArmRest[i] = arm.FitWestArm(rest[i], out saberArmBindings[i]);
+                    bladeRest[i] = arm.ExtendBlade(west ? arm.FitWestBlade(rest[i]) : (Vector2)arm.FitWholeBlade(rest[i])) - arm.Grip;
+                }
+            }
+            else
+            {
+                System.Array.Copy(rest, saberArmRest, rest.Length);
+                for (int i = 0; i < rest.Length; i++) bladeRest[i] = arm.ExtendBlade(rest[i]) - arm.Grip;
+            }
+            saberArmProperties.SetTexture("_SaberCutMask", armMask);
+            saberBladeProperties.SetTexture("_SaberCutMask", armMask);
+            saberArmVertices = new Vector3[rest.Length];
+            saberArmMesh.Clear();
+            saberArmMesh.vertices = saberArmRest;
+            saberArmMesh.uv = uv;
+            saberArmMesh.uv2 = weights;
+            saberArmMesh.SetTriangles(triangles, 0);
+            BuildSaberBlade(arm, bladeRest, uv, triangles);
+            saberBladeMesh.RecalculateBounds();
+            BuildSupportArm(arm.Support, facing, triangles);
+        }
+
+        void BuildSaberBlade(PaintedSaberArm arm, Vector3[] bladeRest, Vector2[] uv, List<int> triangles)
+        {
+            // Extend the painted leather grip under the second fist when both hands join the blade.
+            Vector2 axis = (arm.ExtendedTip - arm.Grip).normalized;
+            Vector2 edge = Vector2.Perpendicular(axis) * .013f;
+            Vector2 front = axis * .048f;
+            Vector2 back = -axis * (PaintedSaberArm.SecondGripSpacing + .023f);
+            int first = bladeRest.Length;
+            var bladeVertices = new List<Vector3>(bladeRest) { back - edge, back + edge, front - edge, front + edge };
+            Vector2 AtlasUv(int x, int y) => new Vector2(x / (float)sprite.texture.width, 1 - y / (float)sprite.texture.height);
+            var bladeUv = new List<Vector2>(uv) { AtlasUv(199, 248), AtlasUv(206, 251), AtlasUv(193, 262), AtlasUv(200, 265) };
+            var bladeLocalUv = new List<Vector2>(weights);
+            for (int i = 0; i < 4; i++) bladeLocalUv.Add(Vector2.left);
+            var bladeTriangles = new List<int>(triangles) { first, first + 2, first + 1, first + 1, first + 2, first + 3 };
+            saberBladeMesh.Clear();
+            saberBladeMesh.SetVertices(bladeVertices);
+            saberBladeMesh.SetUVs(0, bladeUv);
+            saberBladeMesh.SetUVs(1, bladeLocalUv);
+            saberBladeMesh.SetTriangles(bladeTriangles, 0);
+        }
+
+        void BuildSupportArm(PaintedSaberArm.SupportArm arm, int facing, List<int> triangles)
+        {
+            if (supportArmMesh == null)
+            {
+                var layer = new GameObject("Saber support arm");
+                layer.transform.SetParent(transform, false);
+                supportArmMesh = new Mesh { name = "Saber support sleeve", hideFlags = HideFlags.DontSave };
+                supportArmMesh.MarkDynamic();
+                layer.AddComponent<MeshFilter>().sharedMesh = supportArmMesh;
+                supportArmRenderer = layer.AddComponent<MeshRenderer>();
+                supportArmRenderer.sharedMaterial = material;
+                supportArmProperties = new MaterialPropertyBlock();
+                supportArmProperties.SetFloat("_SaberCutMode", 2);
+                supportDonorMask = PaintedSaberArm.SupportArm.CreateDonorMask();
+                supportArmProperties.SetTexture("_SaberCutMask", supportDonorMask);
+                supportBodyMasks = new Texture2D[8];
+            }
+            if (!arm.Hidden)
+            {
+                if (supportBodyMasks[facing] == null) supportBodyMasks[facing] = arm.CreateBodyMask();
+                properties.SetTexture("_SupportCutMask", supportBodyMasks[facing]);
+                properties.SetFloat("_SupportPatchOffset", -arm.Side * 32 / sprite.texture.width);
+            }
+            var size = new Vector2(sprite.rect.width / sprite.texture.width, sprite.rect.height / sprite.texture.height);
+            var uv = new Vector2[rest.Length];
+            supportArmRest = new Vector3[rest.Length];
+            supportArmVertices = new Vector3[rest.Length];
+            supportArmBindings = new Vector3[rest.Length];
+            for (int i = 0; i < rest.Length; i++)
+            {
+                // The supporting sleeve is sampled from the first cell of the atlas.
+                uv[i] = Vector2.up * size.y + Vector2.Scale(weights[i], size);
+                supportArmRest[i] = arm.Fit(rest[i], out supportArmBindings[i]);
+            }
+            supportArmMesh.Clear();
+            supportArmMesh.vertices = supportArmRest;
+            supportArmMesh.uv = uv;
+            supportArmMesh.uv2 = weights;
+            supportArmMesh.SetTriangles(triangles, 0);
+        }
+
+        void RefreshSaberArm(bool drawArm)
+        {
+            if (saberArmRenderer == null) return;
+            var arm = paintedGesture.SaberArm;
+            bool visible = drawArm && source.enabled;
+            properties.SetFloat("_SaberCutMode", visible ? 1 : 0);
+            bool supportVisible = visible && twoHandedGrip > 0;
+            if (!supportVisible && supportArmRenderer.enabled) supportArmMesh.vertices = supportArmRest;
+            supportArmRenderer.enabled = supportVisible;
+            properties.SetFloat("_SupportCut", supportVisible && !arm.Value.Support.Hidden ? 1 : 0);
+            if (!visible && saberArmRenderer.enabled) saberArmMesh.vertices = saberArmRest;
+            saberArmRenderer.enabled = saberBladeRenderer.enabled = visible;
+            if (!visible) return;
+            saberArmMesh.vertices = saberArmVertices;
+            saberArmMesh.RecalculateBounds();
+            saberArmRenderer.sortingLayerID = source.sortingLayerID;
+            saberArmRenderer.sortingOrder = source.sortingOrder + (arm.Value.BehindBody ? -1 : 2);
+            saberArmProperties.SetColor("_Color", source.color);
+            saberArmRenderer.SetPropertyBlock(saberArmProperties);
+            saberBladeRenderer.sortingLayerID = source.sortingLayerID;
+            saberBladeRenderer.sortingOrder = saberArmRenderer.sortingOrder - 1;
+            saberBladeProperties.SetColor("_Color", source.color);
+            saberBladeProperties.SetFloat("_SaberGripExtension", twoHandedGrip);
+            saberBladeRenderer.SetPropertyBlock(saberBladeProperties);
+
+            if (!supportVisible) return;
+            supportArmMesh.vertices = supportArmVertices;
+            supportArmMesh.RecalculateBounds();
+            supportArmRenderer.sortingLayerID = source.sortingLayerID;
+            supportArmRenderer.sortingOrder = source.sortingOrder + (arm.Value.Support.Hidden ? -3 : 3);
+            supportArmProperties.SetColor("_Color", source.color);
+            supportArmRenderer.SetPropertyBlock(supportArmProperties);
+        }
+
+        Vector2 CastOffset(Vector2 point, float handWeight, float height, float gripWeight, float sine, float cosine)
+        {
+            // The head and chest inherit the supported body translation. The arm adds its own motion.
+            if (paintedGesture.KeepsBodyShape)
+                return castTorso * HeroLayerMath.PlantedSupport(height) + castHand * handWeight;
+
+            Vector2 fromGrip = point - paintedGesture.Grip;
+            var rotated = new Vector2(cosine * fromGrip.x - sine * fromGrip.y, sine * fromGrip.x + cosine * fromGrip.y);
+            return castTorso * Mathf.Lerp(CastTorsoWeight(height), gripWeight, handWeight) + (castHand + rotated - fromGrip) * handWeight;
+        }
 
         public void SetCombatPose(float lean, float extension, bool dashing, float dt)
         {
@@ -504,7 +1275,8 @@ namespace SlashDemo
             int count = paintedRig.HasValue ? gridVertexCount : gridVertexCount * parts + 16;
             rest=new Vector3[count];vertices=new Vector3[count];weights=new Vector2[count];
             legBindings=new HeroGaitMath.Binding[count];
-            if (paintedRig.HasValue) gestureWeights = new float[count];
+            gestureWeights = paintedRig.HasValue && !paintedGesture.SaberArm.HasValue ? new float[count] : null;
+            saberArmBindings = paintedGesture.SaberArm.HasValue ? new Vector3[count] : null;
             int direction=sprite.name=="Hero back"?4:0;
             string[] names={"Hero S","Hero SE","Hero E","Hero NE","Hero N","Hero NW","Hero W","Hero SW"};
             for(int i=0;i<names.Length;i++) if(sprite.name==names[i]) direction=i;
@@ -521,7 +1293,14 @@ namespace SlashDemo
                     int i=gridIndex+part*gridVertexCount;
                     rest[i]=new Vector3(bounds.min.x+bounds.size.x*u,bounds.min.y+bounds.size.y*v);
                     weights[i]=new Vector2(u,v);legBindings[i]=HeroGaitMath.Bind(rest[i],legRig);
-                    if (gestureWeights != null) gestureWeights[i] = paintedGesture.Weight(rest[i]);
+                    if (visibleProfileLegRows != null)
+                    {
+                        float limit = VisibleProfileLegWeight(rest[i]);
+                        legBindings[i].left = Mathf.Min(legBindings[i].left, limit);
+                        legBindings[i].right = Mathf.Min(legBindings[i].right, limit);
+                    }
+                    if (saberArmBindings != null) saberArmBindings[i] = paintedGesture.SaberArm.Value.Bind(rest[i]);
+                    else if (gestureWeights != null) gestureWeights[i] = paintedGesture.Weight(rest[i]);
                     uv[i]=new Vector2((rect.x+rect.width*u)/sprite.texture.width,(rect.y+rect.height*v)/sprite.texture.height);
                     if (colors != null)
                         colors[i]=new Color(legBindings[i].left,legBindings[i].right,part*.5f,HeroGaitMath.SoleMask(rest[i],legBindings[i],legRig));
@@ -539,8 +1318,10 @@ namespace SlashDemo
                 mesh.Clear();
                 mesh.vertices = rest;
                 mesh.uv = uv;
+                mesh.uv2 = weights;
                 mesh.SetTriangles(paintedTriangles, 0);
                 material.mainTexture = sprite.texture;
+                if (paintedGesture.SaberArm is PaintedSaberArm arm) BuildSaberArm(arm, uv, paintedTriangles);
                 return;
             }
             var standing=HeroGaitMath.Prepare(legRig,0,0,Vector2.zero);
@@ -597,7 +1378,10 @@ namespace SlashDemo
             frame.upperBlend = Attacking ? 0 : blend * upperBodyWeight;
             Vector2 leftStep = frame.left.sole - frame.left.rest.sole;
             Vector2 rightStep = frame.right.sole - frame.right.rest.sole;
-            if (paintedRig.HasValue)
+            Vector2 leftKnee = Vector2.zero, rightKnee = Vector2.zero;
+            if (legRig.preserveBootShape)
+                HeroGaitMath.FitPaintedStride(legRig, frame, ref leftStep, ref rightStep, out leftKnee, out rightKnee);
+            else if (paintedRig.HasValue)
             {
                 // The gap between the boots is part of the same painted surface.
                 float closing = Mathf.Max(0, leftStep.x - rightStep.x) * .5f;
@@ -605,7 +1389,25 @@ namespace SlashDemo
                 rightStep.x += closing;
             }
             Vector2 waist=new Vector2(0,sprite.bounds.min.y+sprite.bounds.size.y*.52f);
-            bool posing = castAngle != 0 || castTorso != Vector2.zero || castHand != Vector2.zero;
+            bool posing = saberArmMoving || castAngle != 0 || castTorso != Vector2.zero || castHand != Vector2.zero;
+            // The cutout supplies the same length of saber in the carry and attack poses.
+            bool drawSaberArm = saberArmBindings != null;
+            Vector3 saberCarry = Vector3.zero;
+            if (drawSaberArm && !posing)
+            {
+                Vector2 shoulder = paintedGesture.SaberArm.Value.Shoulder;
+                var bounds = sprite.bounds;
+                var shoulderUv = new Vector2(Mathf.InverseLerp(bounds.min.x, bounds.max.x, shoulder.x),
+                    Mathf.InverseLerp(bounds.min.y, bounds.max.y, shoulder.y));
+                // Carry the whole sleeve and blade with the shoulder throughout the stride.
+                saberCarry = HeroGaitMath.UpperBodyDeform(shoulder, shoulderUv, frame) - (Vector3)shoulder;
+            }
+            if (drawSaberArm)
+            {
+                var blade = saberBladeRenderer.transform;
+                blade.localPosition = saberArmMoving ? castTorso + saberWeaponPose.Grip : (Vector3)paintedGesture.Grip + saberCarry;
+                blade.localRotation = saberArmMoving ? saberWeaponPose.Rotation : Quaternion.identity;
+            }
             float sine = Mathf.Sin(castAngle), cosine = Mathf.Cos(castAngle);
             float gripTorsoWeight = CastTorsoWeight(paintedGesture.Grip.y - sprite.bounds.min.y);
             for(int i=0;i<vertices.Length;i++)
@@ -614,17 +1416,33 @@ namespace SlashDemo
                 if (paintedRig.HasValue)
                 {
                     var binding = legBindings[i];
-                    vertices[i] = HeroGaitMath.DeformPainted(p, weights[i], binding, frame, leftStep, rightStep);
-                    if (posing)
+                    Vector2 leftOffset = leftStep, rightOffset = rightStep;
+                    if (legRig.preserveBootShape)
                     {
-                        float handWeight = gestureWeights[i];
-                        float torsoWeight = Mathf.Lerp(CastTorsoWeight(weights[i].y), gripTorsoWeight, handWeight);
-                        Vector2 fromGrip = (Vector2)p - paintedGesture.Grip;
-                        Vector2 rotated = new Vector2(cosine * fromGrip.x - sine * fromGrip.y,
-                            sine * fromGrip.x + cosine * fromGrip.y);
-                        Vector2 gesture = (castHand + rotated - fromGrip) * handWeight;
-                        vertices[i] += (Vector3)(castTorso * torsoWeight + gesture);
+                        leftOffset = HeroGaitMath.PaintedShinOffset(p.y, leftStep, leftKnee);
+                        rightOffset = HeroGaitMath.PaintedShinOffset(p.y, rightStep, rightKnee);
                     }
+                    vertices[i] = HeroGaitMath.DeformPainted(p, weights[i], binding, frame, leftOffset, rightOffset);
+                    if (drawSaberArm)
+                    {
+                        if (posing)
+                        {
+                            // The body never receives any of the shoulder, elbow or wrist offsets.
+                            vertices[i] += (Vector3)(castTorso * Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.10f, .33f, weights[i].y)));
+                            Vector3 armPoint = saberArmRest[i];
+                            saberArmVertices[i] = armPoint + (Vector3)SaberArmOffset(armPoint, saberArmBindings[i]);
+                            if (twoHandedGrip > 0)
+                            {
+                                Vector3 supportPoint = supportArmRest[i];
+                                supportArmVertices[i] = supportPoint
+                                    + (Vector3)(castTorso + supportArmPose.Offset(supportPoint, supportArmBindings[i]));
+                            }
+                        }
+                        else saberArmVertices[i] = saberArmRest[i] + saberCarry;
+                    }
+                    else if (posing)
+                        vertices[i] += (Vector3)CastOffset(p, gestureWeights[i], weights[i].y,
+                            gripTorsoWeight, sine, cosine);
                     // Shift each boot inward, fading the offset into the painted hips.
                     vertices[i].x = (vertices[i].x + stanceInset * (binding.left - binding.right)) * mirror;
                     continue;
@@ -646,17 +1464,33 @@ namespace SlashDemo
             }
             mesh.RecalculateBounds();meshRenderer.sortingLayerID=source.sortingLayerID;
             meshRenderer.sortingOrder=source.sortingOrder;meshRenderer.enabled=source.enabled;
+            RefreshSaberArm(drawSaberArm);
             properties.SetColor("_Color",source.color);properties.SetFloat("_WalkBlend",blend);meshRenderer.SetPropertyBlock(properties);
+            if (profileLegRest != null)
+            {
+                bool farIsLeft = legRig.left.sole.y > legRig.right.sole.y;
+                RefreshProfileLeg(farIsLeft ? leftStep : rightStep, farIsLeft ? leftKnee : rightKnee);
+            }
         }
         void LateUpdate(){Refresh();}
         public void UseStaticBody()
         {
             if(source!=null) source.forceRenderingOff=false;
+            if(profileLegRenderer!=null) profileLegRenderer.enabled=false;
+            if(saberArmRenderer!=null) saberArmRenderer.enabled=false;
+            if(saberBladeRenderer!=null) saberBladeRenderer.enabled=false;
+            if(supportArmRenderer!=null) supportArmRenderer.enabled=false;
             if(meshRenderer!=null) meshRenderer.enabled=false;enabled=false;
         }
         void OnDestroy()
         {
-            if(source!=null) source.forceRenderingOff=false;Release(mesh);Release(material);
+            if(source!=null) source.forceRenderingOff=false;Release(mesh);Release(profileLegMesh);Release(saberArmMesh);Release(material);
+            if(saberMasks!=null) foreach (var mask in saberMasks) Release(mask);
+            if(wholeBladeMasks!=null) foreach (var mask in wholeBladeMasks) Release(mask);
+            Release(westArmMask);
+            Release(supportArmMesh); Release(supportDonorMask);
+            Release(saberBladeMesh);
+            if(supportBodyMasks!=null) foreach (var mask in supportBodyMasks) Release(mask);
         }
         static void Release(Object value)
         {
