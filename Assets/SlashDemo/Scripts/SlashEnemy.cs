@@ -183,9 +183,10 @@ namespace SlashDemo
 
         public void TakeHit(int amount, Vector2 direction, float force, bool heavy = false, bool interrupt = true, bool critical = false)
         {
-            if (!Alive || (apeCombat != null && apeCombat.IsAirborne)) return;
+            if (!Alive || (apeCombat != null && apeCombat.IsAirborne) || finalBoss?.IsTransitionInvulnerable == true) return;
             if (amount > 0 && cultivator != null) amount = cultivator.MitigateHit(amount);
-            Health = Mathf.Max(0, Health - amount);
+            int remaining = Mathf.Max(0, Health - amount);
+            Health = finalBoss?.LimitHealthForTransition(remaining) ?? remaining;
             flash = 0.10f;
             // All enemies take damage without resetting attacks, poses or movement.
             // Keep force/interrupt arguments compatible with existing sword and skill callers.
@@ -197,7 +198,11 @@ namespace SlashDemo
             arena.CameraRig.Punch(heavy || !Alive ? 1 : .35f);
             if (Alive)
             {
-                if (amount > 0) cultivator?.OnSurvivedHit();
+                if (amount > 0)
+                {
+                    cultivator?.OnSurvivedHit();
+                    finalBoss?.AdvanceBloodSaberStage();
+                }
                 return;
             }
             warning.gameObject.SetActive(false);
@@ -213,6 +218,13 @@ namespace SlashDemo
             arena.EnemyKilled(this);
             deathAge = 0;
             presentation.SetDeathProgress(0);
+        }
+
+        internal bool TrySpendHealth(int amount)
+        {
+            if (amount <= 0 || amount >= Health) return false;
+            Health -= amount;
+            return true;
         }
 
         internal void Heal(int amount)

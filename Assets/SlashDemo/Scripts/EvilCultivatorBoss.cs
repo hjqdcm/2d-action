@@ -8,20 +8,27 @@ namespace SlashDemo
     {
         public enum Style { BloodSaber, SoulBell }
         enum Phase { Pursuit, BloodMist, Windup, Recovery }
+        enum BloodSaberStage { Opening, BloodFrenzy, FiveBlades, ArenaMist }
 
         const float BodyRadius = .43f, Height = 2.25f;
         const int AtlasColumns = 4, AtlasRows = 2;
         // The packed atlas uses 512px cells with 448px of art height and a 32px foot margin.
         const float ArtHeightRatio = 448f / 512f;
         static readonly Vector2 ArtPivot = new Vector2(.5f, 32f / 512f);
-        const int OutlinesPerWave = 4, CurveSegments = 40;
+        const int OutlinesPerWave = 5, CurveSegments = 40;
         const int LifestealMultiplier = 10;
-        const float BloodSaberDamageScale = .5f;
+        const float BloodSaberDamageScale = .35f;
+        const int BloodFrenzyHealthPercent = 10;
+        const float BloodFrenzyDuration = 20, BloodFrenzyCooldown = 20;
+        const float BloodFrenzyDamage = 1.20f, BloodFrenzyAttackSpeed = 1.25f, BloodFrenzyMoveSpeed = 1.10f;
+        const string BloodFrenzyName = "血祭";
+        static readonly string BloodFrenzyDescription =
+            $"消耗当前气血的 {BloodFrenzyHealthPercent}%，在 {BloodFrenzyDuration:0} 秒内令伤害提高 {BloodFrenzyDamage - 1:P0}、攻速提高 {BloodFrenzyAttackSpeed - 1:P0}、移速提高 {BloodFrenzyMoveSpeed - 1:P0}。冷却 {BloodFrenzyCooldown:0} 秒。";
         static readonly CombatBuffView LifestealBuff = new CombatBuffView("blood-saber-lifesteal", "吸血", 0,
             description: $"常驻。对玩家造成伤害后，恢复实际扣除气血量的 {LifestealMultiplier} 倍，最多恢复到气血上限。");
 
         internal enum Shape { Arc, Lane, Circle, Ring }
-        enum ImpactStyle { Standard, Seal, BloodCut, BloodTide, FlyingCrescents }
+        enum ImpactStyle { Standard, Seal, BloodCut, BloodTide, BloodFrenzy, FlyingCrescents, ArenaMistTransition }
 
         readonly struct Zone
         {
@@ -83,7 +90,6 @@ namespace SlashDemo
             public readonly AttackPose Ready, Contact, Follow;
             public readonly float Release, FollowTime;
             public readonly Vector2 SwingArc;
-            public readonly bool Spins;
             public readonly int SweepDirection;
 
             public AttackMotion(float release, float followTime, Vector2 swingArc,
@@ -93,28 +99,36 @@ namespace SlashDemo
                 Ready = ready; Contact = contact; Follow = follow;
             }
 
-            public AttackMotion(float release, float followTime, bool spins = false, int sweepDirection = 0) : this()
+            public AttackMotion(float release, float followTime, int sweepDirection = 0) : this()
             {
                 Release = release; FollowTime = followTime;
-                Spins = spins;
                 SweepDirection = sweepDirection;
             }
         }
 
         static readonly AttackMotion DownwardCut = new AttackMotion(.27f, .19f);
         static readonly AttackMotion HorizontalCut = new AttackMotion(.32f, .19f, sweepDirection: 1);
-        static readonly AttackMotion ReturnCut = new AttackMotion(.32f, .19f, sweepDirection: -1);
-        static readonly AttackMotion WhirlwindCut = new AttackMotion(.42f, .19f, spins: true);
+        static readonly AttackMotion GroundStab = new AttackMotion(.42f, .19f);
+        static readonly AttackMotion FlyingBladeCast = new AttackMotion(.36f, .22f);
+        const float FlyingBladeExtensionEnd = .85f;
+        const float GroundStabWindup = 1.45f, GroundStabRecovery = .68f;
+        const float ArenaMistPoseBlendTime = .20f;
+        const float SaberStepTurnTime = .10f;
+        static readonly Skill ArenaMistTransition = new Skill("血雾升腾", 0, GroundStabRecovery, 0,
+            new Wave(GroundStabWindup, 0, true, GroundStab, ImpactStyle.ArenaMistTransition));
         static readonly Skill BloodMistCut = new Skill("血雾突袭", 4, .50f, 7,
             new Wave(1, 1.10f, true, HorizontalCut, new Zone(Shape.Arc, .90f, 105)));
         static readonly float[] BloodMistLandingAngles = { 0, 35, -35, 65, -65 };
         const float BloodMistOpeningDelay = 5;
         const float BloodMistWindup = .42f;
         const float BloodMistSlashWindup = .40f;
+        const float BloodTideMistDuration = 8;
+        const int BloodTideMistDamage = 2;
         const float SaberAnimationSpeed = 1.5f;
         const float SaberReadyAngle = 42;
+        const float BloodFrenzyReadyAngle = 60;
         const float SaberSweepFollowAngle = 14;
-        const float WhirlwindReadyAngle = 23;
+        const float SaberFinishAngle = -32;
 
         static readonly AttackMotion BellShake = new AttackMotion(.19f, .15f, new Vector2(.020f, .005f),
             new AttackPose(.005f, .016f, .077f, -.006f),
@@ -142,21 +156,26 @@ namespace SlashDemo
             new AttackPose(-.009f, -.054f, -.062f, .008f));
 
         // Zone distances are in units of the tuned enemy attack range (2.875 m by default).
+        static Skill FlyingBlades(params Zone[] lanes) => new Skill("三途飞刃", 2.32f, .66f, 5.4f,
+            new Wave(1.42f, 1.36f, true, FlyingBladeCast, ImpactStyle.FlyingCrescents, lanes));
+
+        static readonly Skill FiveBladeSkill = FlyingBlades(
+            new Zone(Shape.Lane, 2.5f, .19f, -32), new Zone(Shape.Lane, 2.5f, .19f, -16),
+            new Zone(Shape.Lane, 2.5f, .19f),
+            new Zone(Shape.Lane, 2.5f, .19f, 16), new Zone(Shape.Lane, 2.5f, .19f, 32));
+
         static readonly Skill[] SaberSkills =
         {
             new Skill("饮血横斩", 1, .42f, 2.1f,
                 new Wave(1.0f, 1, true, HorizontalCut, new Zone(Shape.Arc, 1.06f, 150))),
             new Skill("贯血刀", 1.8f, .53f, 3.4f,
                 new Wave(1.16f, 1.18f, true, DownwardCut, ImpactStyle.BloodCut, new Zone(Shape.Lane, 1.96f, .22f))),
-            new Skill("回锋双斩", 1.06f, .55f, 4.6f,
-                new Wave(1, .82f, true, HorizontalCut, new Zone(Shape.Arc, 1.14f, 110, -24)),
-                new Wave(1.3f, 1, true, ReturnCut, new Zone(Shape.Arc, 1.23f, 155, 18))),
-            new Skill("裂地血潮", 1.24f, .68f, 6.3f,
-                new Wave(1.45f, 1.04f, true, WhirlwindCut, ImpactStyle.BloodTide, new Zone(Shape.Circle, 1.24f)),
-                new Wave(1.35f, 1.3f, false, WhirlwindCut, ImpactStyle.BloodTide, new Zone(Shape.Circle, 2.05f))),
-            new Skill("三途飞刃", 2.32f, .66f, 5.4f,
-                new Wave(1.42f, 1.36f, true, DownwardCut, ImpactStyle.FlyingCrescents, new Zone(Shape.Lane, 2.5f, .19f, -32),
-                    new Zone(Shape.Lane, 2.5f, .19f), new Zone(Shape.Lane, 2.5f, .19f, 32)))
+            new Skill(BloodFrenzyName, 1.24f, .42f, BloodFrenzyCooldown,
+                new Wave(.94f, 0, true, DownwardCut, ImpactStyle.BloodFrenzy)),
+            new Skill("裂地血潮", 1.24f, GroundStabRecovery, 6.3f,
+                new Wave(GroundStabWindup, 1.04f, true, GroundStab, ImpactStyle.BloodTide, new Zone(Shape.Circle, 1.24f))),
+            FlyingBlades(new Zone(Shape.Lane, 2.5f, .19f, -32),
+                new Zone(Shape.Lane, 2.5f, .19f), new Zone(Shape.Lane, 2.5f, .19f, 32))
         };
 
         static readonly Skill[] BellSkills =
@@ -231,8 +250,8 @@ namespace SlashDemo
                 291, 180, 315, 181, 321, 214, 322, 252, 321, 287, 311, 306, 296, 300, 292, 285, 297, 243)
         };
 
-        // Trace the visible sleeve, grip and blade in each cell. In the two occluded
-        // views the cape covers the hand and only the visible blade is extracted.
+        // Trace the sleeve, grip and blade in each cell. The two occluded views
+        // supply their own joints and borrow the sleeve art from the east-facing frame.
         static readonly WeaponRig[] SaberWeapons =
         {
             new WeaponRig(190, 272, 112, 387, 206, 178, 193, 225, 199, 275, false, 0,
@@ -340,16 +359,25 @@ namespace SlashDemo
 
         public Style CombatStyle { get; private set; }
         internal CombatBuffView? PassiveBuff => UsesBell ? null : LifestealBuff;
+        internal CombatBuffView? FrenzyBuff => bloodFrenzyRemaining > 0
+            ? new CombatBuffView("blood-saber-blood-frenzy", BloodFrenzyName, 0,
+                description: BloodFrenzyDescription, timeLeft: bloodFrenzyRemaining, duration: BloodFrenzyDuration)
+            : null;
         internal bool ShowsWorldHealth => UsesBell;
         internal bool IsChasing => phase == Phase.Pursuit;
         public string CastingSkill => phase is Phase.BloodMist or Phase.Windup ? skill.Name : null;
+        internal bool IsTransitionInvulnerable => isActiveAndEnabled && (phase is Phase.Windup or Phase.Recovery)
+            && skill.Waves[0].Impact == ImpactStyle.ArenaMistTransition;
         bool UsesBell => CombatStyle == Style.SoulBell;
         Skill[] Skills => UsesBell ? BellSkills : SaberSkills;
         Wave CurrentWave => skill.Waves[waveIndex];
         WeaponRig CurrentWeapon => (UsesBell ? BellWeapons : SaberWeapons)[facingIndex];
-        float RageTempo => enemy.Health <= enemy.maxHealth / 2 ? .86f : 1;
+        float SaberFacingX => DemoArt.Direction(facingIndex * 45 - 90).x;
+        float DamageMultiplier => bloodFrenzyRemaining > 0 ? BloodFrenzyDamage : 1;
 
         Phase phase;
+        BloodSaberStage bloodSaberStage;
+        BloodArenaMist arenaMist;
         SlashArena arena;
         SlashEnemy enemy;
         ObliqueActor actor;
@@ -366,12 +394,21 @@ namespace SlashDemo
         Skill skill;
         AttackMotion lastMotion;
         Vector2 sweepAngles;
-        float lastSweepEnd;
         int facingIndex, nextSkill, waveIndex;
         Vector2 origin, target, previousGround;
         Vector2 aim = Vector2.down, castAim;
         float age, windup, reach, recovery;
         float bloodMistCooldown = BloodMistOpeningDelay;
+        float bloodFrenzyRemaining;
+        float saberBreathPhase;
+        float saberTurnDelay;
+        int pendingSaberFacing = -1;
+        // XY is the torso offset in art units. Z is the screen-plane lean in degrees.
+        Vector3 saberActionPose;
+        float saberActionBend;
+        Vector2 bloodTideMistCenter;
+        float bloodTideMistRadius;
+        double bloodTideMistRemaining, bloodMistExposure;
         float playerRadius;
 
         internal static Texture2D LoadArt(Style style)
@@ -468,6 +505,11 @@ namespace SlashDemo
         {
             var player = arena.Player;
             if (player == null || !player.IsAlive) { Stop(); return; }
+            AdvanceBloodSaberStage();
+            float boostedTime = Mathf.Min(dt, bloodFrenzyRemaining);
+            if (boostedTime > 0) SetBloodFrenzy(bloodFrenzyRemaining - boostedTime);
+            AdvanceMistDamage(player, dt);
+            if (!player.IsAlive) { Stop(); return; }
             for (int i = 0; i < cooldowns.Length; i++)
                 cooldowns[i] = Mathf.Max(0, cooldowns[i] - dt);
             bloodMistCooldown = Mathf.Max(0, bloodMistCooldown - dt);
@@ -475,7 +517,24 @@ namespace SlashDemo
             Vector2 ground = body.position;
             Vector2 travel = ground - previousGround;
             previousGround = ground;
-            age += dt;
+            age += dt + boostedTime * (BloodFrenzyAttackSpeed - 1);
+            if (!UsesBell)
+            {
+                saberBreathPhase = Mathf.Repeat(saberBreathPhase + dt * 2.8f, Mathf.PI * 2);
+                if (phase == Phase.Windup && pendingSaberFacing >= 0 && age >= saberTurnDelay)
+                {
+                    SetFacing(pendingSaberFacing);
+                    pendingSaberFacing = -1;
+                }
+                if (phase != Phase.Pursuit)
+                {
+                    float stance = phase == Phase.Recovery
+                        ? 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(recovery * .65f, recovery, age)) : 1;
+                    walk.AdvanceSaberPlant(dt, stance);
+                    actor.SetPose(Vector2.zero, walk.Bob, 0);
+                }
+                UpdateSaberBodyPose();
+            }
             switch (phase)
             {
                 case Phase.Pursuit:
@@ -495,16 +554,24 @@ namespace SlashDemo
                 case Phase.Recovery:
                     if (!UsesBell)
                     {
-                        float poseAge = age * SaberAnimationSpeed;
-                        float gripReleaseStart = lastMotion.SweepDirection == 0 ? 0 : lastMotion.FollowTime;
-                        float progress = Mathf.InverseLerp(gripReleaseStart, recovery, poseAge);
-                        float follow = poseAge < lastMotion.FollowTime ? .5f * poseAge / lastMotion.FollowTime
-                            : Mathf.Lerp(.5f, 1, Mathf.InverseLerp(lastMotion.FollowTime, recovery, poseAge));
-                        ApplySaberFollow(follow, 1 - Mathf.SmoothStep(0, 1, progress));
+                        if (UsesGroundStab(skill.Waves[0].Impact)) AnimateGroundStabRecovery();
+                        else if (lastMotion.SweepDirection != 0) AnimateHorizontalFollow();
+                        else
+                        {
+                            float follow = Mathf.SmoothStep(0, 1, age / lastMotion.FollowTime);
+                            float hold = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.04f, recovery, age));
+                            if (skill.Waves[0].Impact == ImpactStyle.BloodFrenzy) ApplyBloodFrenzyPose(hold);
+                            else if (skill.Waves[0].Impact == ImpactStyle.FlyingCrescents) ApplyFlyingBlades(1, follow, hold);
+                            else ApplySaberPose(Mathf.Lerp(SaberFinishAngle, -54, follow), hold);
+                        }
                     }
                     else if (age < lastMotion.FollowTime) FollowThrough();
                     else BlendPose(lastMotion.Follow, default, Mathf.InverseLerp(lastMotion.FollowTime, recovery, age));
-                    if (age >= recovery) phase = Phase.Pursuit;
+                    if (age >= recovery)
+                    {
+                        if (!UsesBell) walk.EndSaberPlant();
+                        phase = Phase.Pursuit;
+                    }
                     break;
             }
         }
@@ -512,16 +579,19 @@ namespace SlashDemo
         internal void FixedTick(float dt)
         {
             var player = arena.Player;
+            float moveSpeed = bloodFrenzyRemaining > 0 ? enemy.moveSpeed * BloodFrenzyMoveSpeed : enemy.moveSpeed;
             var velocity = IsChasing && player != null && player.IsAlive
-                ? navigation.ChaseDirection(body.position, player.transform.position) * enemy.moveSpeed : Vector2.zero;
+                ? navigation.ChaseDirection(body.position, player.transform.position) * moveSpeed : Vector2.zero;
             var constrained = navigation.ConstrainVelocity(velocity, dt);
             body.linearVelocity = constrained;
             if (constrained.sqrMagnitude >= .0001f) Face(constrained, true);
         }
 
-        void Face(Vector2 direction, bool hysteresis)
+        void Face(Vector2 direction, bool hysteresis) =>
+            SetFacing(HeroFacingMath.Direction(direction, hysteresis ? facingIndex : -1, arena.View.elevation));
+
+        void SetFacing(int index)
         {
-            int index = HeroFacingMath.Direction(direction, hysteresis ? facingIndex : -1, arena.View.elevation);
             if (index == facingIndex) return;
             facingIndex = index;
             skin.sprite = frames[index];
@@ -532,13 +602,86 @@ namespace SlashDemo
 
         HeroGaitMath.Rig WalkRig(int index) => (UsesBell ? BellFeet : SaberFeet)[index].Rig(index);
 
+        void UpdateSaberBodyPose()
+        {
+            float breath = Mathf.Sin(saberBreathPhase);
+            Vector3 pose = new Vector3(breath * .003f, breath * .008f, breath * .65f);
+            float brace = 0;
+            walk.SetSaberPoseBlend(phase == Phase.Windup && CurrentWave.Impact == ImpactStyle.ArenaMistTransition
+                ? Mathf.SmoothStep(0, 1, age / ArenaMistPoseBlendTime) : 1);
+            if (phase == Phase.Windup)
+            {
+                var wave = CurrentWave;
+                float side = Mathf.Abs(castAim.x) > .28f ? Mathf.Sign(castAim.x) : CurrentWeapon.Side;
+                if (wave.Impact == ImpactStyle.BloodFrenzy)
+                {
+                    float raise = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(saberTurnDelay, windup, age));
+                    saberActionPose = new Vector3(-side * .012f, .025f, side * 2.8f) * raise;
+                    saberActionBend = .14f * raise;
+                }
+                else
+                {
+                    if (wave.Motion.SweepDirection != 0)
+                    {
+                        float swing = DemoArt.Direction(sweepAngles.y).x - DemoArt.Direction(sweepAngles.x).x;
+                        if (Mathf.Abs(swing) > .2f) side = Mathf.Sign(swing);
+                    }
+                    float releaseStart = AttackReleaseStart(wave.Motion);
+                    float charge = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(saberTurnDelay, releaseStart, age));
+                    float releaseProgress = Mathf.InverseLerp(releaseStart, windup, age);
+                    float release = Mathf.SmoothStep(0, 1, releaseProgress);
+                    bool groundStab = UsesGroundStab(wave.Impact);
+                    bool sweep = wave.Motion.SweepDirection != 0;
+                    bool flyingBlades = wave.Impact == ImpactStyle.FlyingCrescents;
+                    if (flyingBlades) side = FlyingBladeSide;
+                    var ready = groundStab ? new Vector3(0, .021f, 0)
+                        : new Vector3(-side * (sweep ? .047f : .030f), .010f, side * (sweep ? 6f : 4f));
+                    var contact = groundStab ? new Vector3(side * .012f, -.065f, -side * 2.2f)
+                        : new Vector3(side * (sweep ? .043f : .036f), sweep ? -.044f : -.028f, -side * (sweep ? 6f : 4.3f));
+                    if (flyingBlades)
+                    {
+                        ready = new Vector3(-side * .022f, .010f, side * 3f);
+                        contact = new Vector3(side * .048f, -.034f, -side * 5f);
+                    }
+                    float drive = groundStab ? release * release : flyingBlades ? FlyingBladeExtension(releaseProgress) : release;
+                    saberActionPose = Vector3.Lerp(ready * charge, contact, drive);
+                    saberActionBend = Mathf.Lerp(.20f * charge, groundStab ? 1 : sweep ? .70f : .45f, drive);
+                }
+                pose += saberActionPose;
+                brace = saberActionBend;
+            }
+            else if (phase == Phase.Recovery)
+            {
+                float riseStart = UsesGroundStab(skill.Waves[0].Impact) ? .10f : 0;
+                float planted = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(riseStart, recovery, age));
+                pose += saberActionPose * planted;
+                brace = saberActionBend * planted;
+            }
+
+            walk.SetSaberBodyPose(pose, pose.z, brace);
+        }
+
+        float AttackReleaseStart(AttackMotion motion)
+        {
+            float releaseTime = Mathf.Min(motion.Release, windup * .58f);
+            return windup - (UsesBell ? releaseTime : releaseTime / SaberAnimationSpeed);
+        }
+
         void AnimateWindup()
         {
             var motion = CurrentWave.Motion;
-            float releaseTime = Mathf.Min(motion.Release, windup * .58f);
-            float releaseStart = windup - (UsesBell ? releaseTime : releaseTime / SaberAnimationSpeed);
+            bool bloodFrenzy = CurrentWave.Impact == ImpactStyle.BloodFrenzy;
+            bool groundStab = UsesGroundStab(CurrentWave.Impact);
+            float releaseStart = AttackReleaseStart(motion);
             float followTime = waveIndex == 0 ? 0 : lastMotion.FollowTime;
-            if (!UsesBell) AnimateSaber(motion, followTime, releaseStart);
+            if (bloodFrenzy) ApplyBloodFrenzyPose(Mathf.SmoothStep(0, 1, Mathf.InverseLerp(saberTurnDelay, windup, age)));
+            else if (groundStab)
+            {
+                float drive = Mathf.InverseLerp(releaseStart, windup, age);
+                float raise = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(saberTurnDelay, releaseStart * .8f, age));
+                ApplyGroundStab(drive * drive, CurrentWave.Impact == ImpactStyle.ArenaMistTransition ? 1 : raise);
+            }
+            else if (!UsesBell) AnimateSaber(motion, releaseStart);
             else if (age < followTime) FollowThrough();
             else if (age < releaseStart)
             {
@@ -552,16 +695,19 @@ namespace SlashDemo
                 float arm = progress * progress * (2 - progress);
                 ApplyPose(motion.Ready, motion.Contact, arm, motion.SwingArc * (4 * arm * (1 - arm)));
             }
+            if (CurrentWave.Impact == ImpactStyle.ArenaMistTransition) return;
             var weapon = CurrentWeapon;
             Vector3 tip = walk.PaintedCastWorldPoint(weapon.Tip);
-            if (UsesBell || age < releaseStart)
+            if (bloodFrenzy || UsesBell || age < releaseStart)
                 skillEffects.Charge(walk.PaintedCastWorldPoint(weapon.Gesture.Grip), tip, Mathf.Clamp01(age / windup));
             else
             {
                 skillEffects.EndCharge();
-                if (!motion.Spins) skillEffects.TrackSaberTip(tip);
+                if (!groundStab) skillEffects.TrackSaberTip(tip);
             }
         }
+
+        static bool UsesGroundStab(ImpactStyle impact) => impact is ImpactStyle.BloodTide or ImpactStyle.ArenaMistTransition;
 
         void FollowThrough()
         {
@@ -587,95 +733,117 @@ namespace SlashDemo
             walk.SetPaintedCastPose(torso, Vector2.ClampMagnitude(hand * .4f, .052f), 0);
         }
 
-        static float SaberFinishAngle(AttackMotion motion) => motion.Spins ? -8 : -32;
-
-        void AnimateSaber(AttackMotion motion, float followTime, float releaseStart)
+        void AnimateSaber(AttackMotion motion, float releaseStart)
         {
-            float finish = SaberFinishAngle(motion);
-            float readyAngle = motion.Spins ? WhirlwindReadyAngle : SaberReadyAngle;
-            float poseAge = age * SaberAnimationSpeed;
-            if (poseAge < followTime)
-            {
-                ApplySaberFollow(.5f * poseAge / followTime, 1);
-                return;
-            }
+            float windupProgress = Mathf.InverseLerp(saberTurnDelay, releaseStart, age);
+            float load = Mathf.SmoothStep(0, 1, windupProgress * SaberAnimationSpeed);
+            float release = Mathf.InverseLerp(releaseStart, windup, age);
             if (motion.SweepDirection != 0)
             {
-                AnimateHorizontalCut(followTime, releaseStart, poseAge);
+                ApplyHorizontalCut(.5f * release * release, 0, load);
                 return;
             }
-            if (age >= releaseStart)
+            float hold = Mathf.SmoothStep(0, 1, load / .35f);
+            if (CurrentWave.Impact == ImpactStyle.FlyingCrescents)
             {
-                float release = Mathf.InverseLerp(releaseStart, windup, age);
-                if (motion.Spins) AnimateWhirlwind(release, readyAngle, finish);
-                else ApplySaberPose(Mathf.Lerp(readyAngle, finish, Mathf.SmoothStep(0, 1, release)), 1);
+                float draw = Mathf.SmoothStep(0, 1, windupProgress / .80f);
+                ApplyFlyingBlades(release, 0, draw);
                 return;
             }
-
-            float load = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(followTime, releaseStart, poseAge));
-            float startAngle = followTime > 0 ? Mathf.Lerp(SaberFinishAngle(lastMotion), -45, .5f) : -60;
-            ApplySaberPose(Mathf.Lerp(startAngle, readyAngle, load),
-                followTime > 0 ? 1 : Mathf.SmoothStep(0, 1, load / .35f));
+            ApplySaberPose(Mathf.Lerp(Mathf.Lerp(-60, SaberReadyAngle, load), SaberFinishAngle,
+                Mathf.SmoothStep(0, 1, release)), hold);
         }
 
-        void AnimateHorizontalCut(float followTime, float releaseStart, float poseAge)
+        void AnimateHorizontalFollow()
         {
-            if (age >= releaseStart)
+            float swingTime = Mathf.Min(recovery * .60f, windup - AttackReleaseStart(lastMotion));
+            float remainingSwing = 1 - Mathf.Clamp01(age / swingTime);
+            float sweep = 1 - .5f * remainingSwing * remainingSwing;
+            float settle = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(swingTime * .65f, recovery, age));
+            ApplyHorizontalCut(sweep, settle, 1 - settle);
+            if (age <= swingTime)
             {
-                float sweep = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(releaseStart, windup, age));
-                ApplyHorizontalCut(Mathf.Lerp(sweepAngles.x, sweepAngles.y, sweep), 1);
-                return;
+                var weapon = CurrentWeapon;
+                skillEffects.TrackSaberTip(walk.PaintedCastWorldPoint(weapon.Tip));
             }
-
-            float load = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(followTime, releaseStart, poseAge));
-            float angle = followTime > 0
-                ? Mathf.LerpAngle(lastSweepEnd + lastMotion.SweepDirection * SaberSweepFollowAngle, sweepAngles.x, load)
-                : sweepAngles.x;
-            ApplyHorizontalCut(angle, followTime > 0 ? 1 : load);
         }
 
-        void ApplySaberFollow(float follow, float hold)
+        void ApplyBloodFrenzyPose(float blend)
         {
-            if (lastMotion.SweepDirection != 0)
-                ApplyHorizontalCut(lastSweepEnd + lastMotion.SweepDirection * SaberSweepFollowAngle * Mathf.Clamp01(2 * follow), hold);
-            else
-                ApplySaberPose(Mathf.Lerp(SaberFinishAngle(lastMotion), -45, follow), hold);
+            var arm = CurrentWeapon.Gesture.SaberArm.Value;
+            Vector2 axis = DemoArt.Direction(BloodFrenzyReadyAngle);
+            axis.x *= arm.Side;
+            Vector2 grip = arm.RaisedGrip(axis, out Vector2 elbow);
+            walk.SetSaberCastPose(grip, axis, blend, elbow, twoHanded: false);
         }
 
-        void ApplyHorizontalCut(float angle, float hold)
+        void ApplyHorizontalCut(float sweep, float settle, float hold)
         {
-            Vector2 outward = DemoArt.Direction(angle);
-            // The blade sweeps in the ground plane. Project the hands onto the painted sleeves.
-            Vector3 axis = Quaternion.Inverse(arena.View.Rotation) * (Vector3)outward;
+            // Contact is at the center of the fan. The blade and hands keep moving through it into recovery.
+            float overshoot = lastMotion.SweepDirection * SaberSweepFollowAngle * settle;
+            float angle = Mathf.Lerp(sweepAngles.x, sweepAngles.y, sweep) + overshoot;
+            float armAngle = Mathf.Lerp(sweepAngles.x, sweepAngles.y, Mathf.Clamp01(sweep * 1.35f)) + overshoot;
+            float extension = Mathf.Lerp(Mathf.SmoothStep(0, 1, sweep * 2), .35f, settle);
+            Vector3 axis = Quaternion.Inverse(arena.View.Rotation) * (Vector3)DemoArt.Direction(angle);
+            Vector2 reach = ObliqueProjection.ProjectGround(DemoArt.Direction(armAngle), arena.View.elevation);
             var arm = CurrentWeapon.Gesture.SaberArm.Value;
             Vector2 shoulders = (arm.Shoulder + arm.Support.Shoulder) * .5f;
-            Vector2 hand = shoulders + new Vector2(axis.x * .21f, -.095f + axis.y * .11f);
-            walk.SetSaberCastPose(Vector2.zero, hand, axis, hold);
+            Vector2 hand = shoulders + new Vector2(reach.x * Mathf.Lerp(.128f, .185f, extension),
+                Mathf.Lerp(-.094f, -.112f, extension) + reach.y * .085f);
+            walk.SetSaberCastPose(hand, axis, hold, elbowBend: Mathf.Lerp(.82f, .20f, extension));
         }
 
-        void AnimateWhirlwind(float release, float readyAngle, float finish)
+        float FlyingBladeSide => Mathf.Abs(SaberFacingX) > .5f ? Mathf.Sign(SaberFacingX) : CurrentWeapon.Side;
+
+        static float FlyingBladeExtension(float release) => Mathf.SmoothStep(0, 1, release / FlyingBladeExtensionEnd);
+
+        void ApplyFlyingBlades(float release, float follow, float hold)
         {
-            Vector2 screen = ObliqueProjection.ProjectGround(castAim, arena.View.elevation);
-            float start = Mathf.Atan2(screen.y, screen.x) * Mathf.Rad2Deg;
-            float sweep = release * 360;
-            Vector2 direction = ObliqueProjection.UnprojectGround(DemoArt.Direction(start + sweep), arena.View.elevation).normalized;
-            Face(direction, false);
-            ApplySaberPose(Mathf.Lerp(readyAngle, finish, Mathf.Clamp01(release * 3)), 1, direction.x);
-            skillEffects.Whirlwind(origin, start, sweep, CurrentWave.Zones[0].Size * reach);
+            var arm = CurrentWeapon.Gesture.SaberArm.Value;
+            float side = FlyingBladeSide;
+            Vector2 shoulders = (arm.Shoulder + arm.Support.Shoulder) * .5f;
+            float extension = FlyingBladeExtension(release);
+            // Drive the hilt forward from bent elbows before the blade dips into the release.
+            Vector2 grip = shoulders + new Vector2(side * (Mathf.Lerp(.099f, .229f, extension) + .016f * follow),
+                Mathf.Lerp(-.079f, -.158f, extension) - .028f * follow);
+            float tipDip = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.22f, 1, release));
+            Vector2 axis = DemoArt.Direction(Mathf.Lerp(27, -46, tipDip) - 11 * follow);
+            axis.x *= side;
+            walk.SetSaberCastPose(grip, axis, hold, elbowsDown: true);
         }
 
-        void ApplySaberPose(float angle, float hold) => ApplySaberPose(angle, hold, castAim.x);
+        void ApplyGroundStab(float drive, float hold)
+        {
+            var arm = CurrentWeapon.Gesture.SaberArm.Value;
+            float forward = SaberFacingX;
+            Vector2 axis = new Vector2(Mathf.Lerp(arm.Side * .19f, .32f * Mathf.Sign(forward), Mathf.Abs(forward)), -1).normalized;
+            float bladeLength = Vector2.Distance(arm.Grip, arm.ExtendedTip);
+            float raisedHeight = Mathf.Min(arm.Shoulder.y, arm.Support.Shoulder.y) - .028f;
+            float plantedHeight = -.012f - axis.y * bladeLength;
+            // Project the space in front of the body into the eight painted views.
+            // The fixed grip line keeps the blade planted even as the shoulders dip.
+            float gripX = forward * .205f - axis.x * bladeLength * .5f;
+            Vector2 grip = new Vector2(gripX, Mathf.Lerp(raisedHeight, plantedHeight, drive));
+            walk.SetSaberCastPose(walk.SaberGripBeforeBodyPose(grip), axis, hold, elbowsDown: true);
+        }
 
-        void ApplySaberPose(float angle, float hold, float headingX)
+        void AnimateGroundStabRecovery()
+        {
+            float withdraw = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.10f, recovery * .62f, age));
+            float lower = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(recovery * .42f, recovery, age));
+            ApplyGroundStab(1 - withdraw * .82f, 1 - lower);
+        }
+
+        void ApplySaberPose(float angle, float hold)
         {
             var arm = CurrentWeapon.Gesture.SaberArm.Value;
             Vector2 direction = DemoArt.Direction(angle);
-            float forward = Mathf.Abs(headingX) > .3f ? Mathf.Sign(headingX) : CurrentWeapon.Side;
+            float forward = Mathf.Abs(castAim.x) > .3f ? Mathf.Sign(castAim.x) : CurrentWeapon.Side;
             Vector2 axis = new Vector2(forward * direction.x, direction.y);
             // Both extended arms rotate together about the shoulders, with the blade along the hands.
             Vector2 shoulders = (arm.Shoulder + arm.Support.Shoulder) * .5f;
             Vector2 hand = shoulders + axis * .205f;
-            walk.SetSaberCastPose(Vector2.zero, hand, axis, hold);
+            walk.SetSaberCastPose(hand, axis, hold);
         }
 
         bool TryBeginBloodMist(SlashPlayer player, Vector2 delta)
@@ -690,7 +858,7 @@ namespace SlashDemo
             Face(delta, false);
             phase = Phase.BloodMist;
             age = 0;
-            windup = BloodMistWindup * RageTempo;
+            windup = BloodMistWindup;
             bloodMistCooldown = BloodMistCut.Cooldown;
             DrawCircle(warningLines[0], origin, .8f);
             for (int i = 0; i < warningLines.Length; i++) warningLines[i].enabled = i == 0;
@@ -712,6 +880,7 @@ namespace SlashDemo
             if (!TryBloodMistLanding(player, out Vector2 landing))
             {
                 warning.gameObject.SetActive(false);
+                walk.EndSaberPlant();
                 phase = Phase.Pursuit;
                 return;
             }
@@ -720,11 +889,13 @@ namespace SlashDemo
             body.position = landing;
             transform.position = landing;
             origin = previousGround = landing;
+            walk.ResetWalk();
+            walk.BeginSaberPlant();
             navigation.InvalidateRoute();
             actor.SetPose(Vector2.zero, 0, 0);
             Vector2 playerPosition = player.transform.position;
             skillEffects.BloodMist(landing, (playerPosition - landing).normalized * .6f);
-            BeginWave(playerPosition, BloodMistSlashWindup * RageTempo);
+            BeginWave(playerPosition, BloodMistSlashWindup);
         }
 
         bool TryBloodMistLanding(SlashPlayer player, out Vector2 landing)
@@ -765,6 +936,11 @@ namespace SlashDemo
                 var candidate = Skills[index];
                 float range = candidate.Range * enemy.attackRange;
                 if (cooldowns[index] > 0 || delta.sqrMagnitude > range * range) continue;
+                if (candidate.Waves[0].Impact == ImpactStyle.BloodFrenzy
+                    && (bloodSaberStage < BloodSaberStage.BloodFrenzy || enemy.Health <= 1 || bloodFrenzyRemaining > 0))
+                    continue;
+                if (candidate.Waves[0].Impact == ImpactStyle.FlyingCrescents && bloodSaberStage >= BloodSaberStage.FiveBlades)
+                    candidate = FiveBladeSkill;
                 cooldowns[index] = candidate.Cooldown;
                 nextSkill = (index + 1) % Skills.Length;
                 PrepareAttack(candidate, enemy.attackRange);
@@ -781,8 +957,9 @@ namespace SlashDemo
             origin = body.position;
             reach = attackReach;
             body.linearVelocity = Vector2.zero;
-            walk.ResetWalk();
-            actor.SetPose(Vector2.zero, 0, 0);
+            if (UsesBell) walk.ResetWalk();
+            else walk.BeginSaberPlant();
+            actor.SetPose(Vector2.zero, walk.Bob, 0);
         }
 
         void BeginWave(Vector2 playerPosition, float quickWindup = 0)
@@ -798,7 +975,19 @@ namespace SlashDemo
             if (waveIndex == 0)
             {
                 castAim = aim;
-                Face(castAim, false);
+                pendingSaberFacing = -1;
+                saberTurnDelay = 0;
+                if (wave.Impact != ImpactStyle.ArenaMistTransition)
+                {
+                    bool midStride = !UsesBell && walk.HasSaberStride;
+                    int facing = HeroFacingMath.Direction(castAim, midStride ? facingIndex : -1, arena.View.elevation);
+                    if (midStride && facing != facingIndex)
+                    {
+                        pendingSaberFacing = facing;
+                        saberTurnDelay = SaberStepTurnTime;
+                    }
+                    else SetFacing(facing);
+                }
             }
             if (wave.Motion.SweepDirection != 0)
             {
@@ -812,23 +1001,42 @@ namespace SlashDemo
             age = 0;
             // Keep successive impacts farther apart than the player's hit immunity.
             windup = quickWindup > 0 ? quickWindup
-                : Mathf.Max(waveIndex == 0 ? .52f : .85f, enemy.windupTime * wave.Windup * RageTempo);
+                : Mathf.Max(waveIndex == 0 ? .52f : .85f, enemy.windupTime * wave.Windup);
+            if (!UsesBell) UpdateSaberBodyPose();
             AnimateWindup();
             DrawWave(warningLines);
-            warning.gameObject.SetActive(true);
+            warning.gameObject.SetActive(wave.Zones.Length > 0);
         }
 
         void Strike(SlashPlayer player)
         {
             var wave = CurrentWave;
             lastMotion = wave.Motion;
-            lastSweepEnd = sweepAngles.y;
             Vector2 position = player.transform.position;
             bool hit = false;
             Vector2 knockback = aim;
             warning.gameObject.SetActive(false);
             skillEffects.EndCharge();
-            if (wave.Motion.Spins) skillEffects.EndWhirlwind();
+            if (wave.Impact == ImpactStyle.ArenaMistTransition)
+            {
+                arenaMist ??= new BloodArenaMist(GetComponentInParent<TravelMapEnvironment>());
+                arenaMist.Show();
+                BeginRecovery();
+                return;
+            }
+            if (wave.Impact == ImpactStyle.BloodFrenzy)
+            {
+                int cost = Mathf.CeilToInt(enemy.Health * (BloodFrenzyHealthPercent / 100f));
+                if (enemy.TrySpendHealth(cost))
+                {
+                    SetBloodFrenzy(BloodFrenzyDuration);
+                    skillEffects.BloodFrenzy(origin);
+                    arena.Effects.Number(origin, "-" + cost, DemoArt.Red);
+                }
+                BeginRecovery();
+                AdvanceBloodSaberStage();
+                return;
+            }
             bool flyingCrescents = wave.Impact == ImpactStyle.FlyingCrescents;
             Vector3 launch = flyingCrescents
                 ? Vector3.Lerp(walk.PaintedCastWorldPoint(CurrentWeapon.Gesture.Grip),
@@ -847,7 +1055,15 @@ namespace SlashDemo
                 float detail = zone.Shape == Shape.Arc ? zone.Detail : zone.Detail * reach;
                 if (flyingCrescents) skillEffects.FlyingCrescent(launch, center, direction, zone.Size * reach, detail);
                 else if (wave.Impact == ImpactStyle.BloodCut) skillEffects.BloodCut(center, direction, zone.Size * reach, detail);
-                else if (wave.Impact == ImpactStyle.BloodTide) skillEffects.BloodTide(center, zone.Size * reach, waveIndex > 0);
+                else if (wave.Impact == ImpactStyle.BloodTide)
+                {
+                    float radius = zone.Size * reach;
+                    skillEffects.BloodTide(center, radius);
+                    bloodTideMistCenter = center;
+                    bloodTideMistRadius = radius;
+                    bloodTideMistRemaining = BloodTideMistDuration;
+                    skillEffects.ShowBloodTideMist(center, radius);
+                }
                 else skillEffects.Impact(zone.Shape, center, direction, zone.Size * reach, detail,
                     wave.Impact == ImpactStyle.Seal, wave.Damage);
             }
@@ -856,9 +1072,9 @@ namespace SlashDemo
             {
                 int before = player.Health;
                 float damageScale = UsesBell ? 1 : BloodSaberDamageScale;
-                int damage = Mathf.Max(1, Mathf.RoundToInt(enemy.damage * wave.Damage * damageScale));
+                int damage = Mathf.Max(1, Mathf.RoundToInt(enemy.damage * wave.Damage * damageScale * DamageMultiplier));
                 if (player.TakeDamage(damage, knockback) && !UsesBell)
-                    enemy.Heal((before - player.Health) * LifestealMultiplier);
+                    HealFromDamage(before, player);
             }
             if (!player.IsAlive || !enemy.Alive || !isActiveAndEnabled) { Stop(); return; }
             if (++waveIndex < skill.Waves.Length)
@@ -866,10 +1082,81 @@ namespace SlashDemo
                 BeginWave(player.transform.position);
                 return;
             }
+            BeginRecovery();
+        }
+
+        void BeginRecovery()
+        {
             phase = Phase.Recovery;
             age = 0;
-            recovery = skill.Recovery * RageTempo;
+            recovery = skill.Recovery;
         }
+
+        void SetBloodFrenzy(float remaining)
+        {
+            bloodFrenzyRemaining = remaining;
+            walk?.SetSaberBladeGlow(remaining > 0);
+        }
+
+        internal void AdvanceBloodSaberStage()
+        {
+            if (UsesBell || bloodSaberStage == BloodSaberStage.ArenaMist) return;
+            long health = (long)enemy.Health * 4;
+            long maxHealth = enemy.maxHealth;
+            var stage = health < maxHealth ? BloodSaberStage.ArenaMist
+                : health < 2 * maxHealth ? BloodSaberStage.FiveBlades
+                : health < 3 * maxHealth ? BloodSaberStage.BloodFrenzy
+                : BloodSaberStage.Opening;
+            if (stage <= bloodSaberStage) return;
+            var player = arena.Player;
+            if (stage == BloodSaberStage.ArenaMist && (player == null || !player.IsAlive)) return;
+            bloodSaberStage = stage;
+            if (stage == BloodSaberStage.ArenaMist)
+            {
+                if (phase == Phase.BloodMist) SetBloodMistOpacity(1);
+                skillEffects.EndCharge();
+                walk.CaptureSaberPose();
+                PrepareAttack(ArenaMistTransition, enemy.attackRange);
+                BeginWave(player.transform.position);
+            }
+        }
+
+        internal int LimitHealthForTransition(int remaining)
+        {
+            if (remaining > 0 || UsesBell || !isActiveAndEnabled || bloodSaberStage == BloodSaberStage.ArenaMist)
+                return remaining;
+            var player = arena?.Player;
+            return player != null && player.IsAlive ? 1 : remaining;
+        }
+
+        void AdvanceMistDamage(SlashPlayer player, float dt)
+        {
+            Vector2 point = player.transform.position;
+            arenaMist?.Advance(dt);
+            double exposure = arenaMist != null && arenaMist.Contains(point, playerRadius) ? dt : 0;
+            if (bloodTideMistRemaining > 0)
+            {
+                double elapsed = Math.Min(dt, bloodTideMistRemaining);
+                bloodTideMistRemaining -= elapsed;
+                float radius = bloodTideMistRadius + playerRadius;
+                if ((point - bloodTideMistCenter).sqrMagnitude <= radius * radius)
+                    exposure = Math.Max(exposure, elapsed);
+                float remaining = (float)bloodTideMistRemaining;
+                skillEffects.UpdateBloodTideMist(BloodTideMistDuration - remaining, Mathf.Clamp01(remaining / .65f));
+            }
+
+            bloodMistExposure = exposure > 0 ? bloodMistExposure + exposure : 0;
+            while (bloodMistExposure >= 1 && player.IsAlive)
+            {
+                bloodMistExposure -= 1;
+                int before = player.Health;
+                if (player.TakeBloodMistDamage(Mathf.RoundToInt(BloodTideMistDamage * DamageMultiplier)))
+                    HealFromDamage(before, player);
+            }
+        }
+
+        void HealFromDamage(int previousHealth, SlashPlayer player)
+            => enemy.Heal((previousHealth - player.Health) * LifestealMultiplier);
 
         void Place(Zone zone, out Vector2 center, out Vector2 direction)
         {
@@ -965,24 +1252,47 @@ namespace SlashDemo
             aim = Vector2.down;
             nextSkill = 0;
             bloodMistCooldown = BloodMistOpeningDelay;
+            SetBloodFrenzy(0);
+            bloodTideMistRemaining = 0;
+            bloodMistExposure = 0;
+            bloodSaberStage = BloodSaberStage.Opening;
+            arenaMist?.Hide();
             Array.Clear(cooldowns, 0, cooldowns.Length);
             previousGround = body.position;
+            saberBreathPhase = 0;
+            saberTurnDelay = 0;
+            pendingSaberFacing = -1;
+            saberActionPose = Vector3.zero;
+            saberActionBend = 0;
             walk.ResetWalk();
+            walk.SetSaberPoseBlend(1);
+            walk.SetSaberBodyPose(Vector2.zero, 0);
             walk.SetPaintedCastPose(Vector2.zero, Vector2.zero, 0);
             warning.gameObject.SetActive(false);
             skillEffects?.Clear();
             actor.SetPose(Vector2.zero, 0, 0);
         }
 
+        void OnEnable()
+        {
+            if (bloodSaberStage == BloodSaberStage.ArenaMist && (phase != Phase.Windup || !IsTransitionInvulnerable))
+                arenaMist?.Show();
+        }
+
         void OnDisable()
         {
             if (phase == Phase.BloodMist) SetBloodMistOpacity(1);
+            SetBloodFrenzy(0);
+            bloodTideMistRemaining = 0;
+            bloodMistExposure = 0;
+            arenaMist?.Hide();
             skillEffects?.Clear();
         }
 
         void OnDestroy()
         {
             skillEffects?.Dispose();
+            arenaMist?.Dispose();
             if (frames == null) return;
             foreach (var sprite in frames) Destroy(sprite);
         }

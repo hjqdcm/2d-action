@@ -420,8 +420,14 @@ namespace SlashDemo.Editor
                             "Exhaustion did not send the player to the final arena after combat.");
                         var boss = CheckFinalBoss(arena);
                         boss.TakeHit(100000, Vector2.zero, 0);
+                        Check(boss.Health == 1 && boss.GetComponent<EvilCultivatorBoss>().CastingSkill == "血雾升腾"
+                            && travel.Portal == null, "Lethal damage bypassed the first arena fog transition.");
+                        boss.SendMessage("Tick", 4f);
+                        boss.SendMessage("Tick", .75f);
+                        boss.TakeHit(100000, Vector2.zero, 0);
                         Check(arena.Enemies.Count == 0 && travel.Portal != null && !boss.GetComponent<ObliqueActor>().GroundWarning.gameObject.activeSelf,
                             "Final boss defeat did not clear combat and create the exit portal.");
+                        CheckFinalBattleGate(arena, boss, closed: false);
                         var exit = travel.Portal;
                         travel.EnemyDefeated(boss);
                         Check(travel.Portal == exit, "Final boss defeat created more than one exit portal.");
@@ -439,7 +445,7 @@ namespace SlashDemo.Editor
                         Debug.Log("CULTIVATION_REALM_PASS: starts/restarts in Qi Refining, all three higher realms survive outbound travel and tuning, every return home resets to Qi Refining.");
                         Debug.Log("SCENE_TRAVEL_PASS: all destinations, gate/cancel/rearm, R/T disabled, reserved exits have no destination, market portal and shop access.");
                         Debug.Log("FORTUNE_TRAVEL_PASS: route costs, shared visits, voluntary and automatic final battle travel.");
-                        Debug.Log("FINAL_BOSS_PASS: Blood Saber on each entry path, 2000 base health, half-damage ambush, 10x lifesteal, five rotation skills, eight movement facings, and a single victory portal.");
+                        Debug.Log("FINAL_BOSS_PASS: Blood Saber on each entry path, 2000 base health, reduced direct damage, unchanged mist damage, 10x lifesteal, five rotation skills, eight movement facings, invulnerable quarter-health transition, and a single victory portal.");
                         EditorApplication.Exit(0);
                         break;
                 }
@@ -470,13 +476,31 @@ namespace SlashDemo.Editor
                 "The final boss is using the wrong artwork.");
             Check(boss.GetComponent<WildernessNavigation>().Walkable(boss.transform.position),
                 "Final boss spawn overlaps the battlefield boundary.");
+            CheckFinalBattleGate(arena, enemy, closed: true);
             if (exerciseSkills)
             {
                 CheckBossLocomotion(arena, enemy, skin);
                 CheckBossSkills(arena, enemy, boss);
                 CheckBloodMist(arena, enemy, boss, skin);
+                CheckBloodFrenzy(arena, enemy, boss);
+                CheckBloodSaberStages(arena, enemy, boss);
             }
             return enemy;
+        }
+
+        static void CheckFinalBattleGate(SlashArena arena, SlashEnemy enemy, bool closed)
+        {
+            var map = arena.Travel.ActiveMap;
+            Vector2 entry = map.Definition.Entry;
+            Vector2 passage = map.Definition.Ground(755, 970);
+            Vector2 path = passage - entry;
+            float radius = arena.Player.GetComponent<CircleCollider2D>().radius;
+            bool blocked = false;
+            Physics2D.SyncTransforms();
+            foreach (var hit in Physics2D.CircleCastAll(entry, radius, path.normalized, path.magnitude))
+                blocked |= BlocksRoute(hit.collider, map);
+            Check(blocked == closed && enemy.GetComponent<WildernessNavigation>().Walkable(passage) != closed,
+                "The final arena gate did not block the passage during combat and reopen after victory.");
         }
 
         static void CheckBloodMist(SlashArena arena, SlashEnemy enemy, EvilCultivatorBoss boss, SpriteRenderer skin)
@@ -525,6 +549,7 @@ namespace SlashDemo.Editor
                 player.invincible = false;
                 immunity.SetValue(player, 0f);
                 enemy.damage = 9;
+                const int slashDamage = 3;
                 enemy.TakeHit(100, Vector2.zero, 0);
                 int bossHealthBeforeSlash = enemy.Health;
                 StartAmbush();
@@ -535,15 +560,15 @@ namespace SlashDemo.Editor
                 Check(player.Health == previousHealth && warning.gameObject.activeSelf,
                     "The quick slash resolved before its 0.4-second warning ended.");
                 boss.SendMessage("Tick", .02f);
-                Check(player.Health == previousHealth - 5 && !warning.gameObject.activeSelf,
-                    "The quick slash did not hit once for half damage at the end of its warning.");
-                Check(enemy.Health == bossHealthBeforeSlash + 50,
+                Check(player.Health == previousHealth - slashDamage && !warning.gameObject.activeSelf,
+                    "The quick slash did not hit once for the reduced damage at the end of its warning.");
+                Check(enemy.Health == bossHealthBeforeSlash + 10 * slashDamage,
                     "Blood Saber did not heal for 10 times the damage actually dealt.");
                 boss.SendMessage("Tick", .51f);
                 player.Teleport(start);
                 boss.SendMessage("Tick", .04f);
                 Check(boss.CastingSkill != "血雾突袭", "Blood Saber repeated the ambush during cooldown.");
-                player.Heal(5);
+                player.Heal(slashDamage);
                 immunity.SetValue(player, 0f);
 
                 blocker = new GameObject("Blood mist blocked landing");
@@ -574,6 +599,280 @@ namespace SlashDemo.Editor
             }
         }
 
+        static void CheckBloodFrenzy(SlashArena arena, SlashEnemy enemy, EvilCultivatorBoss boss)
+        {
+            const System.Reflection.BindingFlags flags =
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var buff = typeof(EvilCultivatorBoss).GetProperty("FrenzyBuff", flags);
+            var cooldowns = (float[])typeof(EvilCultivatorBoss).GetField("cooldowns", flags).GetValue(boss);
+            var player = arena.Player;
+            var immunity = typeof(SlashPlayer).GetField("invulnerability", flags);
+            object previousImmunity = immunity.GetValue(player);
+            bool previousInvincible = player.invincible;
+            Vector2 previousPosition = player.transform.position;
+            int playerHealth = player.Health, bossHealth = enemy.Health, attackDamage = enemy.damage;
+            float attackRange = enemy.attackRange;
+            var body = boss.GetComponent<Rigidbody2D>();
+            var gait = boss.GetComponentInChildren<HeroWalkMesh>();
+            var robe = gait.transform.Find("Walking mesh").GetComponent<MeshRenderer>();
+            var sleeve = gait.transform.Find("Saber arm").GetComponent<MeshRenderer>();
+            var blade = gait.transform.Find("Saber blade").GetComponent<MeshRenderer>();
+            var supportSleeve = gait.transform.Find("Saber support arm").GetComponent<MeshRenderer>();
+            var sleeveMesh = sleeve.GetComponent<MeshFilter>().sharedMesh;
+            var supportMesh = supportSleeve.GetComponent<MeshFilter>().sharedMesh;
+            var materials = new MaterialPropertyBlock();
+
+            void CheckGlow(float intensity)
+            {
+                gait.Refresh();
+                blade.GetPropertyBlock(materials);
+                Check(Mathf.Approximately(materials.GetFloat("_SaberBladeGlow"), intensity),
+                    "Blood Frenzy glow did not follow the buff on the saber blade.");
+                robe.GetPropertyBlock(materials);
+                Check(materials.GetFloat("_SaberBladeGlow") == 0, "Blood Frenzy lit up the boss's body.");
+                sleeve.GetPropertyBlock(materials);
+                Check(materials.GetFloat("_SaberBladeGlow") == 0, "Blood Frenzy lit up the boss's sleeve.");
+            }
+
+            float ChaseSpeed()
+            {
+                boss.SendMessage("FixedTick", .02f);
+                float speed = body.linearVelocity.magnitude;
+                body.linearVelocity = Vector2.zero;
+                return speed;
+            }
+
+            try
+            {
+                boss.SendMessage("Stop");
+                Vector2 front = (Vector2)boss.transform.position + Vector2.down * 1.3f;
+                player.Teleport(front);
+                float baselineSpeed = ChaseSpeed();
+                Check(baselineSpeed > 0, "Blood Saber did not pursue for the speed test.");
+                CheckGlow(0);
+                var restArm = sleeveMesh.vertices;
+                int shoulder = NearestVertex(restArm, new Vector2(-.112f, .674f));
+                int elbow = NearestVertex(restArm, new Vector2(-.141f, .569f));
+                int hand = NearestVertex(restArm, new Vector2(-.147f, .464f));
+                player.invincible = true;
+                for (int i = 0; i < 2; i++)
+                {
+                    boss.SendMessage("Tick", .04f);
+                    boss.SendMessage("Tick", 4f);
+                    boss.SendMessage("Tick", 4f);
+                }
+                enemy.TakeHit(enemy.Health - Mathf.CeilToInt(enemy.maxHealth * .75f) + 1, Vector2.zero, 0);
+                enemy.SendMessage("Heal", bossHealth - enemy.Health);
+                boss.SendMessage("Tick", .04f);
+                Check(boss.CastingSkill == "血祭" && Mathf.Approximately(cooldowns[2], 20),
+                    "Blood Frenzy did not set its twenty-second cooldown.");
+                enemy.TakeHit(bossHealth / 4, Vector2.zero, 0);
+                int before = enemy.Health;
+                boss.SendMessage("Tick", 2f);
+                Check(enemy.Health == before - Mathf.CeilToInt(before * .1f)
+                    && buff.GetValue(boss) is CombatBuffView { timeLeft: 20f },
+                    "Blood Frenzy did not spend ten percent of current health for twenty seconds.");
+                CheckGlow(1);
+                var raisedArm = sleeveMesh.vertices;
+                Check(raisedArm[elbow].y < raisedArm[shoulder].y
+                    && raisedArm[elbow].y < raisedArm[hand].y,
+                    "Blood Frenzy did not raise the blade with one bent arm.");
+                Check((raisedArm[hand] - blade.transform.localPosition).sqrMagnitude < .0008f,
+                    "Blood Frenzy's raised hand slipped off the handle.");
+                Vector2 restingOffhand = new Vector2(.145f, .446f);
+                Check(supportSleeve.enabled, "Blood Frenzy did not animate the free arm.");
+                var offhandVertices = supportMesh.vertices;
+                int offhand = NearestVertex(robe.GetComponent<MeshFilter>().sharedMesh.vertices, restingOffhand);
+                Check(offhandVertices[offhand].y > restingOffhand.y + .08f
+                    && (offhandVertices[offhand] - blade.transform.localPosition).sqrMagnitude > .03f,
+                    "Blood Frenzy's free hand did not lift separately from the saber.");
+                boss.SendMessage("Tick", .5f);
+                gait.Refresh();
+                Check(!supportSleeve.enabled, "Blood Frenzy did not settle its free arm after casting.");
+                Check(Mathf.Abs(ChaseSpeed() - baselineSpeed * 1.10f) < .01f,
+                    "Blood Frenzy did not increase the boss's pursuit speed by ten percent.");
+                boss.SendMessage("Tick", .04f);
+                Check(boss.CastingSkill == "裂地血潮", "Blood Frenzy did not return to the skill rotation.");
+                player.invincible = false;
+                immunity.SetValue(player, 0f);
+                enemy.damage = 40;
+                float windup = Mathf.Max(.52f, enemy.windupTime * 1.45f);
+                boss.SendMessage("Tick", windup * .82f);
+                Check(boss.CastingSkill == null && player.Health == playerHealth - 17,
+                    "Blood Frenzy did not speed up the cast or boost the reduced direct damage by twenty percent.");
+                enemy.attackRange = 0;
+                player.Teleport((Vector2)boss.transform.position + Vector2.right * (2 * attackRange));
+                boss.SendMessage("Tick", 20f);
+                Check(buff.GetValue(boss) == null, "Blood Frenzy stayed active after twenty seconds.");
+                CheckGlow(0);
+                player.Teleport(front);
+                Check(Mathf.Abs(ChaseSpeed() - baselineSpeed) < .01f,
+                    "Blood Frenzy's move speed bonus persisted after expiry.");
+            }
+            finally
+            {
+                boss.SendMessage("Stop");
+                enemy.attackRange = attackRange;
+                enemy.damage = attackDamage;
+                enemy.SendMessage("Heal", bossHealth - enemy.Health);
+                player.invincible = previousInvincible;
+                immunity.SetValue(player, previousImmunity);
+                player.Heal(playerHealth - player.Health);
+                player.Teleport(previousPosition);
+            }
+        }
+
+        static void CheckBloodSaberStages(SlashArena arena, SlashEnemy enemy, EvilCultivatorBoss boss)
+        {
+            const System.Reflection.BindingFlags flags =
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var nextSkill = typeof(EvilCultivatorBoss).GetField("nextSkill", flags);
+            var cooldowns = (float[])typeof(EvilCultivatorBoss).GetField("cooldowns", flags).GetValue(boss);
+            var windup = typeof(EvilCultivatorBoss).GetField("windup", flags);
+            var arenaMist = typeof(EvilCultivatorBoss).GetField("arenaMist", flags);
+            var warning = boss.GetComponent<ObliqueActor>().GroundWarning;
+            var lines = warning.GetComponentsInChildren<LineRenderer>(true);
+            var map = arena.Travel.ActiveMap;
+            var player = arena.Player;
+            int health = player.Health, bossHealth = enemy.Health;
+            bool invincible = player.invincible;
+            Vector2 previousPosition = player.transform.position;
+            float range = enemy.attackRange;
+
+            int ActiveWarnings()
+            {
+                int active = 0;
+                foreach (var line in lines)
+                    if (line.name == "Telegraph" && line.enabled) active++;
+                return active;
+            }
+
+            void StartBlades()
+            {
+                nextSkill.SetValue(boss, 4);
+                cooldowns[4] = 0;
+                player.Teleport((Vector2)boss.transform.position + Vector2.down * 1.3f);
+                boss.SendMessage("Tick", .04f);
+                Check(boss.CastingSkill == "三途飞刃", "Blood Saber did not cast its flying blades.");
+            }
+
+            try
+            {
+                boss.SendMessage("Stop");
+                player.invincible = true;
+                enemy.TakeHit(enemy.Health - Mathf.CeilToInt(enemy.maxHealth * .50f), Vector2.zero, 0);
+                StartBlades();
+                Check(ActiveWarnings() == 3, "Blood Saber unlocked five blades before falling below half health.");
+                enemy.TakeHit(1, Vector2.zero, 0);
+                Check(ActiveWarnings() == 3, "Blood Saber added blades to an already telegraphed attack.");
+                boss.SendMessage("Tick", 4f);
+                boss.SendMessage("Tick", 4f);
+                StartBlades();
+                Check(ActiveWarnings() == 5 && Mathf.Approximately((float)windup.GetValue(boss),
+                    Mathf.Max(.52f, enemy.windupTime * 1.42f)),
+                    "Blood Saber did not telegraph five blades at normal speed below half health.");
+                boss.SendMessage("Tick", 4f);
+                boss.SendMessage("Tick", 4f);
+                enemy.SendMessage("Heal", bossHealth - enemy.Health);
+                StartBlades();
+                Check(ActiveWarnings() == 5, "Blood Saber lost the five blades after healing.");
+                boss.SendMessage("Tick", 4f);
+                boss.SendMessage("Tick", 4f);
+
+                var definition = map.Definition;
+                var effects = map.transform.Find("Final boss skill effects");
+                var temporaryMist = effects.Find("Blood tide mist").GetComponent<SpriteRenderer>();
+                player.Teleport((Vector2)boss.transform.position + Vector2.down * .55f);
+                player.invincible = false;
+                enemy.attackRange = 0;
+                enemy.TakeHit(enemy.Health - Mathf.CeilToInt(enemy.maxHealth * .25f), Vector2.zero, 0);
+                Check(arenaMist.GetValue(boss) == null && boss.CastingSkill == null,
+                    "The arena fog transition started at exactly one-quarter health.");
+                enemy.attackRange = range;
+                nextSkill.SetValue(boss, 1);
+                cooldowns[1] = 0;
+                boss.SendMessage("Tick", .04f);
+                boss.SendMessage("Tick", .20f);
+                Check(boss.CastingSkill == "贯血刀", "Could not interrupt a live attack to test the transition.");
+                var gait = boss.GetComponentInChildren<HeroWalkMesh>();
+                var blade = gait.transform.Find("Saber blade");
+                gait.Refresh();
+                Vector3 previousGrip = blade.localPosition;
+                Quaternion previousBladeAngle = blade.localRotation;
+                enemy.TakeHit(1, Vector2.zero, 0);
+                gait.Refresh();
+                Check((blade.localPosition - previousGrip).sqrMagnitude < .000001f
+                    && Quaternion.Angle(previousBladeAngle, blade.localRotation) < .1f,
+                    "The phase transition snapped the saber away from its previous pose.");
+                enemy.attackRange = 0;
+                int transitionHealth = enemy.Health;
+                float transitionWindup = (float)windup.GetValue(boss);
+                Check(boss.CastingSkill == "血雾升腾" && arenaMist.GetValue(boss) == null && !warning.gameObject.activeSelf,
+                    "Blood Saber did not start the non-attacking ground stab immediately below one-quarter health.");
+                enemy.TakeHit(20, Vector2.zero, 0);
+                Check(enemy.Health == transitionHealth, "Blood Saber took damage at the start of the transition.");
+                boss.SendMessage("Tick", transitionWindup * .75f);
+                enemy.TakeHit(20, Vector2.zero, 0);
+                Check(enemy.Health == transitionHealth && arenaMist.GetValue(boss) == null,
+                    "Blood Saber took damage or raised the arena fog before blade contact.");
+                boss.SendMessage("Tick", transitionWindup);
+                var mist = map.transform.Find("Arena blood mist").GetComponent<SpriteRenderer>();
+                Check(mist.enabled && player.Health == health && !temporaryMist.enabled
+                    && !warning.gameObject.activeSelf && CountBossEffectLines(effects) == 0,
+                    "The blade contact did not raise only the permanent arena fog.");
+                enemy.TakeHit(20, Vector2.zero, 0);
+                Check(enemy.Health == transitionHealth, "Blood Saber took damage during transition recovery.");
+                player.Teleport(definition.Ground(755, 475));
+                boss.SendMessage("Tick", .75f);
+                enemy.TakeHit(1, Vector2.zero, 0);
+                Check(enemy.Health == transitionHealth - 1, "Blood Saber remained invulnerable after withdrawing the blade.");
+
+                object field = arenaMist.GetValue(boss);
+                var contains = field.GetType().GetMethod("Contains");
+                Vector2 size = definition.WorldSize;
+                const int columns = 72, rows = 48;
+                int covered = 0;
+                for (int y = 0; y < rows; y++)
+                for (int x = 0; x < columns; x++)
+                {
+                    Vector2 position = Vector2.Scale(new Vector2((x + .5f) / columns - .5f, (y + .5f) / rows - .5f), size);
+                    if ((bool)contains.Invoke(field, new object[] { position, 0f })) covered++;
+                }
+                float area = 0;
+                var boundary = map.WalkableBoundary;
+                for (int i = 0, previous = boundary.Count - 1; i < boundary.Count; previous = i++)
+                    area += Vector3.Cross(boundary[previous], boundary[i]).z;
+                float coverage = covered * size.x * size.y / (columns * rows * .5f * Mathf.Abs(area));
+                Check(Mathf.Abs(coverage - .40f) < .025f, $"Arena fog covers {coverage:P0} of the courtyard.");
+
+                boss.SendMessage("Tick", 10f);
+                Check(mist.enabled && player.Health == health, "The permanent arena fog expired or covered the center.");
+                Check(!(bool)contains.Invoke(field, new object[] { definition.Ground(755, 935), 0f }),
+                    "The blood fog spilled past the closed arena gate.");
+                player.Teleport(definition.Ground(755, 835));
+                int before = enemy.Health;
+                boss.SendMessage("Tick", .5f);
+                Check(player.Health == health, "The arena fog damaged the player before one second.");
+                boss.SendMessage("Tick", .5f);
+                Check(player.Health == health - 2 && enemy.Health == before + 20,
+                    "The arena fog did not deal two damage and heal Blood Saber for twenty.");
+                enemy.SendMessage("Heal", bossHealth - enemy.Health);
+                boss.SendMessage("Tick", 1f);
+                Check(mist.enabled && player.Health == health - 4, "The arena fog disappeared after Blood Saber healed.");
+                boss.SendMessage("Stop");
+                Check(!mist.enabled, "The arena fog remained after combat stopped.");
+            }
+            finally
+            {
+                boss.SendMessage("Stop");
+                enemy.attackRange = range;
+                enemy.SendMessage("Heal", bossHealth - enemy.Health);
+                player.invincible = invincible;
+                player.Heal(health - player.Health);
+                player.Teleport(previousPosition);
+            }
+        }
+
         static void CheckBossSkills(SlashArena arena, SlashEnemy enemy, EvilCultivatorBoss boss)
         {
             var player = arena.Player;
@@ -582,10 +881,10 @@ namespace SlashDemo.Editor
             bool bell = boss.CombatStyle == EvilCultivatorBoss.Style.SoulBell;
             var skills = bell
                 ? new[] { "摄魂铃震", "十字断魄", "三叠追魂", "镇魂回响", "四方锁魂阵" }
-                : new[] { "饮血横斩", "贯血刀", "回锋双斩", "裂地血潮", "三途飞刃" };
+                : new[] { "饮血横斩", "贯血刀", "裂地血潮", "三途飞刃" };
             int[][] outlines = bell
                 ? new[] { new[] { 1 }, new[] { 2 }, new[] { 1, 1, 1 }, new[] { 2 }, new[] { 4, 1 } }
-                : new[] { new[] { 1 }, new[] { 1 }, new[] { 1, 1 }, new[] { 1, 1 }, new[] { 3 } };
+                : new[] { new[] { 1 }, new[] { 1 }, new[] { 1 }, new[] { 3 } };
             var warning = boss.GetComponent<ObliqueActor>().GroundWarning;
             var lines = warning.GetComponentsInChildren<LineRenderer>(true);
             var gait = boss.GetComponentInChildren<HeroWalkMesh>();
@@ -595,7 +894,8 @@ namespace SlashDemo.Editor
             var effects = map.transform.Find("Final boss skill effects");
             Check(effects != null, "Final boss did not initialize its skill effects.");
             var weaponGlow = effects.GetChild(0).GetComponent<LineRenderer>();
-            var whirlwind = bell ? null : effects.Find("Saber whirlwind").GetComponent<LineRenderer>();
+            Check(effects.Find("Saber whirlwind") == null, "The removed whirlwind effect was still created.");
+            var bloodTideMist = bell ? null : effects.Find("Blood tide mist").GetComponent<SpriteRenderer>();
             var particles = map.GetComponent<BeastAttackParticles>();
             var saberLayer = bell ? null : skin.transform.Find("Saber arm");
             Check(bell || saberLayer != null, "Blood Saber is missing its separately rendered sword arm.");
@@ -608,14 +908,15 @@ namespace SlashDemo.Editor
             Check(bell || supportLayer != null, "Blood Saber is missing its second arm.");
             var supportRenderer = bell ? null : supportLayer.GetComponent<MeshRenderer>();
             var supportMesh = bell ? null : supportLayer.GetComponent<MeshFilter>().sharedMesh;
+            if (!bell) CheckSaberBreathing(boss, enemy, gait);
             player.invincible = true;
             Vector2 front = (Vector2)boss.transform.position + Vector2.down * 1.3f;
             Vector2 flank = (Vector2)boss.transform.position + Vector2.right * 1.3f;
             float followStep = bell ? .07f : .07f / 1.5f;
             for (int skill = 0; skill < skills.Length; skill++)
             {
-                bool spins = !bell && skills[skill] == "裂地血潮";
-                bool sweeps = !bell && (skills[skill] == "饮血横斩" || skills[skill] == "回锋双斩");
+                bool groundStab = !bell && skills[skill] == "裂地血潮";
+                bool sweeps = !bell && skills[skill] == "饮血横斩";
                 player.Teleport(front);
                 boss.SendMessage("Tick", .04f);
                 Check(boss.CastingSkill == skills[skill], "Final boss skipped " + skills[skill]);
@@ -655,7 +956,6 @@ namespace SlashDemo.Editor
                         Vector3 center = primary.GetPosition(0);
                         sweepStart = primary.GetPosition(1) - center;
                         sweepEnd = primary.GetPosition(primary.positionCount - 1) - center;
-                        if (wave == 1) (sweepStart, sweepEnd) = (sweepEnd, sweepStart);
                     }
                     Check(weaponGlow.enabled, "Final boss did not charge its weapon for " + skills[skill]);
                     Vector3 glowStart = weaponGlow.GetPosition(0);
@@ -671,7 +971,7 @@ namespace SlashDemo.Editor
                         var castTime = typeof(EvilCultivatorBoss).GetField("windup",
                             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
                         float duration = (float)castTime.GetValue(boss);
-                        float readyAge = spins ? duration - .30f : Mathf.Min(.68f * duration, duration - .28f);
+                        float readyAge = groundStab ? duration - .30f : Mathf.Min(.68f * duration, duration - .28f);
                         readyStep = readyAge - (wave > 0 ? followStep : 0);
                         timeToImpact = duration - readyAge;
                     }
@@ -694,15 +994,35 @@ namespace SlashDemo.Editor
                     CheckCastingCore(rest, ready, core, skills[skill]);
                     if (!bell)
                     {
+                        Check((ready[core[0]] - start[core[0]]).sqrMagnitude > .00004f,
+                            "Blood Saber's torso did not shift during " + skills[skill]);
                         CheckBladeLength(blade, gripReady, tipReady);
+                        CheckSaberBladeEdge(bladeLayer, bladeMesh, skills[skill]);
                         CheckCastingCore(rest, ready, waist, skills[skill]);
                         if (sweeps) CheckSaberSweep(bladeLayer.parent, gripReady, tipReady, sweepStart, skills[skill]);
+                        if (groundStab)
+                        {
+                            int shoulder = NearestVertex(armStart, new Vector2(-.112f, .674f));
+                            int elbow = NearestVertex(armStart, new Vector2(-.141f, .569f));
+                            float bend = Vector3.Angle(armReady[elbow] - armReady[shoulder], armReady[grip] - armReady[elbow]);
+                            Check(bend > 55 && bend < 143, $"Blood Tide folded its raised saber arm too tightly ({bend:F1}°).");
+                            Check(armReady[elbow].y < armReady[shoulder].y && gripReady.y < armReady[shoulder].y,
+                                "Blood Tide lifted the saber hand or elbow above the shoulder.");
+                            Check(Mathf.Abs((gripReady.x + tipReady.x) * .5f) < .03f,
+                                "Blood Tide did not raise the blade in the center of the body.");
+                        }
                     }
                     if (wave + 1 < outlines[skill].Length)
                         player.Teleport(wave % 2 == 0 ? flank : front);
-                    if (spins) CheckWhirlwind(boss, skin, whirlwind, warning, timeToImpact);
-                    if (spins && wave == 1) CheckBloodTideCenter(boss, enemy, player);
-                    else boss.SendMessage("Tick", 4f);
+                    if (groundStab)
+                    {
+                        boss.SendMessage("Tick", timeToImpact * .82f);
+                        gait.Refresh();
+                        var tip = BladeTip(bladeLayer, blade);
+                        Check(skin.sprite == castingFacing && warning.gameObject.activeSelf && tip.y > .05f,
+                            "Blood Tide turned or struck before the blade reached the ground.");
+                    }
+                    boss.SendMessage("Tick", 4f);
                     gait.Refresh();
                     var contact = gait.DeformedMesh.vertices;
                     var armContact = armMesh.vertices;
@@ -711,20 +1031,38 @@ namespace SlashDemo.Editor
                     CheckCastingCore(rest, contact, core, skills[skill]);
                     if (!bell)
                     {
+                        Check((contact[core[0]] - ready[core[0]]).sqrMagnitude > .00004f,
+                            "Blood Saber's torso did not follow its release during " + skills[skill]);
                         Vector3 gripContact = bladeLayer.localPosition;
                         Vector3 tipContact = BladeTip(bladeLayer, blade);
                         CheckBladeLength(blade, gripContact, tipContact);
+                        CheckSaberBladeEdge(bladeLayer, bladeMesh, skills[skill]);
                         Check(supportRenderer.enabled, "Blood Saber's support arm did not join the attack.");
                         CheckTwoHandedGrip(gripContact, tipContact, supportMesh.vertices[supportGrip], skills[skill]);
                         CheckCastingCore(rest, contact, waist, skills[skill]);
-                        if (sweeps) CheckSaberSweep(bladeLayer.parent, gripContact, tipContact, sweepEnd, skills[skill]);
+                        if (sweeps) CheckSaberSweep(bladeLayer.parent, gripContact, tipContact,
+                            (sweepStart.normalized + sweepEnd.normalized).normalized, skills[skill]);
                         Check(Mathf.Max((tipContact - tipReady).sqrMagnitude, (tipReady - tipStart).sqrMagnitude) > .01f,
                             "Blood Saber's blade did not travel through the attack during " + skills[skill]);
                         if (sweeps)
+                        {
                             Check(Vector3.Angle(tipReady - gripReady, tipContact - gripContact) > 18,
                                 "Blood Saber moved its grip without swinging the blade during the sweep.");
-                        Check(spins ? !whirlwind.enabled : sweeps || (tipContact - gripContact).y < -.15f,
+                            int shoulder = NearestVertex(armStart, new Vector2(-.112f, .674f));
+                            int elbow = NearestVertex(armStart, new Vector2(-.141f, .569f));
+                            float readyBend = Vector3.Angle(armReady[elbow] - armReady[shoulder], armReady[grip] - armReady[elbow]);
+                            float contactBend = Vector3.Angle(armContact[elbow] - armContact[shoulder],
+                                armContact[grip] - armContact[elbow]);
+                            Check(readyBend > 40 && contactBend < readyBend - 25
+                                && (armContact[elbow] - armReady[elbow]).sqrMagnitude > .0064f,
+                                "Blood Saber's elbow did not lead and extend through the horizontal cut.");
+                        }
+                        Check(sweeps || (tipContact - gripContact).y < -.15f,
                             "Blood Saber did not finish its attack animation during " + skills[skill]);
+                        if (groundStab)
+                            Check(Mathf.Abs(tipContact.y) < .04f && tipReady.y - tipContact.y > .25f
+                                && Mathf.Abs((gripContact.x + tipContact.x) * .5f) < .03f,
+                                $"Blood Tide did not drive the centered blade into the ground ({tipReady.y:F3}, {tipContact.y:F3}).");
                     }
                     Quaternion bladeContact = bell ? Quaternion.identity : bladeLayer.localRotation;
                     Check((armContact[grip] - armReady[grip]).sqrMagnitude > .0001f,
@@ -744,18 +1082,27 @@ namespace SlashDemo.Editor
                         Vector3 gripFollow = bladeLayer.localPosition;
                         Vector3 tipFollow = BladeTip(bladeLayer, blade);
                         CheckBladeLength(blade, gripFollow, tipFollow);
+                        CheckSaberBladeEdge(bladeLayer, bladeMesh, skills[skill]);
                         CheckTwoHandedGrip(gripFollow, tipFollow, supportMesh.vertices[supportGrip], skills[skill]);
                         CheckCastingCore(rest, follow, waist, skills[skill]);
-                        Check(Quaternion.Angle(bladeContact, bladeLayer.localRotation) > 1,
+                        if (groundStab)
+                        {
+                            Check(Mathf.Abs(tipFollow.y) < .04f, "Blood Tide immediately released its planted blade.");
+                            boss.SendMessage("Tick", .20f);
+                            gait.Refresh();
+                            Check(BladeTip(bladeLayer, blade).y > .09f, "Blood Tide did not withdraw its planted blade.");
+                        }
+                        else Check(Quaternion.Angle(bladeContact, bladeLayer.localRotation) > 1,
                             "Blood Saber did not follow through with its blade during " + skills[skill]);
                     }
-                    Check((armFollow[grip] - armContact[grip]).sqrMagnitude > .000001f,
+                    Check(groundStab || (armFollow[grip] - armContact[grip]).sqrMagnitude > .000001f,
                         "Final boss did not follow through after impact for " + skills[skill]);
                     Check((follow[boot] - start[boot]).sqrMagnitude < .000001f
                         && Quaternion.Angle(planted, model.localRotation) < .1f, "Final boss lost its stance during follow-through.");
                 }
                 Check(boss.CastingSkill == null && !enemy.IsChasing, "Final boss skipped recovery.");
-                boss.SendMessage("Tick", 4f);
+                if (groundStab) CheckBloodTideMist(boss, enemy, player, bloodTideMist);
+                else boss.SendMessage("Tick", 4f);
                 gait.Refresh();
                 Check(enemy.IsChasing && !warning.gameObject.activeSelf, "Final boss left a stale impact.");
                 Check(bell || (armRenderer.enabled && !supportRenderer.enabled),
@@ -767,8 +1114,13 @@ namespace SlashDemo.Editor
             boss.SendMessage("Stop");
             Check(!warning.gameObject.activeSelf && boss.CastingSkill == null, "Final boss retained a warning after stopping.");
             Check(CountBossEffectLines(effects) == 0 && particles.ActiveCount == 0, "Final boss retained skill effects after stopping.");
-            if (!bell) CheckSaberTorsoFacings(arena, enemy, boss, skin, gait,
-                effects.Find("Saber swing trail").GetComponent<LineRenderer>());
+            if (!bell)
+            {
+                CheckSaberTorsoFacings(arena, enemy, boss, skin, gait,
+                    effects.Find("Saber swing trail").GetComponent<LineRenderer>());
+                CheckSaberCastFacings(arena, enemy, boss, skin, gait);
+                CheckSaberPlant(arena, enemy, boss, gait);
+            }
             player.Teleport(originalPosition);
             player.invincible = invincible;
         }
@@ -788,10 +1140,39 @@ namespace SlashDemo.Editor
 
         static void CheckCastingCore(Vector3[] rest, Vector3[] pose, int[] core, string skill)
         {
-            Vector3 translation = pose[core[0]] - rest[core[0]];
-            foreach (int vertex in core)
-                Check((pose[vertex] - rest[vertex] - translation).sqrMagnitude < .00000001f,
-                    "Final boss stretched its body or clothing during " + skill);
+            for (int i = 0; i < core.Length; i++)
+            for (int j = 0; j < i; j++)
+            {
+                float original = Vector3.Distance(rest[core[i]], rest[core[j]]);
+                float posed = Vector3.Distance(pose[core[i]], pose[core[j]]);
+                Check(Mathf.Abs(posed - original) < .0001f, "Final boss stretched its body or clothing during " + skill);
+            }
+        }
+
+        static void CheckSaberBreathing(EvilCultivatorBoss boss, SlashEnemy enemy, HeroWalkMesh gait)
+        {
+            float range = enemy.attackRange;
+            try
+            {
+                boss.SendMessage("Stop");
+                enemy.attackRange = 0;
+                gait.Refresh();
+                var rest = gait.DeformedMesh.vertices;
+                int chest = NearestVertex(rest, new Vector2(0, .71f));
+                int foot = NearestVertex(rest, new Vector2(0, .03f));
+                boss.SendMessage("Tick", .55f);
+                gait.Refresh();
+                var breath = gait.DeformedMesh.vertices;
+                Check((breath[chest] - rest[chest]).sqrMagnitude > .000015f,
+                    "Blood Saber did not breathe while standing still.");
+                Check((breath[foot] - rest[foot]).sqrMagnitude < .000001f,
+                    "Blood Saber's breath moved its planted feet.");
+            }
+            finally
+            {
+                enemy.attackRange = range;
+                boss.SendMessage("Stop");
+            }
         }
 
         static int[] SaberTorsoVertices(Vector3[] rest, int facing)
@@ -805,7 +1186,7 @@ namespace SlashDemo.Editor
                 NearestVertex(rest, new Vector2(-.065f, .59f)), NearestVertex(rest, new Vector2(.065f, .59f)),
                 NearestVertex(rest, new Vector2(tunicX - .022f, .39f)),
                 NearestVertex(rest, new Vector2(tunicX + .022f, .39f)),
-                NearestVertex(rest, new Vector2(tunicX, .325f))
+                NearestVertex(rest, new Vector2(tunicX, .365f))
             };
         }
 
@@ -861,12 +1242,16 @@ namespace SlashDemo.Editor
                     var pose = gait.DeformedMesh.vertices;
                     CheckCastingCore(rest, pose, torso, casting);
                     CheckCastingMesh(rest, pose, triangles, casting);
+                    CheckSaberBladeEdge(bladeLayer, bladeMesh, casting);
                     if (profile && windingUp)
                     {
                         Vector3 grip = bladeLayer.localPosition;
                         Vector3 tip = BladeTip(bladeLayer, blade);
                         float forward = facing == 2 ? 1 : -1;
-                        peakGrip = Mathf.Max(peakGrip, grip.y);
+                        Quaternion torsoTurn = Quaternion.FromToRotation(rest[torso[1]] - rest[torso[0]],
+                            pose[torso[1]] - pose[torso[0]]);
+                        float relativeGrip = (rest[torso[0]] + Quaternion.Inverse(torsoTurn) * (grip - pose[torso[0]])).y;
+                        peakGrip = Mathf.Max(peakGrip, relativeGrip);
                         CheckBladeLength(blade, grip, tip);
                         if (bladeTrail.enabled)
                         {
@@ -881,8 +1266,8 @@ namespace SlashDemo.Editor
                         {
                             Check((tip.x - grip.x) * forward > .1f,
                                 "Blood Saber did not chop in front of its torso in profile " + facing);
-                            Check(peakGrip > .76f && peakGrip < .84f && grip.y > .52f,
-                                $"Blood Saber's grip fell outside its chop height in profile {facing} ({peakGrip:F3}, {grip.y:F3}).");
+                            Check(peakGrip > .76f && peakGrip < .84f && relativeGrip > .52f,
+                                $"Blood Saber's grip fell outside its chop height in profile {facing} ({peakGrip:F3}, {relativeGrip:F3}).");
                             Check((saberMesh.vertices[hand] - grip).sqrMagnitude < .0005f,
                                 "Blood Saber's main hand slipped off the handle in profile " + facing);
                         }
@@ -896,49 +1281,215 @@ namespace SlashDemo.Editor
             }
         }
 
-        static void CheckBloodTideCenter(EvilCultivatorBoss boss, SlashEnemy enemy, SlashPlayer player)
+        static void CheckSaberCastFacings(SlashArena arena, SlashEnemy enemy, EvilCultivatorBoss boss,
+            SpriteRenderer skin, HeroWalkMesh gait)
         {
-            var immunity = typeof(SlashPlayer).GetField("invulnerability",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            object previousImmunity = immunity.GetValue(player);
+            const System.Reflection.BindingFlags fields =
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var nextSkill = typeof(EvilCultivatorBoss).GetField("nextSkill", fields);
+            var windup = typeof(EvilCultivatorBoss).GetField("windup", fields);
+            var rigField = typeof(HeroWalkMesh).GetField("paintedGesture", fields);
+            var layer = gait.transform.Find("Saber blade");
+            var blade = layer.GetComponent<MeshFilter>().sharedMesh;
+            var armMesh = gait.transform.Find("Saber arm").GetComponent<MeshFilter>().sharedMesh;
+            var support = gait.transform.Find("Saber support arm").GetComponent<MeshRenderer>();
+            var atlas = skin.sprite.texture;
+            var names = new[] { "饮血横斩", "裂地血潮", "三途飞刃" };
+            var rotationSlots = new[] { 0, 3, 4 };
+            const float step = .02f;
+            for (int facing = 0; facing < 8; facing++)
+            for (int attack = 0; attack < names.Length; attack++)
+            {
+                boss.SendMessage("Stop");
+                nextSkill.SetValue(boss, rotationSlots[attack]);
+                Vector2 screen = DemoArt.Direction(facing * 45 - 90);
+                Vector2 direction = ObliqueProjection.UnprojectGround(screen, arena.View.elevation).normalized;
+                arena.Player.Teleport((Vector2)boss.transform.position + direction * (enemy.attackRange * .65f));
+                boss.SendMessage("Tick", step);
+                gait.Refresh();
+                string label = $"{names[attack]} in facing {facing}";
+                Check(boss.CastingSkill == names[attack] && skin.sprite.rect.x == facing % 4 * atlas.width / 4
+                    && skin.sprite.rect.y == (1 - facing / 4) * atlas.height / 2, "Could not start " + label);
+                var rig = rigField.GetValue(gait);
+                var arm = rig.GetType().GetField("SaberArm").GetValue(rig);
+                var grip = (Vector2)arm.GetType().GetProperty("Grip").GetValue(arm);
+                var tip = (Vector2)arm.GetType().GetProperty("ExtendedTip").GetValue(arm);
+                var shoulder = (Vector2)arm.GetType().GetProperty("Shoulder").GetValue(arm);
+                var elbow = (Vector2)arm.GetType().GetField("elbow", fields).GetValue(arm);
+                int wristVertex = NearestVertex(armMesh.vertices, grip);
+                int shoulderVertex = NearestVertex(armMesh.vertices, shoulder);
+                int elbowVertex = NearestVertex(armMesh.vertices, elbow);
+                Vector3 restBlade = tip - grip;
+                Vector3 lastAxis = layer.localRotation * restBlade;
+                Vector3 lastGrip = layer.localPosition;
+                float duration = (float)windup.GetValue(boss);
+                bool stabbed = false;
+                bool checkFlyingArm = attack == 2 && Mathf.Abs(screen.x) > .9f;
+                Vector3 readyFlyingGrip = default, readyFlyingElbow = default, readyFlyingAxis = default;
+                float readyFlyingBend = 0;
+                bool armLedBlade = false;
+                for (int frame = 1; frame < 120 && !enemy.IsChasing; frame++)
+                {
+                    bool windingUp = boss.CastingSkill != null;
+                    boss.SendMessage("Tick", step);
+                    gait.Refresh();
+                    Vector3 axis = layer.localRotation * restBlade;
+                    Vector3 handle = layer.localPosition;
+                    var armVertices = armMesh.vertices;
+                    CheckSaberBladeEdge(layer, blade, label);
+                    float turn = Vector3.Angle(lastAxis, axis);
+                    float travel = Vector3.Distance(lastGrip, handle);
+                    Check(turn < 40 && travel < .075f,
+                        $"Saber snapped during {label} at frame {frame} ({turn:F1}°, grip travel {travel:F3}).");
+                    Check(Vector3.Distance(armVertices[wristVertex], handle) < .042f, "Wrist separated from saber during " + label);
+                    if (facing == 5 && windingUp && support.enabled)
+                        Check(support.sortingOrder < gait.WalkingRenderer.sortingOrder, "The joining hand drew over the northwest cape.");
+                    if (attack == 2 && Mathf.Abs(screen.x) > .5f && frame * step >= duration * .52f
+                        && frame * step <= duration * .70f)
+                    {
+                        Check(handle.x * screen.x > .035f && axis.x * screen.x > .09f,
+                            $"Flying blades prepared from behind the body during {label} at frame {frame} "
+                            + $"(grip {handle.x * screen.x:F3}, blade {axis.x * screen.x:F3}).");
+                    }
+                    if (attack == 1 && frame * step >= duration * .42f && frame * step <= duration)
+                    {
+                        Check(armVertices[elbowVertex].y < armVertices[shoulderVertex].y
+                            && handle.y < armVertices[shoulderVertex].y, "Saber arm lifted above its shoulder during " + label);
+                    }
+                    if (attack == 1 && windingUp && boss.CastingSkill == null)
+                    {
+                        stabbed = true;
+                        Vector3 bladeTip = handle + axis;
+                        float bladeCenter = (handle.x + bladeTip.x) * .5f;
+                        Check(Mathf.Abs(bladeTip.y) < .035f, "Ground stab missed the floor during " + label);
+                        if (Mathf.Abs(screen.x) > .5f)
+                            Check(bladeCenter * screen.x > .075f && bladeTip.x * screen.x > .11f,
+                                "Ground stab did not clear the silhouette during " + label);
+                        else
+                            Check(Mathf.Abs(bladeCenter) < .02f, "Ground stab missed the center during " + label);
+                    }
+                    if (checkFlyingArm && windingUp)
+                    {
+                        Vector3 posedElbow = armVertices[elbowVertex];
+                        float bend = Vector3.Angle(posedElbow - armVertices[shoulderVertex], handle - posedElbow);
+                        if (frame * step >= duration * .64f && frame * step <= duration * .70f)
+                        {
+                            readyFlyingGrip = handle;
+                            readyFlyingElbow = posedElbow;
+                            readyFlyingAxis = axis;
+                            readyFlyingBend = bend;
+                        }
+                        if (frame * step > duration * .70f && (handle.x - readyFlyingGrip.x) * screen.x > .045f
+                            && Vector3.Angle(readyFlyingAxis, axis) < 16)
+                            armLedBlade = true;
+                        if (boss.CastingSkill == null)
+                        {
+                            float push = (handle.x - readyFlyingGrip.x) * screen.x;
+                            float elbowTravel = Vector3.Distance(posedElbow, readyFlyingElbow);
+                            Check(armLedBlade && push > .16f && elbowTravel > .055f && readyFlyingBend - bend > 22,
+                                $"Flying blades did not extend the arm during {label} "
+                                + $"(grip {push:F3}, elbow {elbowTravel:F3}, bend {readyFlyingBend:F1}° to {bend:F1}°).");
+                            Check(axis.normalized.y < -.69f, "Flying blades stopped too high during " + label);
+                        }
+                    }
+                    lastAxis = axis;
+                    lastGrip = handle;
+                }
+                Check(enemy.IsChasing && (attack != 1 || stabbed), "Cast failed to finish during " + label);
+            }
+            boss.SendMessage("Stop");
+        }
+
+        static void CheckSaberPlant(SlashArena arena, SlashEnemy enemy, EvilCultivatorBoss boss, HeroWalkMesh gait)
+        {
+            float range = enemy.attackRange;
+            var body = enemy.GetComponent<Rigidbody2D>();
+            Vector2 start = body.position;
+            Vector2 heading = new Vector2(.24f, -1).normalized;
+            enemy.attackRange = 0;
+            arena.Player.Teleport(start + heading * 2);
+            boss.SendMessage("FixedTick", .02f);
+            gait.Refresh();
+            var rest = gait.DeformedMesh.vertices;
+            int leftBoot = NearestVertex(rest, new Vector2(-.073f, .045f));
+            int rightBoot = NearestVertex(rest, new Vector2(.073f, .045f));
+            int support = -1, swing = -1;
+            float scale = gait.transform.localScale.y * arena.View.characterScale;
+            Vector3 Foot(Vector3[] pose, int index) => pose[index] + Vector3.up * (gait.Bob / scale);
+            for (int frame = 0; frame < 35 && swing < 0; frame++)
+            {
+                body.position += heading * .065f;
+                boss.SendMessage("Tick", .025f);
+                gait.Refresh();
+                var pose = gait.DeformedMesh.vertices;
+                if (Foot(pose, leftBoot).y - rest[leftBoot].y > .038f) { swing = leftBoot; support = rightBoot; }
+                else if (Foot(pose, rightBoot).y - rest[rightBoot].y > .038f) { swing = rightBoot; support = leftBoot; }
+            }
+            Check(swing >= 0, "Could not start a cast with one foot in the air.");
+            var stride = gait.DeformedMesh.vertices;
+            Vector3 supportStart = Foot(stride, support), swingStart = Foot(stride, swing);
+            enemy.attackRange = range;
+            boss.SendMessage("Tick", .01f);
+            gait.Refresh();
+            var first = gait.DeformedMesh.vertices;
+            Check(boss.CastingSkill == "饮血横斩" && Vector3.Distance(Foot(first, swing), swingStart) < .002f,
+                "The lifted foot snapped to the ground when the cast started.");
+            boss.SendMessage("Tick", .17f);
+            gait.Refresh();
+            var planted = gait.DeformedMesh.vertices;
+            Check(Mathf.Abs(planted[support].x - supportStart.x) < .014f
+                && Mathf.Abs(planted[swing].y - rest[swing].y) < .012f, "The step did not settle onto the attack stance.");
+            body.position = start;
+            body.linearVelocity = Vector2.zero;
+            boss.SendMessage("Stop");
+        }
+
+        static void CheckBloodTideMist(EvilCultivatorBoss boss, SlashEnemy enemy, SlashPlayer player, SpriteRenderer mist)
+        {
             Vector2 previousPosition = player.transform.position;
-            int previousHealth = player.Health, previousDamage = enemy.damage;
+            Vector2 center = boss.transform.position;
+            float previousRange = enemy.attackRange;
+            int previousHealth = player.Health, previousBossHealth = enemy.Health;
             bool invincible = player.invincible;
             try
             {
-                player.Teleport((Vector2)boss.transform.position + Vector2.down * .5f);
-                immunity.SetValue(player, 0f);
+                Check(mist.enabled && (Vector2)mist.transform.position == center,
+                    "Blood Tide did not leave mist at its impact point.");
+                enemy.TakeHit(100, Vector2.zero, 0);
+                int woundedHealth = enemy.Health;
+                enemy.attackRange = 0;
                 player.invincible = false;
-                enemy.damage = 8;
-                boss.SendMessage("Tick", 4f);
-                Check(player.Health == previousHealth - 5, "Blood Tide's second wave did not hit inside its former inner ring.");
+                Vector2 outside = center + Vector2.right * (2 * previousRange);
+                player.Teleport(outside);
+                boss.SendMessage("Tick", 1f);
+                Check(player.Health == previousHealth && enemy.Health == woundedHealth,
+                    "Blood Tide mist dealt damage outside its radius.");
+                player.Teleport(center + Vector2.down * .5f);
+                boss.SendMessage("Tick", .5f);
+                Check(player.Health == previousHealth, "Blood Tide mist ticked before one second of exposure.");
+                boss.SendMessage("Tick", .5f);
+                Check(player.Health == previousHealth - 2 && enemy.Health == woundedHealth + 20,
+                    "Blood Tide mist did not deal two damage and heal Blood Saber for twenty.");
+                boss.SendMessage("Tick", 2f);
+                Check(player.Health == previousHealth - 6 && enemy.Health == woundedHealth + 60,
+                    "Blood Tide mist did not continue to damage and heal once per second.");
+                player.Teleport(outside);
+                boss.SendMessage("Tick", 3.5f);
+                Check(player.Health == previousHealth - 6 && mist.enabled, "Blood Tide mist expired early or hurt the player outside.");
+                boss.SendMessage("Tick", .6f);
+                player.Teleport(center);
+                boss.SendMessage("Tick", 1f);
+                Check(player.Health == previousHealth - 6 && !mist.enabled,
+                    "Blood Tide mist continued after eight seconds.");
             }
             finally
             {
-                enemy.damage = previousDamage;
+                enemy.attackRange = previousRange;
+                enemy.SendMessage("Heal", previousBossHealth - enemy.Health);
                 player.invincible = invincible;
-                immunity.SetValue(player, previousImmunity);
                 player.Heal(previousHealth - player.Health);
                 player.Teleport(previousPosition);
             }
-        }
-
-        static void CheckWhirlwind(EvilCultivatorBoss boss, SpriteRenderer skin, LineRenderer bladeArc,
-            Transform warning, float timeToImpact)
-        {
-            var facings = new System.Collections.Generic.HashSet<Sprite> { skin.sprite };
-            bool showedArc = false;
-            const float step = .02f;
-            while (timeToImpact > step * 2)
-            {
-                boss.SendMessage("Tick", step);
-                timeToImpact -= step;
-                facings.Add(skin.sprite);
-                showedArc |= bladeArc.enabled;
-            }
-            Check(facings.Count == 8 && showedArc, "Blood Saber did not finish a full whirlwind with a visible blade arc.");
-            Check(warning.gameObject.activeSelf && boss.CastingSkill == "裂地血潮",
-                "Blood Saber's circle resolved before the whirlwind completed.");
         }
 
         static Vector3 BladeTip(Transform bladeLayer, Vector3 blade)
@@ -948,6 +1499,20 @@ namespace SlashDemo.Editor
         {
             Check(Mathf.Abs(blade.magnitude - Vector3.Distance(grip, tip)) < .001f,
                 "Blood Saber blade stretched during the arm motion.");
+        }
+
+        static void CheckSaberBladeEdge(Transform bladeLayer, Mesh bladeMesh, string skill)
+        {
+            // The last four vertices are the handle extension, ordered back pair then front pair.
+            var vertices = bladeMesh.vertices;
+            int end = vertices.Length;
+            Vector2 restAxis = ((Vector2)(vertices[end - 1] + vertices[end - 2]
+                - vertices[end - 3] - vertices[end - 4])).normalized;
+            Vector2 redEdge = -Mathf.Sign(restAxis.x) * Vector2.Perpendicular(restAxis);
+            Vector2 posedAxis = bladeLayer.localRotation * (Vector3)restAxis;
+            Vector2 posedEdge = bladeLayer.localRotation * (Vector3)redEdge;
+            float edgeSide = Vector3.Cross(posedAxis, posedEdge).z * Mathf.Sign(posedAxis.x);
+            Check(edgeSide <= .0001f, $"Blood Saber's red edge turned above the spine during {skill}.");
         }
 
         static void CheckSaberSweep(Transform art, Vector3 grip, Vector3 tip, Vector3 edge, string skill)
@@ -1046,12 +1611,13 @@ namespace SlashDemo.Editor
                         Check(saberRenderer.enabled && bladeRenderer.enabled && bodyProperties.GetFloat("_SaberCutMode") == 1,
                             "Blood Saber did not use its separate knife layer while walking.");
                         var walkingSaber = saberMesh.vertices;
-                        CheckRigidSaberCarry(restingSaber, walkingSaber, i);
-                        Vector3 carry = walkingSaber[0] - restingSaber[0];
-                        Check((bladeLayer.localPosition - restingGrip - carry).sqrMagnitude < .000001f
-                            && Quaternion.Angle(bladeLayer.localRotation, Quaternion.identity) < .1f
+                        Quaternion carryTurn = CheckRigidSaberCarry(restingSaber, walkingSaber, bladeLayer.localRotation, i);
+                        Vector3 expectedGrip = walkingSaber[0] + carryTurn * (restingGrip - restingSaber[0]);
+                        float gripError = Vector3.Distance(bladeLayer.localPosition, expectedGrip);
+                        float turnError = Mathf.Abs(Mathf.DeltaAngle(bladeLayer.localEulerAngles.z, carryTurn.eulerAngles.z));
+                        Check(gripError < .001f && turnError < .1f
                             && bladeLayer.localScale == Vector3.one,
-                            "Blood Saber's blade changed shape or slipped off the arm while walking in facing " + i);
+                            $"Blood Saber's blade slipped while walking in facing {i} (grip error {gripError:F5}, angle error {turnError:F3}).");
                     }
                     tookStep |= HasBossStep(resting, walking);
                     Vector3 leftOffset = walking[leftBoot] - resting[leftBoot];
@@ -1107,9 +1673,12 @@ namespace SlashDemo.Editor
                 "Final boss did not keep its facing when movement stopped.");
 
             enemy.attackRange = attackRange;
+            float walkingPhase = gait.Phase;
             enemy.SendMessage("Tick", step);
-            Check(!enemy.IsChasing && gait.Phase == 0 && gait.Bob == 0,
-                "Final boss attack did not reset its walking animation.");
+            Check(!enemy.IsChasing && gait.Phase == (usesBell ? 0 : walkingPhase),
+                "Final boss did not carry the intended walk phase into the attack.");
+            enemy.SendMessage("Tick", .18f);
+            Check(gait.Bob == 0, "Final boss did not settle its walking bob during the windup.");
 
             body.position = spawn;
             body.linearVelocity = initialVelocity;
@@ -1118,12 +1687,17 @@ namespace SlashDemo.Editor
             enemy.SendMessage("Stop");
         }
 
-        static void CheckRigidSaberCarry(Vector3[] rest, Vector3[] walking, int facing)
+        static Quaternion CheckRigidSaberCarry(Vector3[] rest, Vector3[] walking, Quaternion bladeTurn, int facing)
         {
-            Vector3 translation = walking[0] - rest[0];
+            int last = rest.Length - 1;
+            Vector2 original = rest[last] - rest[0], current = walking[last] - walking[0];
+            float angle = Mathf.Atan2(Vector3.Cross(original, current).z, Vector2.Dot(original, current)) * Mathf.Rad2Deg;
+            // The cape hides the northwest sleeve. Its mesh is collapsed and has no axis.
+            Quaternion turn = original.sqrMagnitude > .000001f ? Quaternion.AngleAxis(angle, Vector3.forward) : bladeTurn;
             for (int i = 1; i < rest.Length; i++)
-                if ((walking[i] - rest[i] - translation).sqrMagnitude > .00000001f)
+                if ((walking[i] - walking[0] - turn * (rest[i] - rest[0])).sqrMagnitude > .00000001f)
                     throw new Exception("Blood Saber's sleeve stretched while walking in facing " + facing);
+            return turn;
         }
 
         static bool HasBossStep(Vector3[] rest, Vector3[] pose)

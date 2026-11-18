@@ -15,6 +15,7 @@ Shader "SlashDemo/HeroCloth"
         [HideInInspector] _SupportCutMask ("Support Arm Cutout", 2D) = "black" {}
         [HideInInspector] _SupportCut ("Support Arm Cutout Enabled", Float) = 0
         [HideInInspector] _SupportPatchOffset ("Support Arm Underpaint UV Offset", Float) = 0
+        [HideInInspector] _SaberBladeGlow ("Saber Blade Glow", Range(0, 1)) = 0
     }
     SubShader
     {
@@ -46,6 +47,7 @@ Shader "SlashDemo/HeroCloth"
                 float _SaberPatchOffset;
                 half _SupportCut;
                 float _SupportPatchOffset;
+                half _SaberBladeGlow;
             CBUFFER_END
             float4 _MainTex_TexelSize;
             struct Attributes { float4 positionOS : POSITION; float2 uv : TEXCOORD0; float2 localUV : TEXCOORD1; float4 binding : COLOR; };
@@ -91,7 +93,14 @@ Shader "SlashDemo/HeroCloth"
                         }
                     }
                     paint.a *= lerp(1.0h, input.binding.a, _ProfileLegMask);
-                    return paint * _Color;
+                    paint *= _Color;
+                    if (_SaberBladeGlow > 0 && input.localUV.x >= 0)
+                    {
+                        half edge = smoothstep(.06h, .35h, paint.r - 1.6h * max(paint.g, paint.b));
+                        half flow = smoothstep(.38h, .96h, .5h + .5h * sin(input.localUV.y * 42 + _Time.y * 8));
+                        paint.rgb += half3(2.3h, .11h, .15h) * (edge * (.54h + .68h * flow) * _SaberBladeGlow);
+                    }
+                    return paint;
                 }
                 half clothWhite = 1 - smoothstep(0.40h, 0.60h, (paint.b - paint.r) / max(0.001h, paint.b));
                 clothWhite = max(clothWhite, input.binding.a);

@@ -329,8 +329,12 @@ namespace SlashDemo
                         opponent.Health / (float)opponent.maxHealth, Cinnabar);
                     if (boss.PassiveBuff is CombatBuffView passive)
                         DrawPassiveBuff(new Rect(panel.x + 24, panel.y + 48, 48, 22), passive, scale);
-                    if (boss.CastingSkill != null)
-                        Label(new Rect(panel.x, panel.y + 48, panel.width, 27), boss.CastingSkill, status, Cinnabar);
+                    if (boss.FrenzyBuff is CombatBuffView frenzy)
+                        DrawPassiveBuff(new Rect(panel.xMax - 128, panel.y + 48, 104, 22), frenzy, scale);
+                    string cast = boss.CastingSkill;
+                    if (boss.IsTransitionInvulnerable) cast = cast == null ? "无敌" : cast + " · 无敌";
+                    if (cast != null)
+                        Label(new Rect(panel.x, panel.y + 48, panel.width, 27), cast, status, Cinnabar);
                 }
             }
             if (arena.Travel != null && arena.Travel.ShowPortalPrompt)
@@ -1072,7 +1076,8 @@ namespace SlashDemo
         {
             Box(slot, new Color(.08f, .11f, .11f, .92f));
             Outline(slot, Bronze);
-            if (!DrawHudIcon(slot, buff.iconResource)) Label(slot, buff.name, buffName, Cinnabar);
+            string title = buff.duration > 0 ? $"{buff.name} {Mathf.CeilToInt(buff.timeLeft)}秒" : buff.name;
+            if (!DrawHudIcon(slot, buff.iconResource)) Label(slot, title, buffName, Cinnabar);
             if (buff.stacks > 0)
             {
                 DrawBuffCountdown(slot, buff);

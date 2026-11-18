@@ -193,6 +193,7 @@ namespace SlashDemo
                 if (enemy != null && enemy.Alive && !enemy.trainingDummy && enemy.gameObject.activeInHierarchy) return;
             var venom=ActiveMap.GetComponent<SerpentVenomField>();
             if(venom!=null) venom.Clear();
+            ActiveMap.ReleaseCombatGate();
             Portal = TeleportFormation.Spawn(ActiveMap, defeated.transform.position);
         }
 

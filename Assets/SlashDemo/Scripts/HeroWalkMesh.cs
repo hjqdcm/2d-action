@@ -253,7 +253,7 @@ namespace SlashDemo
         {
             Vector3 cloth = Deform(rest, uv, binding, frame);
             Vector2 offset = leftStep * binding.left + rightStep * binding.right;
-            return cloth + (Vector3)(offset * frame.blend);
+            return cloth + (Vector3)offset;
         }
 
         internal static void FitPaintedStride(Rig rig, Frame frame, ref Vector2 leftFoot, ref Vector2 rightFoot,
@@ -373,16 +373,6 @@ namespace SlashDemo
         public Vector2 Shoulder => shoulder;
         public Vector2 Grip => grip;
         public Vector2 ExtendedTip => grip + (tip - grip) * BladeLengthScale;
-        public int BladeSourceFacing => Side > 0 ? 4 : 0;
-
-        static readonly int[] LeftBladeOutline = {
-            179, 268, 198, 266, 207, 282, 193, 309, 172, 355, 147, 385, 113, 395, 99, 389,
-            125, 360, 145, 328, 168, 286
-        };
-        static readonly int[] RightBladeOutline = {
-            322, 273, 349, 270, 354, 287, 360, 313, 376, 362, 397, 400, 387, 407,
-            358, 387, 340, 345, 322, 306
-        };
         // Follow the steel and guard where the red cloak falls behind the blade.
         static readonly Vector3[] SouthBladeEdges = {
             new Vector3(172, 191, 280), new Vector3(169, 195, 287), new Vector3(168, 195, 297),
@@ -455,12 +445,8 @@ namespace SlashDemo
                 bladeY: 480 - grip.y * 448 + 8, shoulderY: 480 - shoulder.y * 448);
         }
 
-        public Texture2D CreateWholeBladeMask()
-            => Side > 0 ? Rasterize(RightBladeOutline, Side, 0, 0, null, bladeY: 0)
-                : Rasterize(LeftBladeOutline, Side, 0, 0, SouthBladeEdges, bladeY: 280);
-
-        // The west portrait only shows the blade tip under the cape. For the full
-        // raised stroke, fit the east sleeve and saber to its west-facing joints.
+        // The cape hides the far sleeve in two views. Fit the full east arm to those joints
+        // so the hand stays on the hilt when it comes out from behind the cape.
         static readonly Vector2 EastShoulder = AtlasPoint(252, 179), EastElbow = AtlasPoint(258, 231),
             EastGrip = AtlasPoint(255, 282), EastTip = AtlasPoint(332, 410);
 
@@ -471,25 +457,17 @@ namespace SlashDemo
 
         static Vector2 AtlasPoint(int x, int y) => new Vector2(x - 256, 480 - y) / 448;
 
-        public static Texture2D CreateWestArmMask()
+        public static Texture2D CreateFarArmMask()
             => Rasterize(EastArmOutline, 1, 0, 0, EastBladeEdges, bladeY: 290);
 
-        public Vector3 FitWestArm(Vector2 point, out Vector3 weights)
+        public Vector3 FitFarArm(Vector2 point, out Vector3 weights)
         {
             weights = Bind(point, EastShoulder, EastElbow, EastGrip);
-            return FitSection(point, EastShoulder, EastElbow, shoulder, elbow, -1, preserveWidth: true) * weights.x
-                + FitSection(point, EastElbow, EastGrip, elbow, grip, -1, preserveWidth: true) * weights.y;
+            return FitSection(point, EastShoulder, EastElbow, shoulder, elbow, Side, preserveWidth: true) * weights.x
+                + FitSection(point, EastElbow, EastGrip, elbow, grip, Side, preserveWidth: true) * weights.y;
         }
 
-        public Vector2 FitWestBlade(Vector2 point) => FitSection(point, EastGrip, EastTip, grip, tip, -1);
-
-        public Vector3 FitWholeBlade(Vector2 point)
-        {
-            // Align a fully visible blade from the same atlas to the obscured grip and tip.
-            var sourceGrip = Side > 0 ? new Vector2(80, 200) / 448 : new Vector2(-66, 208) / 448;
-            var sourceTip = Side > 0 ? new Vector2(134, 80) / 448 : new Vector2(-144, 93) / 448;
-            return FitSection(point, sourceGrip, sourceTip, grip, tip, 1);
-        }
+        public Vector2 FitFarBlade(Vector2 point) => FitSection(point, EastGrip, EastTip, grip, tip, Side);
 
         static Vector2 FitSection(Vector2 point, Vector2 source, Vector2 sourceEnd,
             Vector2 target, Vector2 targetEnd, float mirror, bool preserveWidth = false)
@@ -564,36 +542,88 @@ namespace SlashDemo
             return mask;
         }
 
-        public Pose Articulate(Vector2 target, Vector3 axis, float twoHanded, out Pose supportPose,
+        public Vector2 RaisedGrip(Vector2 axis, out Vector2 bentElbow)
+        {
+            bentElbow = shoulder + new Vector2(Side * .6f, -.8f) * Vector2.Distance(shoulder, elbow);
+            return bentElbow + axis * Vector2.Distance(elbow, grip);
+        }
+
+        public Pose Articulate(Vector2 target, Vector3 axis, float blend, Vector2? elbowTarget,
+            float elbowBend, bool twoHanded, bool elbowsDown, out Pose supportPose,
             out WeaponPose weaponPose)
         {
-            float restAngle = Mathf.Atan2(tip.y - grip.y, tip.x - grip.x) * Mathf.Rad2Deg;
+            Vector2 restAxis = (tip - grip).normalized;
+            float restAngle = Mathf.Atan2(restAxis.y, restAxis.x) * Mathf.Rad2Deg;
             float targetAngle = Mathf.Atan2(axis.y, axis.x) * Mathf.Rad2Deg;
-            float bladeTurn = Mathf.DeltaAngle(restAngle, targetAngle) * twoHanded;
-            float depth = Mathf.Asin(Mathf.Clamp(axis.z, -1, 1)) * Mathf.Rad2Deg * twoHanded;
+            float bladeTurn = Mathf.DeltaAngle(restAngle, targetAngle) * blend;
+            float depth = Mathf.Asin(Mathf.Clamp(axis.z, -1, 1)) * Mathf.Rad2Deg * blend;
             Quaternion bladeRotation = Quaternion.Euler(0, 0, restAngle + bladeTurn)
                 * Quaternion.Euler(0, -depth, 0) * Quaternion.Euler(0, 0, -restAngle);
-            Vector2 gripAxis = bladeRotation * (Vector3)DemoArt.Direction(restAngle);
-            Vector2 secondGrip = -gripAxis * SecondGripSpacing;
-            Vector2 posedGrip = Vector2.Lerp(grip, target, twoHanded);
-            SolveArm(shoulder, elbow, grip, posedGrip, twoHanded, out Bone upperBone, out Bone lowerBone);
-            Vector2 offhand = Vector2.Lerp(Support.Grip, target + secondGrip, twoHanded);
-            supportPose = Support.PoseAt(offhand, gripAxis, twoHanded);
+            Vector2 gripAxis = bladeRotation * (Vector3)restAxis;
+            Vector2 posedGrip = Vector2.Lerp(grip, target, blend);
+            Bone upperBone, lowerBone;
+            if (elbowTarget is Vector2 raisedElbow)
+            {
+                Vector2 joint = Vector2.Lerp(elbow, raisedElbow, blend);
+                upperBone = new Bone(shoulder, elbow, shoulder, joint);
+                lowerBone = new Bone(elbow, grip, joint, posedGrip);
+            }
+            else SolveArm(shoulder, elbow, grip, posedGrip, blend, Side, elbowBend, elbowsDown, out upperBone, out lowerBone);
+
+            if (twoHanded)
+            {
+                Vector2 offhand = Vector2.Lerp(Support.Grip, target - gripAxis * SecondGripSpacing, blend);
+                supportPose = Support.PoseAt(offhand, gripAxis, blend, elbowBend, elbowsDown);
+            }
+            else supportPose = Support.Hidden ? default : Support.FreePose(blend);
             weaponPose = new WeaponPose(grip, posedGrip, bladeRotation);
             return new Pose(upperBone, lowerBone, new Bone(grip, posedGrip, bladeTurn));
         }
 
+        internal WeaponPose RollBladeEdge(WeaponPose pose, Quaternion bodyRotation)
+        {
+            Vector2 restAxis = (tip - grip).normalized;
+            Vector2 screenAxis = bodyRotation * (pose.Rotation * (Vector3)restAxis);
+            // Pass through an edge-on silhouette when the blade points across the body.
+            float alignment = Side * screenAxis.normalized.x;
+            float roll = Mathf.SmoothStep(0, 180, Mathf.InverseLerp(.18f, -.18f, alignment));
+            return new WeaponPose(grip, pose.Grip, pose.Rotation * Quaternion.AngleAxis(roll, restAxis));
+        }
+
         static void SolveArm(Vector2 shoulder, Vector2 elbow, Vector2 hand, Vector2 target, float extension,
-            out Bone upper, out Bone lower)
+            float side, float bend, bool elbowsDown, out Bone upper, out Bone lower)
         {
             float upperLength = Vector2.Distance(shoulder, elbow);
-            float fraction = upperLength / (upperLength + Vector2.Distance(elbow, hand));
-            Vector2 joint = Vector2.Lerp(elbow + (target - hand) * fraction,
-                Vector2.Lerp(shoulder, target, fraction), extension);
-            // Fit the projected sleeve length while preserving its width. Both sections
-            // share one straight axis at full extension, so the elbow cannot fold over.
+            float forearmLength = Vector2.Distance(elbow, hand);
+            float fraction = upperLength / (upperLength + forearmLength);
+            Vector2 posedElbow = Vector2.Lerp(shoulder, target, fraction);
+            if (elbowsDown) posedElbow = LoweredElbow(shoulder, target, upperLength, forearmLength);
+            else if (bend > 0)
+            {
+                // Guide the elbow out and down as the hands draw the saber across the body.
+                Vector2 bent = shoulder + new Vector2(side * .78f, -.63f) * upperLength
+                    + (target - shoulder) * .14f;
+                posedElbow = Vector2.Lerp(posedElbow, bent, bend);
+            }
+            Vector2 joint = Vector2.Lerp(elbow + (target - hand) * fraction, posedElbow, extension);
             upper = new Bone(shoulder, elbow, shoulder, joint);
             lower = new Bone(elbow, hand, joint, target);
+        }
+
+        static Vector2 LoweredElbow(Vector2 shoulder, Vector2 target, float upperLength, float forearmLength)
+        {
+            float armLength = upperLength + forearmLength;
+            Vector2 reach = target - shoulder;
+            float distance = reach.magnitude;
+            if (distance >= armLength) return shoulder + reach * (upperLength / armLength);
+
+            float span = Mathf.Max(distance, Mathf.Max(armLength * .43f, Mathf.Abs(upperLength - forearmLength) + .002f));
+            float along = (upperLength * upperLength - forearmLength * forearmLength + span * span) / (2 * span);
+            float bend = Mathf.Sqrt(Mathf.Max(0, upperLength * upperLength - along * along));
+            Vector2 direction = reach / Mathf.Max(.001f, distance);
+            // Keep the projected elbow below the shoulder. Ease it toward the axis in profile.
+            float down = Mathf.Clamp(-direction.x * 4, -1, 1);
+            return shoulder + direction * along + Vector2.Perpendicular(direction) * (bend * down);
         }
 
         internal readonly struct SupportArm
@@ -636,9 +666,22 @@ namespace SlashDemo
                     FitSection(point, DonorElbow, DonorGrip, elbow, Grip, mirror, preserveWidth: true), weights.y);
             }
 
-            public Pose PoseAt(Vector2 hand, Vector2 bladeAxis, float extension)
+            public Vector3 BindPaintedArm(Vector2 point) => Bind(point, Shoulder, elbow, Grip);
+
+            public Pose FreePose(float blend)
             {
-                SolveArm(Shoulder, elbow, Grip, hand, extension, out Bone upper, out Bone forearm);
+                Vector2 bentElbow = Shoulder + new Vector2(.22f * Side, -.975f) * Vector2.Distance(Shoulder, elbow);
+                Vector2 openHand = bentElbow + new Vector2(.91f * Side, .415f) * Vector2.Distance(elbow, Grip);
+                Vector2 joint = Vector2.Lerp(elbow, bentElbow, blend);
+                Vector2 hand = Vector2.Lerp(Grip, openHand, blend);
+                var forearm = new Bone(elbow, Grip, joint, hand);
+                float wristTurn = Vector2.SignedAngle(Grip - elbow, hand - joint) * .78f;
+                return new Pose(new Bone(Shoulder, elbow, Shoulder, joint), forearm, new Bone(Grip, hand, wristTurn));
+            }
+
+            public Pose PoseAt(Vector2 hand, Vector2 bladeAxis, float extension, float elbowBend, bool elbowsDown)
+            {
+                SolveArm(Shoulder, elbow, Grip, hand, extension, Side, elbowBend, elbowsDown, out Bone upper, out Bone forearm);
                 Vector2 donorAxis = AtlasPoint(112, 387) - DonorGrip;
                 Vector2 gripAxis = FitSection(DonorGrip + donorAxis, DonorElbow, DonorGrip,
                     elbow, Grip, -Side, preserveWidth: true) - Grip;
@@ -794,18 +837,36 @@ namespace SlashDemo
         MaterialPropertyBlock saberBladeProperties;
         PaintedSaberArm.WeaponPose saberWeaponPose;
         Texture2D[] saberMasks;
-        Texture2D[] wholeBladeMasks;
-        Texture2D westArmMask;
+        Texture2D farSaberArmMask;
         PaintedSaberArm.Pose saberArmPose;
         PaintedSaberArm.Pose supportArmPose;
         Mesh supportArmMesh;
         MeshRenderer supportArmRenderer;
         MaterialPropertyBlock supportArmProperties;
+        static readonly int SaberBladeGlow = Shader.PropertyToID("_SaberBladeGlow");
+        float saberBladeGlow;
         Vector3[] supportArmRest, supportArmVertices, supportArmBindings;
+        Vector3[] freeArmBindings;
+        Vector2[] supportArmUv, freeArmUv;
+        bool supportUsesOwnArt;
         Texture2D supportDonorMask;
         Texture2D[] supportBodyMasks;
         float twoHandedGrip;
         bool saberArmMoving;
+        static readonly Vector3 SaberTorsoPivot = new Vector3(0, .34f, 0);
+        Vector3 saberTorsoOffset;
+        Quaternion saberTorsoRotation = Quaternion.identity;
+        const float SaberPlantTime = .16f;
+        Vector2 plantLeftFoot, plantRightFoot, plantLeftKnee, plantRightKnee;
+        bool saberPlanting, plantLeftSupport;
+        float plantAge, plantBob, plantStartBob, plantStance, saberKneeBend;
+        float saberPoseBlend = 1;
+        float previousSaberKneeBend;
+        Vector3 previousSaberTorso, previousSaberCarry;
+        Quaternion previousSaberTorsoRotation;
+        bool previousSaberArmMoving, previousSupportArmMoving;
+        PaintedSaberArm.Pose previousSaberArm, previousSupportArm;
+        PaintedSaberArm.WeaponPose previousSaberWeapon;
         Vector2 castTorso, castHand;
         float castAngle;
         int gridVertexCount;
@@ -836,7 +897,8 @@ namespace SlashDemo
         public MeshRenderer WalkingRenderer=>meshRenderer;
         public int LayerCount=>mesh!=null?mesh.subMeshCount:0;
         float BodyHeight => paintedRig.HasValue ? transform.localScale.y : HeroAppearance.BodyHeight;
-        public float Bob=>HeroGaitMath.BodyBob(phase)*BodyHeight*characterScale*blend;
+        public float Bob => (saberPlanting ? plantBob : HeroGaitMath.BodyBob(phase) * blend) * BodyHeight * characterScale;
+        internal bool HasSaberStride => blend > .05f;
         public void Initialize(SpriteRenderer body) => Initialize(body, null, default);
 
         internal void Initialize(SpriteRenderer body, HeroGaitMath.Rig? painted, PaintedGesture gesture, bool fitStance = true)
@@ -874,6 +936,12 @@ namespace SlashDemo
 
         internal void SetPaintedRig(HeroGaitMath.Rig rig, PaintedGesture gesture)
         {
+            if (saberPlanting && plantAge > 0 && plantAge < SaberPlantTime)
+            {
+                // Hold the support boot in place through the eight-direction sprite change.
+                if (plantLeftSupport) plantLeftFoot.x += legRig.left.sole.x - rig.left.sole.x;
+                else plantRightFoot.x += legRig.right.sole.x - rig.right.sole.x;
+            }
             paintedRig = rig;
             paintedGesture = gesture;
             // The new facing needs fresh weights. Keep the walk phase continuous.
@@ -952,15 +1020,15 @@ namespace SlashDemo
             return 1 - Mathf.Max(edge, cuff);
         }
 
-        void RefreshProfileLeg(Vector2 foot, Vector2 knee)
+        void RefreshProfileLeg(Vector2 foot, Vector2 knee, float opacity)
         {
-            profileLegRenderer.enabled = source.enabled && blend > .002f;
+            profileLegRenderer.enabled = source.enabled && opacity > .002f;
             if (!profileLegRenderer.enabled) return;
             for (int i = 0; i < profileLegRest.Length; i++)
             {
                 Vector3 restPoint = profileLegRest[i];
                 float height = restPoint.y - .018f;
-                profileLegPose[i] = restPoint + (Vector3)(HeroGaitMath.PaintedShinOffset(height, foot, knee) * blend);
+                profileLegPose[i] = restPoint + (Vector3)HeroGaitMath.PaintedShinOffset(height, foot, knee);
             }
             profileLegMesh.vertices = profileLegPose;
             profileLegMesh.RecalculateBounds();
@@ -970,7 +1038,7 @@ namespace SlashDemo
             tint.r *= .72f;
             tint.g *= .72f;
             tint.b *= .72f;
-            tint.a *= Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.002f, .25f, blend));
+            tint.a *= Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.002f, .25f, opacity));
             profileLegProperties.SetColor("_Color", tint);
             profileLegRenderer.SetPropertyBlock(profileLegProperties);
         }
@@ -1003,7 +1071,61 @@ namespace SlashDemo
         {
             phase = blend = smoothedSpeed = 0;
             hasWalkHeading = false;
+            EndSaberPlant();
         }
+
+        internal void BeginSaberPlant()
+        {
+            if (saberPlanting) return;
+            var frame = WalkFrame();
+            GetFootOffsets(frame, out plantLeftFoot, out plantRightFoot, out plantLeftKnee, out plantRightKnee);
+            float leftPhase = phase + (legRig.reversePhase ? Mathf.PI : 0);
+            plantLeftSupport = HeroGaitMath.Sample(leftPhase, strideScale).lift
+                <= HeroGaitMath.Sample(leftPhase + Mathf.PI, strideScale).lift;
+            plantStartBob = plantBob = HeroGaitMath.BodyBob(phase) * blend;
+            plantLeftFoot *= blend;
+            plantRightFoot *= blend;
+            plantLeftKnee *= blend;
+            plantRightKnee *= blend;
+            plantAge = 0;
+            plantStance = 1;
+            saberPlanting = true;
+        }
+
+        internal void AdvanceSaberPlant(float dt, float stance)
+        {
+            if (!saberPlanting) return;
+            plantAge += dt;
+            blend = Mathf.MoveTowards(blend, 0, dt / SaberPlantTime);
+            plantBob = HeroGaitMath.BodyBob(phase) * blend;
+            plantStance = stance;
+            smoothedSpeed = 0;
+            if (plantAge >= SaberPlantTime) hasWalkHeading = false;
+        }
+
+        internal void EndSaberPlant()
+        {
+            saberPlanting = false;
+            saberKneeBend = 0;
+        }
+
+        internal void CaptureSaberPose()
+        {
+            previousSaberTorso = saberTorsoOffset;
+            previousSaberTorsoRotation = saberTorsoRotation;
+            previousSaberKneeBend = saberKneeBend;
+            previousSaberArmMoving = saberArmMoving;
+            previousSupportArmMoving = saberArmMoving && (twoHandedGrip > 0 || !paintedGesture.SaberArm.Value.Support.Hidden);
+            previousSaberCarry = saberArmMoving ? Vector3.zero : SaberCarry(WalkFrame());
+            previousSaberArm = saberArmPose;
+            previousSupportArm = supportArmPose;
+            previousSaberWeapon = saberWeaponPose;
+            saberPoseBlend = 0;
+        }
+
+        internal void SetSaberPoseBlend(float blend) => saberPoseBlend = blend;
+
+        internal void SetSaberBladeGlow(bool active) => saberBladeGlow = active ? 1 : 0;
 
         internal void SetPaintedCastPose(Vector2 torso, Vector2 hand, float angle)
         {
@@ -1014,13 +1136,44 @@ namespace SlashDemo
             twoHandedGrip = 0;
         }
 
-        internal void SetSaberCastPose(Vector2 torso, Vector2 hand, Vector3 axis, float twoHanded)
+        internal void SetSaberBodyPose(Vector2 offset, float lean, float kneeBend = 0)
         {
-            castTorso = torso;
-            twoHandedGrip = twoHanded;
-            saberArmMoving = twoHanded > 0;
+            var rotation = Quaternion.Euler(0, 0, lean);
+            saberTorsoOffset = Vector3.Lerp(previousSaberTorso, offset, saberPoseBlend);
+            saberTorsoRotation = saberPoseBlend < 1 ? Quaternion.Slerp(previousSaberTorsoRotation, rotation, saberPoseBlend) : rotation;
+            saberKneeBend = Mathf.Lerp(previousSaberKneeBend, kneeBend, saberPoseBlend);
+        }
+
+        Vector3 SaberBodyPoint(Vector3 point) =>
+            SaberTorsoPivot + saberTorsoRotation * (point - SaberTorsoPivot) + saberTorsoOffset;
+
+        internal Vector2 SaberGripBeforeBodyPose(Vector2 point) =>
+            SaberTorsoPivot + Quaternion.Inverse(saberTorsoRotation) * ((Vector3)point - SaberTorsoPivot - saberTorsoOffset);
+
+        internal void SetSaberCastPose(Vector2 hand, Vector3 axis, float blend, Vector2? elbowTarget = null,
+            float elbowBend = 0, bool twoHanded = true, bool elbowsDown = false)
+        {
+            twoHandedGrip = twoHanded ? blend : 0;
+            saberArmMoving = blend > 0;
             if (saberArmMoving)
-                saberArmPose = paintedGesture.SaberArm.Value.Articulate(hand, axis, twoHanded, out supportArmPose, out saberWeaponPose);
+                saberArmPose = paintedGesture.SaberArm.Value.Articulate(hand, Quaternion.Inverse(saberTorsoRotation) * axis,
+                    blend, elbowTarget, elbowBend, twoHanded, elbowsDown,
+                    out supportArmPose, out saberWeaponPose);
+        }
+
+        PaintedSaberArm.WeaponPose SaberWeapon(Vector3 carry)
+        {
+            Vector2 grip = paintedGesture.Grip;
+            var target = saberArmMoving ? saberWeaponPose
+                : new PaintedSaberArm.WeaponPose(grip, grip + (Vector2)carry, Quaternion.identity);
+            if (saberPoseBlend < 1)
+            {
+                Vector2 fromGrip = previousSaberArmMoving ? previousSaberWeapon.Grip : grip + (Vector2)previousSaberCarry;
+                Quaternion fromRotation = previousSaberArmMoving ? previousSaberWeapon.Rotation : Quaternion.identity;
+                target = new PaintedSaberArm.WeaponPose(grip, Vector2.Lerp(fromGrip, target.Grip, saberPoseBlend),
+                    Quaternion.Slerp(fromRotation, target.Rotation, saberPoseBlend));
+            }
+            return saberArmMoving ? paintedGesture.SaberArm.Value.RollBladeEdge(target, saberTorsoRotation) : target;
         }
 
         static float CastTorsoWeight(float height)
@@ -1031,14 +1184,11 @@ namespace SlashDemo
             var bounds = source.sprite.bounds;
             float height = Mathf.InverseLerp(bounds.min.y, bounds.max.y, point.y);
             if (paintedGesture.SaberArm.HasValue)
-                return transform.TransformPoint((Vector3)castTorso + (saberArmMoving ? saberWeaponPose.Point(point) : (Vector3)point));
+                return transform.TransformPoint(SaberBodyPoint(SaberWeapon(saberArmMoving ? Vector3.zero : SaberCarry(WalkFrame())).Point(point)));
             float gripWeight = CastTorsoWeight(paintedGesture.Grip.y - bounds.min.y);
             return transform.TransformPoint(point + CastOffset(point, paintedGesture.Weight(point),
                 height, gripWeight, Mathf.Sin(castAngle), Mathf.Cos(castAngle)));
         }
-
-        Vector2 SaberArmOffset(Vector2 point, Vector3 binding)
-            => castTorso + (saberArmMoving ? saberArmPose.Offset(point, binding) : Vector2.zero);
 
         void BuildSaberArm(PaintedSaberArm arm, Vector2[] uv, List<int> triangles)
         {
@@ -1062,7 +1212,6 @@ namespace SlashDemo
                 saberBladeProperties = new MaterialPropertyBlock();
                 saberBladeProperties.SetFloat("_SaberCutMode", 3);
                 saberMasks = new Texture2D[8];
-                wholeBladeMasks = new Texture2D[2];
             }
             int facing = legRig.direction;
             if (saberMasks[facing] == null) saberMasks[facing] = arm.CreateMask(facing);
@@ -1073,29 +1222,18 @@ namespace SlashDemo
             var bladeRest = new Vector3[rest.Length];
             if (arm.BehindBody)
             {
-                bool west = facing == 6;
-                int donor = west ? 2 : arm.BladeSourceFacing;
-                int donorSlot = donor / 4;
-                if (west)
-                {
-                    if (westArmMask == null) westArmMask = PaintedSaberArm.CreateWestArmMask();
-                    armMask = westArmMask;
-                }
-                else
-                {
-                    if (wholeBladeMasks[donorSlot] == null) wholeBladeMasks[donorSlot] = arm.CreateWholeBladeMask();
-                    armMask = wholeBladeMasks[donorSlot];
-                }
+                if (farSaberArmMask == null) farSaberArmMask = PaintedSaberArm.CreateFarArmMask();
+                armMask = farSaberArmMask;
                 var rect = sprite.rect;
                 var atlas = sprite.texture;
-                var origin = new Vector2(donor % 4 * rect.width / atlas.width, (1 - donorSlot) * rect.height / atlas.height);
                 var size = new Vector2(rect.width / atlas.width, rect.height / atlas.height);
+                var origin = new Vector2(2 * size.x, size.y);
                 uv = new Vector2[rest.Length];
                 for (int i = 0; i < rest.Length; i++)
                 {
                     uv[i] = origin + Vector2.Scale(weights[i], size);
-                    if (west) saberArmRest[i] = arm.FitWestArm(rest[i], out saberArmBindings[i]);
-                    bladeRest[i] = arm.ExtendBlade(west ? arm.FitWestBlade(rest[i]) : (Vector2)arm.FitWholeBlade(rest[i])) - arm.Grip;
+                    saberArmRest[i] = arm.FitFarArm(rest[i], out saberArmBindings[i]);
+                    bladeRest[i] = arm.ExtendBlade(arm.FitFarBlade(rest[i])) - arm.Grip;
                 }
             }
             else
@@ -1161,30 +1299,47 @@ namespace SlashDemo
                 properties.SetFloat("_SupportPatchOffset", -arm.Side * 32 / sprite.texture.width);
             }
             var size = new Vector2(sprite.rect.width / sprite.texture.width, sprite.rect.height / sprite.texture.height);
-            var uv = new Vector2[rest.Length];
+            supportArmUv = new Vector2[rest.Length];
+            freeArmUv = arm.Hidden ? null : new Vector2[rest.Length];
+            var cellOrigin = new Vector2(sprite.rect.x / sprite.texture.width, sprite.rect.y / sprite.texture.height);
             supportArmRest = new Vector3[rest.Length];
             supportArmVertices = new Vector3[rest.Length];
             supportArmBindings = new Vector3[rest.Length];
+            freeArmBindings = arm.Hidden ? null : new Vector3[rest.Length];
             for (int i = 0; i < rest.Length; i++)
             {
                 // The supporting sleeve is sampled from the first cell of the atlas.
-                uv[i] = Vector2.up * size.y + Vector2.Scale(weights[i], size);
+                Vector2 cellUv = Vector2.Scale(weights[i], size);
+                supportArmUv[i] = Vector2.up * size.y + cellUv;
                 supportArmRest[i] = arm.Fit(rest[i], out supportArmBindings[i]);
+                if (!arm.Hidden)
+                {
+                    freeArmUv[i] = cellOrigin + cellUv;
+                    freeArmBindings[i] = arm.BindPaintedArm(rest[i]);
+                }
             }
             supportArmMesh.Clear();
             supportArmMesh.vertices = supportArmRest;
-            supportArmMesh.uv = uv;
+            supportArmMesh.uv = supportArmUv;
             supportArmMesh.uv2 = weights;
             supportArmMesh.SetTriangles(triangles, 0);
+            supportUsesOwnArt = false;
+            supportArmProperties.SetTexture("_SaberCutMask", supportDonorMask);
         }
 
-        void RefreshSaberArm(bool drawArm)
+        void RefreshSaberArm(bool drawArm, bool freeArm)
         {
             if (saberArmRenderer == null) return;
             var arm = paintedGesture.SaberArm;
             bool visible = drawArm && source.enabled;
             properties.SetFloat("_SaberCutMode", visible ? 1 : 0);
-            bool supportVisible = visible && twoHandedGrip > 0;
+            bool supportVisible = visible && (twoHandedGrip > 0 || freeArm);
+            if (supportUsesOwnArt != freeArm)
+            {
+                supportUsesOwnArt = freeArm;
+                supportArmMesh.uv = freeArm ? freeArmUv : supportArmUv;
+                supportArmProperties.SetTexture("_SaberCutMask", freeArm ? supportBodyMasks[legRig.direction] : supportDonorMask);
+            }
             if (!supportVisible && supportArmRenderer.enabled) supportArmMesh.vertices = supportArmRest;
             supportArmRenderer.enabled = supportVisible;
             properties.SetFloat("_SupportCut", supportVisible && !arm.Value.Support.Hidden ? 1 : 0);
@@ -1200,6 +1355,7 @@ namespace SlashDemo
             saberBladeRenderer.sortingLayerID = source.sortingLayerID;
             saberBladeRenderer.sortingOrder = saberArmRenderer.sortingOrder - 1;
             saberBladeProperties.SetColor("_Color", source.color);
+            saberBladeProperties.SetFloat(SaberBladeGlow, saberBladeGlow);
             saberBladeProperties.SetFloat("_SaberGripExtension", twoHandedGrip);
             saberBladeRenderer.SetPropertyBlock(saberBladeProperties);
 
@@ -1207,7 +1363,9 @@ namespace SlashDemo
             supportArmMesh.vertices = supportArmVertices;
             supportArmMesh.RecalculateBounds();
             supportArmRenderer.sortingLayerID = source.sortingLayerID;
-            supportArmRenderer.sortingOrder = source.sortingOrder + (arm.Value.Support.Hidden ? -3 : 3);
+            // In the northwest view the joining hand reaches in front of the chest, under the cape.
+            bool behindCape = arm.Value.Support.Hidden || (legRig.direction == 5 && !freeArm);
+            supportArmRenderer.sortingOrder = source.sortingOrder + (behindCape ? -3 : 3);
             supportArmProperties.SetColor("_Color", source.color);
             supportArmRenderer.SetPropertyBlock(supportArmProperties);
         }
@@ -1366,19 +1524,21 @@ namespace SlashDemo
             triangles.Add(a);triangles.Add(b);triangles.Add(a+1);
             triangles.Add(a+1);triangles.Add(b);triangles.Add(b+1);
         }
-        public void Refresh()
+        HeroGaitMath.Frame WalkFrame()
         {
-            if(source==null || source.sprite==null) return;
-            if(mesh==null || meshRenderer==null || material==null) { UseStaticBody();return; }
-            if(properties==null) properties=new MaterialPropertyBlock();
-            if(sprite!=source.sprite) BuildGrid();
             float mirror = source.flipX ? -1 : 1;
             Vector2 heading = paintedRig.HasValue ? new Vector2(motion.x * mirror, motion.y) : motion;
-            var frame=HeroGaitMath.Prepare(legRig,phase,blend,heading,strideScale);
+            var frame = HeroGaitMath.Prepare(legRig, phase, blend, heading, strideScale);
             frame.upperBlend = Attacking ? 0 : blend * upperBodyWeight;
-            Vector2 leftStep = frame.left.sole - frame.left.rest.sole;
-            Vector2 rightStep = frame.right.sole - frame.right.rest.sole;
-            Vector2 leftKnee = Vector2.zero, rightKnee = Vector2.zero;
+            return frame;
+        }
+
+        void GetFootOffsets(HeroGaitMath.Frame frame, out Vector2 leftStep, out Vector2 rightStep,
+            out Vector2 leftKnee, out Vector2 rightKnee)
+        {
+            leftStep = frame.left.sole - frame.left.rest.sole;
+            rightStep = frame.right.sole - frame.right.rest.sole;
+            leftKnee = rightKnee = Vector2.zero;
             if (legRig.preserveBootShape)
                 HeroGaitMath.FitPaintedStride(legRig, frame, ref leftStep, ref rightStep, out leftKnee, out rightKnee);
             else if (paintedRig.HasValue)
@@ -1388,28 +1548,61 @@ namespace SlashDemo
                 leftStep.x -= closing;
                 rightStep.x += closing;
             }
+        }
+
+        Vector2 SettleFoot(Vector2 foot, bool supports, float settle)
+            => new Vector2(foot.x * (supports ? plantStance : 1 - settle),
+                Mathf.Lerp(foot.y + plantStartBob, 0, settle) - plantBob);
+
+        Vector3 SaberCarry(HeroGaitMath.Frame frame)
+        {
+            Vector2 shoulder = paintedGesture.SaberArm.Value.Shoulder;
+            var bounds = source.sprite.bounds;
+            var uv = new Vector2(Mathf.InverseLerp(bounds.min.x, bounds.max.x, shoulder.x),
+                Mathf.InverseLerp(bounds.min.y, bounds.max.y, shoulder.y));
+            return HeroGaitMath.UpperBodyDeform(shoulder, uv, frame) - (Vector3)shoulder;
+        }
+
+        public void Refresh()
+        {
+            if (source == null || source.sprite == null) return;
+            if (mesh == null || meshRenderer == null || material == null) { UseStaticBody(); return; }
+            if (properties == null) properties = new MaterialPropertyBlock();
+            if (sprite != source.sprite) BuildGrid();
+            float mirror = source.flipX ? -1 : 1;
+            var frame = WalkFrame();
+            GetFootOffsets(frame, out Vector2 leftStep, out Vector2 rightStep, out Vector2 leftKnee, out Vector2 rightKnee);
+            if (saberPlanting)
+            {
+                float settle = Mathf.SmoothStep(0, 1, plantAge / SaberPlantTime);
+                leftStep = SettleFoot(plantLeftFoot, plantLeftSupport, settle);
+                rightStep = SettleFoot(plantRightFoot, !plantLeftSupport, settle);
+                leftKnee = Vector2.Lerp(plantLeftKnee, leftStep * .45f, settle);
+                rightKnee = Vector2.Lerp(plantRightKnee, rightStep * .45f, settle);
+            }
+            else
+            {
+                leftStep *= frame.blend;
+                rightStep *= frame.blend;
+                leftKnee *= frame.blend;
+                rightKnee *= frame.blend;
+            }
             Vector2 waist=new Vector2(0,sprite.bounds.min.y+sprite.bounds.size.y*.52f);
             bool posing = saberArmMoving || castAngle != 0 || castTorso != Vector2.zero || castHand != Vector2.zero;
             // The cutout supplies the same length of saber in the carry and attack poses.
             bool drawSaberArm = saberArmBindings != null;
-            Vector3 saberCarry = Vector3.zero;
-            if (drawSaberArm && !posing)
-            {
-                Vector2 shoulder = paintedGesture.SaberArm.Value.Shoulder;
-                var bounds = sprite.bounds;
-                var shoulderUv = new Vector2(Mathf.InverseLerp(bounds.min.x, bounds.max.x, shoulder.x),
-                    Mathf.InverseLerp(bounds.min.y, bounds.max.y, shoulder.y));
-                // Carry the whole sleeve and blade with the shoulder throughout the stride.
-                saberCarry = HeroGaitMath.UpperBodyDeform(shoulder, shoulderUv, frame) - (Vector3)shoulder;
-            }
+            bool freeArm = drawSaberArm && saberArmMoving && twoHandedGrip == 0 && freeArmBindings != null;
+            Vector3 saberCarry = drawSaberArm && !saberArmMoving ? SaberCarry(frame) : Vector3.zero;
             if (drawSaberArm)
             {
                 var blade = saberBladeRenderer.transform;
-                blade.localPosition = saberArmMoving ? castTorso + saberWeaponPose.Grip : (Vector3)paintedGesture.Grip + saberCarry;
-                blade.localRotation = saberArmMoving ? saberWeaponPose.Rotation : Quaternion.identity;
+                var weapon = SaberWeapon(saberCarry);
+                blade.localPosition = SaberBodyPoint(weapon.Grip);
+                blade.localRotation = saberTorsoRotation * weapon.Rotation;
             }
             float sine = Mathf.Sin(castAngle), cosine = Mathf.Cos(castAngle);
             float gripTorsoWeight = CastTorsoWeight(paintedGesture.Grip.y - sprite.bounds.min.y);
+            float hipBlendStart = Mathf.Lerp(.21f, .14f, saberKneeBend);
             for(int i=0;i<vertices.Length;i++)
             {
                 var p=rest[i];
@@ -1421,24 +1614,43 @@ namespace SlashDemo
                     {
                         leftOffset = HeroGaitMath.PaintedShinOffset(p.y, leftStep, leftKnee);
                         rightOffset = HeroGaitMath.PaintedShinOffset(p.y, rightStep, rightKnee);
+                        if (saberKneeBend > 0)
+                        {
+                            float knee = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.09f, .24f, p.y))
+                                * (1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.27f, .34f, p.y))) * saberKneeBend;
+                            leftOffset += new Vector2(-.029f, -.021f) * knee;
+                            rightOffset += new Vector2(.029f, -.021f) * knee;
+                        }
                     }
                     vertices[i] = HeroGaitMath.DeformPainted(p, weights[i], binding, frame, leftOffset, rightOffset);
                     if (drawSaberArm)
                     {
-                        if (posing)
+                        float torsoWeight = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(hipBlendStart, .37f, weights[i].y));
+                        vertices[i] = Vector3.Lerp(vertices[i], SaberBodyPoint(vertices[i]), torsoWeight);
+                        if (saberArmMoving)
                         {
-                            // The body never receives any of the shoulder, elbow or wrist offsets.
-                            vertices[i] += (Vector3)(castTorso * Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.10f, .33f, weights[i].y)));
                             Vector3 armPoint = saberArmRest[i];
-                            saberArmVertices[i] = armPoint + (Vector3)SaberArmOffset(armPoint, saberArmBindings[i]);
-                            if (twoHandedGrip > 0)
+                            Vector3 offset = saberArmPose.Offset(armPoint, saberArmBindings[i]);
+                            if (saberPoseBlend < 1)
                             {
-                                Vector3 supportPoint = supportArmRest[i];
-                                supportArmVertices[i] = supportPoint
-                                    + (Vector3)(castTorso + supportArmPose.Offset(supportPoint, supportArmBindings[i]));
+                                Vector3 from = previousSaberArmMoving
+                                    ? previousSaberArm.Offset(armPoint, saberArmBindings[i]) : previousSaberCarry;
+                                offset = Vector3.Lerp(from, offset, saberPoseBlend);
+                            }
+                            saberArmVertices[i] = SaberBodyPoint(armPoint + offset);
+                            if (twoHandedGrip > 0 || freeArm)
+                            {
+                                Vector3 supportPoint = freeArm ? rest[i] : supportArmRest[i];
+                                Vector3 supportBinding = freeArm ? freeArmBindings[i] : supportArmBindings[i];
+                                Vector2 supportOffset = supportArmPose.Offset(supportPoint, supportBinding);
+                                if (saberPoseBlend < 1)
+                                    supportOffset = Vector2.Lerp(previousSupportArmMoving
+                                        ? previousSupportArm.Offset(supportPoint, supportBinding) : Vector2.zero,
+                                        supportOffset, saberPoseBlend);
+                                supportArmVertices[i] = SaberBodyPoint(supportPoint + (Vector3)supportOffset);
                             }
                         }
-                        else saberArmVertices[i] = saberArmRest[i] + saberCarry;
+                        else saberArmVertices[i] = SaberBodyPoint(saberArmRest[i] + saberCarry);
                     }
                     else if (posing)
                         vertices[i] += (Vector3)CastOffset(p, gestureWeights[i], weights[i].y,
@@ -1464,12 +1676,14 @@ namespace SlashDemo
             }
             mesh.RecalculateBounds();meshRenderer.sortingLayerID=source.sortingLayerID;
             meshRenderer.sortingOrder=source.sortingOrder;meshRenderer.enabled=source.enabled;
-            RefreshSaberArm(drawSaberArm);
-            properties.SetColor("_Color",source.color);properties.SetFloat("_WalkBlend",blend);meshRenderer.SetPropertyBlock(properties);
+            RefreshSaberArm(drawSaberArm, freeArm);
+            properties.SetColor("_Color", source.color);
+            properties.SetFloat("_WalkBlend", blend);
+            meshRenderer.SetPropertyBlock(properties);
             if (profileLegRest != null)
             {
                 bool farIsLeft = legRig.left.sole.y > legRig.right.sole.y;
-                RefreshProfileLeg(farIsLeft ? leftStep : rightStep, farIsLeft ? leftKnee : rightKnee);
+                RefreshProfileLeg(farIsLeft ? leftStep : rightStep, farIsLeft ? leftKnee : rightKnee, blend);
             }
         }
         void LateUpdate(){Refresh();}
@@ -1486,8 +1700,7 @@ namespace SlashDemo
         {
             if(source!=null) source.forceRenderingOff=false;Release(mesh);Release(profileLegMesh);Release(saberArmMesh);Release(material);
             if(saberMasks!=null) foreach (var mask in saberMasks) Release(mask);
-            if(wholeBladeMasks!=null) foreach (var mask in wholeBladeMasks) Release(mask);
-            Release(westArmMask);
+            Release(farSaberArmMask);
             Release(supportArmMesh); Release(supportDonorMask);
             Release(saberBladeMesh);
             if(supportBodyMasks!=null) foreach (var mask in supportBodyMasks) Release(mask);

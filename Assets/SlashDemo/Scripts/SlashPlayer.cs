@@ -941,40 +941,49 @@ namespace SlashDemo
             enemy.TakeHit(damage, direction, force, heavy, critical: critical);
         }
 
+        enum DamageKind { Hit, Poison, BloodMist }
+
         public bool TakeDamage(int damage, Vector2 direction)
-            => ApplyDamage(damage, direction, false);
+            => ApplyDamage(damage, direction, DamageKind.Hit);
 
         internal bool TakeChallengeDamage(int damage, Vector2 direction, SlashEnemy opponent)
-            => ApplyDamage(damage, direction, false, opponent);
+            => ApplyDamage(damage, direction, DamageKind.Hit, opponent);
 
         public bool TakePoisonDamage(int damage)
-            => ApplyDamage(damage, Vector2.zero, true);
+            => ApplyDamage(damage, Vector2.zero, DamageKind.Poison);
 
-        bool ApplyDamage(int damage, Vector2 direction, bool poison, SlashEnemy challenger = null)
+        internal bool TakeBloodMistDamage(int damage)
+            => ApplyDamage(Mathf.Min(damage, Health), Vector2.zero, DamageKind.BloodMist);
+
+        bool ApplyDamage(int damage, Vector2 direction, DamageKind kind, SlashEnemy challenger = null)
         {
-            if (!IsAlive || invincible || IsUltimateActive || (!poison && invulnerability > 0) || IsDashing
+            if (!IsAlive || invincible || IsUltimateActive || (kind == DamageKind.Hit && invulnerability > 0) || IsDashing
                 || (HasFlowingCloud && IsTechniqueActive)) return false;
+            bool mist = kind == DamageKind.BloodMist;
             bool protectedCharge = IronBodyActive && IsCharging;
             if (IronBodyActive) damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1 - IronSword.bodyDamageReduction)));
             Health = Mathf.Max(0, Health - damage);
             bool lethal = !IsAlive;
-            if (!protectedCharge)
+            if (!protectedCharge && (!mist || lethal))
             {
                 InterruptCombo(lethal ? StackInterruption.Clear : StackInterruption.Preserve);
                 CancelHeavyAttack();
             }
-            if (!poison) invulnerability = 0.8f;
-            flash = 0.1f;
-            recoil = protectedCharge ? Vector2.zero : direction.normalized * 5;
+            if (kind == DamageKind.Hit) invulnerability = 0.8f;
+            if (!mist || lethal)
+            {
+                flash = 0.1f;
+                recoil = protectedCharge ? Vector2.zero : direction.normalized * 5;
+            }
             bool settled = lethal && challenger != null && arena.Travel != null && arena.Travel.TrySettleChallengeDefeat(challenger);
             if (settled)
             {
                 Health = Mathf.CeilToInt(maxHealth * .5f);
                 Teleport(body.position);
             }
-            if (damage > 0)
+            if (damage > 0 && (!mist || lethal))
             {
-                Color impactColor = poison ? new Color(.65f, .86f, .27f) : DemoArt.Red;
+                Color impactColor = kind == DamageKind.Poison ? new Color(.65f, .86f, .27f) : DemoArt.Red;
                 arena.Effects.DamageImpact(presentation, direction, impactColor, lethal: lethal);
                 arena.Effects.PlayReceivedHit();
                 arena.CameraRig.Shake(SwordHitShake * SlashEffects.ReceivedHitMultiplier);

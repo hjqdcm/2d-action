@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace SlashDemo
@@ -118,11 +119,15 @@ namespace SlashDemo
 
     public sealed class TravelMapEnvironment : MonoBehaviour
     {
+        const float FinalBattleGateY = 898;
         Sprite paint;
         Sprite gateRoof;
         Material material;
+        EdgeCollider2D combatGate;
+        Vector2[] boundary, combatBoundary;
         public TravelMapDefinition Definition { get; private set; }
         public BoxCollider2D ReservedExit { get; private set; }
+        public IReadOnlyList<Vector2> WalkableBoundary => combatGate != null && combatGate.enabled ? combatBoundary : boundary;
 
         public static TravelMapEnvironment Build(Transform parent, TravelMapDefinition definition)
         {
@@ -150,8 +155,10 @@ namespace SlashDemo
             renderer.sharedMaterial = root.material != null ? root.material : DemoArt.Material;
             var edge = new GameObject("Walkable boundary").AddComponent<EdgeCollider2D>();
             edge.transform.SetParent(root.transform, false);
-            edge.points = root.ToGround(definition.boundary);
+            root.boundary = root.ToGround(definition.boundary);
+            edge.points = root.boundary;
             edge.edgeRadius = 0.03f;
+            if (definition.destination == TravelDestination.FinalBattle) root.BuildCombatGate();
             foreach (var obstacle in definition.obstacles)
             {
                 var collider = new GameObject("Furniture footprint").AddComponent<PolygonCollider2D>();
@@ -167,6 +174,38 @@ namespace SlashDemo
             exit.isTrigger = true;
             root.ReservedExit = exit;
             return root;
+        }
+
+        void BuildCombatGate()
+        {
+            float gateY = Definition.Ground(0, FinalBattleGateY).y;
+            var court = new List<Vector2>(boundary.Length);
+            var opening = new List<Vector2>(2);
+            int count = boundary.Length - (boundary[0] == boundary[boundary.Length - 1] ? 1 : 0);
+            // Close the courtyard at the same two points used for the invisible collider.
+            for (int i = 0, previous = count - 1; i < count; previous = i++)
+            {
+                Vector2 a = boundary[previous], b = boundary[i];
+                bool above = b.y >= gateY;
+                if ((a.y >= gateY) != above)
+                {
+                    float t = (gateY - a.y) / (b.y - a.y);
+                    var crossing = new Vector2(Mathf.Lerp(a.x, b.x, t), gateY);
+                    court.Add(crossing);
+                    opening.Add(crossing);
+                }
+                if (above) court.Add(b);
+            }
+            combatBoundary = court.ToArray();
+            combatGate = new GameObject("Final battle gate").AddComponent<EdgeCollider2D>();
+            combatGate.transform.SetParent(transform, false);
+            combatGate.points = opening.ToArray();
+            combatGate.edgeRadius = .03f;
+        }
+
+        internal void ReleaseCombatGate()
+        {
+            if (combatGate != null) combatGate.enabled = false;
         }
 
         void Start()

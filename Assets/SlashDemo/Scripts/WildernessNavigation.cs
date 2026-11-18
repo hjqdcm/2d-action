@@ -103,12 +103,12 @@ namespace SlashDemo
 
         public bool Walkable(Vector2 p)
         {
-            var boundary = map.Definition.boundary;
+            var boundary = map.WalkableBoundary;
+            p = map.transform.InverseTransformPoint(p);
             bool inside = false;
-            for (int i = 0, j = boundary.Length - 1; i < boundary.Length; j = i++)
+            for (int i = 0, j = boundary.Count - 1; i < boundary.Count; j = i++)
             {
-                Vector2 a = map.Definition.Ground(boundary[j].x, boundary[j].y);
-                Vector2 b = map.Definition.Ground(boundary[i].x, boundary[i].y);
+                Vector2 a = boundary[j], b = boundary[i];
                 if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x)
                     inside = !inside;
                 Vector2 edge = b - a;

@@ -59,7 +59,8 @@ namespace SlashDemo
         readonly List<Trace> traces = new List<Trace>(TraceBudget);
         readonly Trace charge;
         readonly Trace saberTrail;
-        readonly Trace whirlwind;
+        readonly SpriteRenderer bloodTideMist;
+        readonly Material bloodTideMistMaterial;
         readonly List<(Vector3 point, float time)> saberTrailPoints = new List<(Vector3, float)>(SaberTrailSamples);
         float saberTrailTime;
 
@@ -85,14 +86,11 @@ namespace SlashDemo
                 saberTrail.Core.sortingOrder = 15002;
                 saberTrail.Halo.sortingOrder = 15001;
                 saberTrail.Core.widthCurve = saberTrail.Halo.widthCurve = StrokeWidth;
-                whirlwind = CreateTrace();
-                whirlwind.Form = Form.BloodTide;
-                whirlwind.Core.name = "Saber whirlwind";
-                whirlwind.Core.sortingOrder = 15002;
-                whirlwind.Halo.sortingOrder = 15001;
-                whirlwind.Core.widthCurve = whirlwind.Halo.widthCurve = StrokeWidth;
-                traceProperties.SetFloat(EdgeHighlight, 1);
-                whirlwind.Core.SetPropertyBlock(traceProperties);
+                bloodTideMistMaterial = new Material(Resources.Load<Shader>("SlashDemo/BloodTideMist"))
+                    { hideFlags = HideFlags.DontSave };
+                bloodTideMist = DemoArt.Shape("Blood tide mist", root, "Square", Vector2.zero, Vector2.one, Color.white, -65);
+                bloodTideMist.sharedMaterial = bloodTideMistMaterial;
+                bloodTideMist.enabled = false;
             }
         }
 
@@ -138,22 +136,11 @@ namespace SlashDemo
 
         public void EndCharge() => charge.Hide();
 
-        public void Whirlwind(Vector2 origin, float heading, float sweep, float radius)
+        public void BloodFrenzy(Vector2 origin)
         {
-            float tail = Mathf.Min(sweep, 132);
-            if (tail < 1) return;
-            for (int i = 0; i < Samples; i++)
-            {
-                float t = i / (Samples - 1f);
-                Vector2 screen = DemoArt.Direction(heading + sweep - tail * (1 - t));
-                Vector2 outward = ObliqueProjection.UnprojectGround(screen, view.elevation).normalized;
-                Vector2 point = origin + outward * (radius * Mathf.Lerp(.70f, .96f, t));
-                SetPoint(whirlwind, i, view.LiftPoint(point, Mathf.Lerp(.54f, .36f, t)));
-            }
-            Style(whirlwind, .19f, Mathf.Lerp(.36f, .96f, tail / 132));
+            Add(Form.Ring, origin, Vector2.right, 1.15f, .26f, .12f, .16f, .40f);
+            BloodMist(origin, Vector2.zero);
         }
-
-        public void EndWhirlwind() => whirlwind.Hide();
 
         public void BloodMist(Vector2 origin, Vector2 drift)
         {
@@ -250,26 +237,23 @@ namespace SlashDemo
             Scatter(Shape.Lane, origin, direction, length * .17f, halfWidth, false, 1.4f);
         }
 
-        public void BloodTide(Vector2 origin, float radius, bool surge)
+        public void BloodTide(Vector2 origin, float radius)
         {
-            float width = surge ? .40f : .30f;
+            const float width = .30f;
             Add(Form.BloodTide, origin, DemoArt.Direction(19), radius, 108, width, .12f, .44f);
             Add(Form.BloodTide, origin, DemoArt.Direction(145), radius * .94f, 85, width * .77f, .09f, .39f, .022f);
             Add(Form.BloodTide, origin, DemoArt.Direction(258), radius * .97f, 112, width * .92f, .14f, .45f, .011f);
-            if (surge)
-                Add(Form.BloodTide, origin, DemoArt.Direction(308), radius * .73f, 72, width * .46f, .08f, .36f, .045f);
-
-            int fissures = surge ? 8 : 5;
+            const int fissures = 5;
             for (int i = 0; i < fissures; i++)
             {
                 Vector2 ray = DemoArt.Direction(i * 137.5f + 31);
                 float start = radius * (.16f + .12f * (i % 4));
                 float length = radius * (.26f + .08f * (i % 3));
                 Add(Form.BloodScar, origin + ray * start, ray, length, length * .051f,
-                    i % 3 == 0 ? .080f : .048f, .035f, surge ? .59f : .44f, .018f * (i % 4));
+                    i % 3 == 0 ? .080f : .048f, .035f, .44f, .018f * (i % 4));
             }
 
-            int count = surge ? 64 : 42;
+            const int count = 42;
             for (int i = 0; i < count; i++)
             {
                 // The mist starts inside the crests and spreads across their wake.
@@ -278,11 +262,26 @@ namespace SlashDemo
                 Vector2 spot = origin + ray * (radius * .78f * fraction);
                 bool mist = i % 3 != 0;
                 Vector2 drift = ray * (mist ? .75f : 2.25f) + Vector2.Perpendicular(ray) * .22f;
-                float size = mist ? (surge ? .75f : .57f) * (.69f + .12f * (i % 5)) : .045f + .02f * (i % 3);
+                float size = mist ? .57f * (.69f + .12f * (i % 5)) : .045f + .02f * (i % 3);
                 particles.SkillMote(spot, mist ? .085f : .16f, drift, mist ? .22f : .68f,
                     mist ? Particle.Mist : Particle.Spark, mist ? TideMistTint : BloodEmberTint,
                     size, mist ? .55f + .07f * (i % 4) : .22f + .045f * (i % 4));
             }
+        }
+
+        public void ShowBloodTideMist(Vector2 center, float radius)
+        {
+            bloodTideMist.transform.position = new Vector3(center.x, center.y, -.035f);
+            bloodTideMist.transform.localScale = new Vector3(radius * 2, radius * 2, 1);
+            bloodTideMist.enabled = true;
+            UpdateBloodTideMist(0, 1);
+        }
+
+        public void UpdateBloodTideMist(float age, float fade)
+        {
+            bloodTideMist.enabled = fade > 0;
+            bloodTideMistMaterial.SetFloat("_Age", age);
+            bloodTideMistMaterial.SetFloat("_Fade", fade);
         }
 
         void Scatter(Shape shape, Vector2 origin, Vector2 aim, float size, float detail, bool seal, float power)
@@ -482,7 +481,7 @@ namespace SlashDemo
         {
             charge.Hide();
             saberTrail?.Hide();
-            whirlwind?.Hide();
+            if (bloodTideMist != null) bloodTideMist.enabled = false;
             saberTrailPoints.Clear();
             foreach (var trace in traces) trace.Hide();
             if (particles != null) particles.Clear();
@@ -492,6 +491,7 @@ namespace SlashDemo
         {
             if (root != null) Object.Destroy(root.gameObject);
             Object.Destroy(material);
+            if (bloodTideMistMaterial != null) Object.Destroy(bloodTideMistMaterial);
         }
     }
 }
