@@ -2,6 +2,8 @@ using UnityEngine;
 
 namespace SlashDemo
 {
+    public enum AlchemyCodexPage { Treasures, Pills, Enemies }
+
     [DefaultExecutionOrder(-90)]
     [DisallowMultipleComponent]
     public sealed class TechniqueCodex : MonoBehaviour
@@ -10,7 +12,8 @@ namespace SlashDemo
         int consumedFrame = -1;
         public bool IsOpen { get; private set; }
         public bool IsAlchemyOpen { get; private set; }
-        public bool ShowsPills { get; private set; }
+        public AlchemyCodexPage AlchemyPage { get; private set; }
+        public bool ShowsPills => AlchemyPage == AlchemyCodexPage.Pills;
         public bool ConsumedInputThisFrame => consumedFrame == Time.frameCount;
         public bool NearTable => NearFurniture("Tea table");
 
@@ -63,15 +66,18 @@ namespace SlashDemo
         {
             if (!IsOpen) return;
             IsAlchemyOpen = false;
-            ShowsPills = false;
+            AlchemyPage = AlchemyCodexPage.Treasures;
             IsOpen = false;
             consumedFrame = Time.frameCount;
             if (arena.Paused) arena.TogglePause();
         }
 
         public void SelectAlchemyPage(bool showsPills)
+            => SelectAlchemyPage(showsPills ? AlchemyCodexPage.Pills : AlchemyCodexPage.Treasures);
+
+        public void SelectAlchemyPage(AlchemyCodexPage page)
         {
-            if (IsAlchemyOpen) ShowsPills = showsPills;
+            if (IsAlchemyOpen) AlchemyPage = page;
         }
 
         public bool Equip(TechniqueDefinition technique)

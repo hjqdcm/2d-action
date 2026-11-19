@@ -469,7 +469,7 @@ namespace SlashDemo
         {
             techniqueCombo.ExpireStacks(Time.time);
             if (Time.time - lastAttackEnd > comboResetTime && !IsAttacking) techniqueCombo.ResetSequence();
-            // A buffered fourth input may precede contact. Resolve its hit prerequisite at execution.
+            // Recheck the combo window when starting the fourth strike.
             if (HasFlowingCloud && ComboIndex == 2 && Realm >= CultivationRealm.GoldenCore)
                 segment = techniqueCombo.NextSegment(2, Time.time - lastAttackEnd > comboResetTime, Realm);
             else if (segment == 3) segment = 0;

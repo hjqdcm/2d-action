@@ -153,10 +153,14 @@ namespace SlashDemo.Editor
             int playerHealth = player.Health;
             Check(!player.TakeDamage(10, Vector2.left) && !player.TakePoisonDamage(10) && player.Health == playerHealth,
                 "The ultimate did not protect the player during windup.");
-            var target = SlashArena.CreateEnemy(player.transform.parent, start + Vector2.right * .06f, true);
+            var target = SlashArena.CreateEnemy(player.transform.parent, start + Vector2.right * 2.4f, true);
+            Vector2 inside = start + Vector2.right * .65f;
+            var moving = SlashArena.CreateEnemy(player.transform.parent, inside, true);
             arena.RegisterEnemy(target);
+            arena.RegisterEnemy(moving);
             Physics2D.SyncTransforms();
             int health = target.Health;
+            int movingHealth = moving.Health;
             player.CriticalChanceBonus = 1;
             var strokes = (LineRenderer[])ultimate.GetType().GetField("cores", Private).GetValue(ultimate);
             var halos = (LineRenderer[])ultimate.GetType().GetField("halos", Private).GetValue(ultimate);
@@ -174,8 +178,22 @@ namespace SlashDemo.Editor
             Advance(.112f);
             Check(strokes[1].enabled && HasUniformWidth(0) && HasUniformWidth(1),
                 "The second slash and the first slash's afterglow had different widths.");
-            Advance(.347f);
-            Check(health - target.Health == 270, "The ultimate did not resolve five 150%-damage critical hits.");
+            Check(health - target.Health == 54 && movingHealth - moving.Health == 54,
+                "The first slash must hit both enemies inside the radius.");
+            void MoveTarget(Vector2 position)
+            {
+                moving.GetComponent<Rigidbody2D>().position = position;
+                moving.transform.position = position;
+                Physics2D.SyncTransforms();
+            }
+            MoveTarget(start + Vector2.right * 5);
+            Advance(.11f);
+            Check(health - target.Health == 162 && movingHealth - moving.Health == 54,
+                "An enemy that left the radius took damage from subsequent slashes.");
+            MoveTarget(inside);
+            Advance(.237f);
+            Check(health - target.Health == 270, "The enemy that stayed in range did not take five critical hits.");
+            Check(movingHealth - moving.Health == 162, "An enemy that re-entered did not take the remaining slashes.");
             Check(arena.Effects.Texts[arena.Effects.Texts.Count - 1].text == "暴击 54",
                 "The critical damage number did not identify the hit as critical.");
             player.CriticalChanceBonus = 0;
@@ -212,6 +230,7 @@ namespace SlashDemo.Editor
             settings.infiniteUltimateForDebug = true;
             arena.Tuning.ApplyPlayer(player);
             target.gameObject.SetActive(false);
+            moving.gameObject.SetActive(false);
             int Impacts() => Array.FindAll(arena.Effects.GetComponentsInChildren<Renderer>(),
                 renderer => renderer.name == "Spark" || renderer.name == "Damage spark" || renderer.name == "Damage impact ring").Length;
             int SwordFlecks() => Array.FindAll(arena.Effects.GetComponentsInChildren<SpriteRenderer>(),

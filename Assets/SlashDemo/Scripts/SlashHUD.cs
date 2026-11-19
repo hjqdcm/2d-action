@@ -117,11 +117,13 @@ namespace SlashDemo
         Vector2 codexScroll;
         Vector2 treasureScroll;
         Vector2 pillScroll;
+        int enemyCodexIndex;
+        Vector2 enemyListScroll, enemySkillScroll;
         readonly Dictionary<IReadOnlyList<AlchemyEntry>, float[]> alchemyRowOffsets = new Dictionary<IReadOnlyList<AlchemyEntry>, float[]>();
         float alchemyCardWidth;
         static readonly string[] CharacterPageNames = { "功法", "属性", "物品" };
         GUIStyle small, health, damage, status, travelTitle, travelButton;
-        GUIStyle buffName, buffStacks, passiveStacks, buffTooltipBody, buffTooltipTitle;
+        GUIStyle buffName, buffStacks, passiveStacks, buffTooltipBody, buffTooltipTitle, bossCastName;
         readonly Dictionary<string, Texture2D> hudIcons = new Dictionary<string, Texture2D>(StringComparer.Ordinal);
         readonly Dictionary<string, BuffCountdownMask> buffCountdowns = new Dictionary<string, BuffCountdownMask>(StringComparer.Ordinal);
         CombatBuffView hoveredBuff;
@@ -173,6 +175,7 @@ namespace SlashDemo
             buffTooltipBody = new GUIStyle(small) { fontSize = 15, wordWrap = true, alignment = TextAnchor.UpperLeft, padding = new RectOffset() };
             buffTooltipTitle = new GUIStyle(buffTooltipBody) { fontSize = 18, fontStyle = FontStyle.Bold };
             status = new GUIStyle(small) { alignment = TextAnchor.MiddleCenter };
+            bossCastName = new GUIStyle(small) { alignment = TextAnchor.MiddleRight };
             travelTitle = new GUIStyle(status) { fontSize = 27, fontStyle = FontStyle.Bold };
             travelButton = new GUIStyle(GUI.skin.button) { font = font, fontSize = 20 };
             travelButton.normal.textColor = Ink;
@@ -320,22 +323,7 @@ namespace SlashDemo
                 var opponent = arena.Enemies[0];
                 var boss = opponent.GetComponent<EvilCultivatorBoss>();
                 if (boss != null && opponent.Alive)
-                {
-                    var panel = new Rect(width / 2 - 220, 25, 440, 81);
-                    DrawFrame(panel);
-                    Label(new Rect(panel.x, panel.y + 3, panel.width, 26),
-                        opponent.name + " · " + opponent.Health + " / " + opponent.maxHealth, status, Ink);
-                    DrawGauge(new Rect(panel.x + 24, panel.y + 34, panel.width - 48, 8),
-                        opponent.Health / (float)opponent.maxHealth, Cinnabar);
-                    if (boss.PassiveBuff is CombatBuffView passive)
-                        DrawPassiveBuff(new Rect(panel.x + 24, panel.y + 48, 48, 22), passive, scale);
-                    if (boss.FrenzyBuff is CombatBuffView frenzy)
-                        DrawPassiveBuff(new Rect(panel.xMax - 128, panel.y + 48, 104, 22), frenzy, scale);
-                    string cast = boss.CastingSkill;
-                    if (boss.IsTransitionInvulnerable) cast = cast == null ? "无敌" : cast + " · 无敌";
-                    if (cast != null)
-                        Label(new Rect(panel.x, panel.y + 48, panel.width, 27), cast, status, Cinnabar);
-                }
+                    DrawBossStatus(width, scale, opponent, boss);
             }
             if (arena.Travel != null && arena.Travel.ShowPortalPrompt)
             {
@@ -384,7 +372,10 @@ namespace SlashDemo
             }
             DrawBuffTooltip(new Rect(0, 0, width, height));
             if (arena.Codex == null || !arena.Codex.IsAlchemyOpen)
-                treasureScroll = pillScroll = Vector2.zero;
+            {
+                treasureScroll = pillScroll = enemyListScroll = enemySkillScroll = Vector2.zero;
+                enemyCodexIndex = 0;
+            }
             if (DefeatPanelVisible) DrawDefeatPanel(width, height);
             else if (arena.Codex != null && arena.Codex.IsAlchemyOpen) DrawAlchemyCodex(width, height);
             else if (arena.Codex != null && arena.Codex.IsOpen) DrawTechniqueCodex(width, height);
@@ -393,8 +384,8 @@ namespace SlashDemo
             else if (arena.Travel != null && arena.Travel.IsChallengeDecisionOpen) DrawChallengeDecision(width, height);
             else if (arena.Travel != null && arena.Travel.IsTreatmentOpen) DrawTreatmentDecision(width, height);
             else if (arena.Travel != null && arena.Travel.IsShopOpen) DrawShop(width, height);
-            else if (arena.Travel != null && arena.Travel.IsSelectionOpen) DrawTravelSelection(width, height);
             else if (arena.PauseMenuOpen) DrawPauseMenu(width, height);
+            else if (arena.Travel != null && arena.Travel.IsSelectionOpen) DrawTravelSelection(width, height);
             GUI.matrix = previous;
         }
 
@@ -433,6 +424,27 @@ namespace SlashDemo
             HoveredBuffId = null;
             var buffs = VisibleBuffs;
             for (int i = 0; i < buffs.Count; i++) DrawBuffSlot(BuffBarLayout.Slot(i, area), buffs[i], scale);
+        }
+
+        void DrawBossStatus(float width, float scale, SlashEnemy opponent, EvilCultivatorBoss boss)
+        {
+            var panel = new Rect(width / 2 - 220, 25, 440, 51);
+            DrawFrame(panel);
+            var gauge = new Rect(panel.x + 24, panel.y + 34, panel.width - 48, 8);
+            Label(new Rect(gauge.x, panel.y + 3, 250, 26),
+                opponent.name + " · " + opponent.Health + " / " + opponent.maxHealth, small, Ink);
+            if (boss.CastingSkill is string cast)
+                Label(new Rect(gauge.x + 250, panel.y + 3, gauge.width - 250, 26), cast, bossCastName, Cinnabar);
+            DrawGauge(gauge, opponent.Health / (float)opponent.maxHealth, Cinnabar);
+
+            var area = new Rect(gauge.x, panel.yMax + 10, gauge.width, 0);
+            int index = 0;
+            if (boss.PassiveBuff is CombatBuffView passive)
+                DrawBuffSlot(BuffBarLayout.Slot(index++, area), passive, scale);
+            if (boss.FrenzyBuff is CombatBuffView frenzy)
+                DrawBuffSlot(BuffBarLayout.Slot(index++, area), frenzy, scale);
+            if (boss.TransitionBuff is CombatBuffView transition)
+                DrawBuffSlot(BuffBarLayout.Slot(index, area), transition, scale);
         }
 
         void DrawBuffSlot(Rect slot, CombatBuffView buff, float scale)
@@ -513,8 +525,7 @@ namespace SlashDemo
                 player.TechniqueReady, player.TechniqueCooldownLeft, "Q · " + player.Technique.activeName);
         }
 
-        void DrawSkillSlot(Rect icon, Texture2D texture, bool ready, float cooldown, string captionText,
-            bool cooldownAbove = false)
+        void DrawSkillSlot(Rect icon, Texture2D texture, bool ready, float cooldown, string captionText)
         {
             if (texture != null)
             {
@@ -524,13 +535,7 @@ namespace SlashDemo
                 GUI.color = previous;
             }
             if (cooldown > 0)
-            {
-                var timer = cooldownAbove ? new Rect(icon.x, icon.y - 30, icon.width, 28) : icon;
-                string time = cooldown.ToString("0.0");
-                if (cooldownAbove)
-                    Label(new Rect(timer.x + 1, timer.y + 2, timer.width, timer.height), time, damage, Ink);
-                Label(timer, time, damage, Color.white);
-            }
+                Label(icon, cooldown.ToString("0.0"), damage, Color.white);
             var caption = new Rect(icon.x - 30, icon.yMax + 7, 168, 31);
             DrawFrame(caption);
             Label(caption, captionText, status, Ink);
@@ -542,7 +547,7 @@ namespace SlashDemo
             var ultimate = player.Ultimate;
             if (ultimate == null) return;
             DrawSkillSlot(new Rect(238, height - 174, 108, 108), ultimateIcon, ultimate.Ready || ultimate.Active,
-                player.InfiniteUltimateForDebug ? 0 : ultimate.CooldownLeft, "R · " + FiveStarSwordSlash.Name, cooldownAbove: true);
+                player.InfiniteUltimateForDebug ? 0 : ultimate.CooldownLeft, "R · " + FiveStarSwordSlash.Name);
         }
 
         bool DrawCharacterButton(Rect rect, string text, bool selected)
@@ -724,7 +729,7 @@ namespace SlashDemo
                 GUI.DrawTexture(new Rect(x, y + 240, 70, 70), ultimateIcon, ScaleMode.ScaleToFit);
             Label(new Rect(x + 86, y + 239, w - 86, 38), "R · " + FiveStarSwordSlash.Name, codexHeading, Ink);
             Label(new Rect(x + 86, y + 277, w - 86, 28), $"冷却 {FiveStarSwordSlash.Cooldown:0} 秒", codexBody, Jade);
-            Label(new Rect(x, y + 326, w, 56), "向周身劈出五道交叉斩击，斩痕连成五角星。施放期间免受伤害。", codexBody, Ink);
+            Label(new Rect(x, y + 326, w, 56), "斩出五道剑光，每段命中施放范围内的敌人。施放期间免受伤害。", codexBody, Ink);
             Label(new Rect(x, y + 388, w, 30),
                 $"流云剑诀 · 完成 {FiveStarSwordSlash.FlowingCloudRequired} 次满层流云疾斩", codexBody, Ink);
             Label(new Rect(x, y + 422, w, 30),
@@ -790,11 +795,14 @@ namespace SlashDemo
 
             var treasureTab = new Rect(panel.x + 28, panel.y + 22, 180, 44);
             var pillTab = new Rect(treasureTab.xMax + 12, treasureTab.y, treasureTab.width, treasureTab.height);
+            var enemyTab = new Rect(pillTab.xMax + 12, pillTab.y, pillTab.width, pillTab.height);
             var codex = arena.Codex;
-            if (DrawCharacterButton(treasureTab, "法宝图鉴", !codex.ShowsPills))
-                codex.SelectAlchemyPage(false);
-            if (DrawCharacterButton(pillTab, "丹药图鉴", codex.ShowsPills))
-                codex.SelectAlchemyPage(true);
+            if (DrawCharacterButton(treasureTab, "法宝图鉴", codex.AlchemyPage == AlchemyCodexPage.Treasures))
+                codex.SelectAlchemyPage(AlchemyCodexPage.Treasures);
+            if (DrawCharacterButton(pillTab, "丹药图鉴", codex.AlchemyPage == AlchemyCodexPage.Pills))
+                codex.SelectAlchemyPage(AlchemyCodexPage.Pills);
+            if (DrawCharacterButton(enemyTab, "敌人图鉴", codex.AlchemyPage == AlchemyCodexPage.Enemies))
+                codex.SelectAlchemyPage(AlchemyCodexPage.Enemies);
             if (GUI.Button(new Rect(panel.xMax - 168, panel.y + 24, 140, 40), "关闭 F / Esc", travelButton))
             {
                 codex.Close();
@@ -803,9 +811,73 @@ namespace SlashDemo
             }
             Box(new Rect(panel.x + 28, panel.y + 82, panel.width - 56, 1), Bronze);
             var viewport = new Rect(panel.x + 28, panel.y + 99, panel.width - 56, panel.height - 127);
-            if (codex.ShowsPills) DrawAlchemyGrid(viewport, PillCatalog.All, ref pillScroll);
-            else DrawAlchemyGrid(viewport, TreasureCatalog.All, ref treasureScroll);
+            switch (codex.AlchemyPage)
+            {
+                case AlchemyCodexPage.Treasures: DrawAlchemyGrid(viewport, TreasureCatalog.All, ref treasureScroll); break;
+                case AlchemyCodexPage.Pills: DrawAlchemyGrid(viewport, PillCatalog.All, ref pillScroll); break;
+                case AlchemyCodexPage.Enemies: DrawEnemyCodex(viewport); break;
+            }
             GUI.depth = previousDepth;
+        }
+
+        void DrawEnemyCodex(Rect viewport)
+        {
+            const float listWidth = 210, itemHeight = 44, itemSpacing = 8;
+            var entries = EnemyCatalog.All;
+            var list = new Rect(viewport.x, viewport.y, listWidth, viewport.height);
+            enemyListScroll = GUI.BeginScrollView(list, enemyListScroll,
+                new Rect(0, 0, listWidth - 18, entries.Count * (itemHeight + itemSpacing) - itemSpacing));
+            for (int i = 0; i < entries.Count; i++)
+            {
+                var item = new Rect(0, i * (itemHeight + itemSpacing), listWidth - 18, itemHeight);
+                if (DrawCharacterButton(item, entries[i].Name, i == enemyCodexIndex) && i != enemyCodexIndex)
+                {
+                    enemyCodexIndex = i;
+                    enemySkillScroll = Vector2.zero;
+                }
+            }
+            GUI.EndScrollView();
+
+            var entry = entries[enemyCodexIndex];
+            float detailX = list.xMax + 10;
+            float detailWidth = viewport.xMax - detailX;
+            Label(new Rect(detailX, viewport.y, detailWidth, 32), entry.Name, codexHeading, Ink);
+            Label(new Rect(detailX, viewport.y + 33, detailWidth, 27), entry.Location, codexBody, Muted);
+            Box(new Rect(detailX, viewport.y + 67, detailWidth, 1), Bronze);
+
+            var portrait = new Rect(detailX, viewport.y + 82, 324, viewport.height - 82);
+            Box(portrait, new Color(.81f, .78f, .65f));
+            Outline(portrait, Bronze);
+            if (Event.current.type == EventType.Repaint)
+                DrawHudIcon(new Rect(portrait.x + 10, portrait.y + 10, portrait.width - 20, portrait.height - 20),
+                    entry.PortraitResource);
+
+            float skillX = portrait.xMax + 18;
+            float skillWidth = viewport.xMax - skillX;
+            Label(new Rect(skillX, portrait.y, skillWidth, 30), "技能", codexHeading, Jade);
+            DrawEnemySkills(new Rect(skillX, portrait.y + 36, skillWidth, portrait.height - 36), entry.Skills);
+        }
+
+        void DrawEnemySkills(Rect viewport, IReadOnlyList<(string Name, string Effect)> skills)
+        {
+            const float padding = 12, titleHeight = 30, gap = 8;
+            float width = viewport.width - 20, textWidth = width - 2 * padding;
+            float contentHeight = 0;
+            foreach (var skill in skills)
+                contentHeight += titleHeight + alchemyDescription.CalcHeight(new GUIContent(skill.Effect), textWidth) + padding + gap;
+
+            enemySkillScroll = GUI.BeginScrollView(viewport, enemySkillScroll, new Rect(0, 0, width, contentHeight - gap));
+            float y = 0;
+            foreach (var skill in skills)
+            {
+                float effectHeight = alchemyDescription.CalcHeight(new GUIContent(skill.Effect), textWidth);
+                float rowHeight = titleHeight + effectHeight + padding;
+                Box(new Rect(0, y, width, rowHeight), new Color(.32f, .48f, .36f, .12f));
+                Label(new Rect(padding, y, textWidth, titleHeight), skill.Name, codexBody, Jade);
+                Label(new Rect(padding, y + titleHeight, textWidth, effectHeight), skill.Effect, alchemyDescription, Ink);
+                y += rowHeight + gap;
+            }
+            GUI.EndScrollView();
         }
 
         void DrawAlchemyGrid(Rect viewport, IReadOnlyList<AlchemyEntry> entries, ref Vector2 scroll)
@@ -1052,13 +1124,21 @@ namespace SlashDemo
         void DrawWorldHealth(float scale)
         {
             if (!arena.practiceMode) return;
+            double now = Time.timeAsDouble;
             foreach (var enemy in arena.Enemies)
             {
                 if (enemy == null || !enemy.gameObject.activeInHierarchy) continue;
                 if (enemy.TryGetComponent<EvilCultivatorBoss>(out var boss) && !boss.ShowsWorldHealth) continue;
                 float labelHeight = enemy.GetComponent<ObliqueActor>().LabelHeight;
                 Vector3 p = arena.WorldCamera.WorldToScreenPoint(arena.View.LiftPoint(enemy.transform.position, labelHeight));
-                Label(new Rect(p.x / scale - 70, (Screen.height - p.y) / scale - 12, 140, 24), enemy.Health.ToString(), health, DemoArt.Gold);
+                var healthLabel = new Rect(p.x / scale - 70, (Screen.height - p.y) / scale - 12, 140, 24);
+                Label(healthLabel, enemy.Health.ToString(), health, DemoArt.Gold);
+                if (!enemy.trainingDummy || !enemy.Alive || p.z <= 0) continue;
+                var dpsLabel = new Rect(healthLabel.center.x - 104, healthLabel.y - 24, 208, 22);
+                var stats = enemy.GetTrainingStats(now);
+                Box(dpsLabel, new Color(.06f, .07f, .06f, .90f));
+                Outline(dpsLabel, Bronze);
+                Label(dpsLabel, $"总伤害 {stats.totalDamage}  ·  DPS {stats.dps:0.0}", health, DemoArt.Gold);
             }
         }
 

@@ -549,16 +549,24 @@ namespace SlashDemo
         }
 
         public Pose Articulate(Vector2 target, Vector3 axis, float blend, Vector2? elbowTarget,
-            float elbowBend, bool twoHanded, bool elbowsDown, out Pose supportPose,
+            float elbowBend, bool twoHanded, bool elbowsDown, Vector3? cuttingDirection, out Pose supportPose,
             out WeaponPose weaponPose)
         {
             Vector2 restAxis = (tip - grip).normalized;
             float restAngle = Mathf.Atan2(restAxis.y, restAxis.x) * Mathf.Rad2Deg;
             float targetAngle = Mathf.Atan2(axis.y, axis.x) * Mathf.Rad2Deg;
             float bladeTurn = Mathf.DeltaAngle(restAngle, targetAngle) * blend;
-            float depth = Mathf.Asin(Mathf.Clamp(axis.z, -1, 1)) * Mathf.Rad2Deg * blend;
-            Quaternion bladeRotation = Quaternion.Euler(0, 0, restAngle + bladeTurn)
-                * Quaternion.Euler(0, -depth, 0) * Quaternion.Euler(0, 0, -restAngle);
+            float depth = Mathf.Asin(Mathf.Clamp(axis.z, -1, 1)) * Mathf.Rad2Deg;
+            Quaternion bladeRotation = BladeRotation(restAngle, restAngle + bladeTurn, depth * blend);
+            if (cuttingDirection is Vector3 leadingEdge)
+            {
+                // Use the fully extended pose to choose one roll for this swing, also while returning to carry.
+                var extended = BladeRotation(restAngle, targetAngle, depth);
+                Vector2 restEdge = -Side * Vector2.Perpendicular(restAxis);
+                float roll = Vector3.SignedAngle(extended * (Vector3)restEdge, leadingEdge, axis);
+                if (Side * Vector3.Cross(axis, leadingEdge).z > 0) roll = 180 + Mathf.DeltaAngle(180, roll);
+                bladeRotation *= Quaternion.AngleAxis(roll * blend, restAxis);
+            }
             Vector2 gripAxis = bladeRotation * (Vector3)restAxis;
             Vector2 posedGrip = Vector2.Lerp(grip, target, blend);
             Bone upperBone, lowerBone;
@@ -579,6 +587,9 @@ namespace SlashDemo
             weaponPose = new WeaponPose(grip, posedGrip, bladeRotation);
             return new Pose(upperBone, lowerBone, new Bone(grip, posedGrip, bladeTurn));
         }
+
+        static Quaternion BladeRotation(float restAngle, float targetAngle, float depth)
+            => Quaternion.Euler(0, 0, targetAngle) * Quaternion.Euler(0, -depth, 0) * Quaternion.Euler(0, 0, -restAngle);
 
         internal WeaponPose RollBladeEdge(WeaponPose pose, Quaternion bodyRotation)
         {
@@ -845,6 +856,9 @@ namespace SlashDemo
         MaterialPropertyBlock supportArmProperties;
         static readonly int SaberBladeGlow = Shader.PropertyToID("_SaberBladeGlow");
         float saberBladeGlow;
+        float saberBladeOpacity = 1, previousSaberBladeOpacity = 1;
+        bool saberCastBehindBody;
+        float BlendedSaberBladeOpacity => Mathf.Lerp(previousSaberBladeOpacity, saberBladeOpacity, saberPoseBlend);
         Vector3[] supportArmRest, supportArmVertices, supportArmBindings;
         Vector3[] freeArmBindings;
         Vector2[] supportArmUv, freeArmUv;
@@ -853,6 +867,8 @@ namespace SlashDemo
         Texture2D[] supportBodyMasks;
         float twoHandedGrip;
         bool saberArmMoving;
+        bool posingSaberOffhand;
+        bool saberEdgeLeads;
         static readonly Vector3 SaberTorsoPivot = new Vector3(0, .34f, 0);
         Vector3 saberTorsoOffset;
         Quaternion saberTorsoRotation = Quaternion.identity;
@@ -1115,11 +1131,13 @@ namespace SlashDemo
             previousSaberTorsoRotation = saberTorsoRotation;
             previousSaberKneeBend = saberKneeBend;
             previousSaberArmMoving = saberArmMoving;
-            previousSupportArmMoving = saberArmMoving && (twoHandedGrip > 0 || !paintedGesture.SaberArm.Value.Support.Hidden);
+            previousSupportArmMoving = saberArmMoving
+                && (twoHandedGrip > 0 || posingSaberOffhand || !paintedGesture.SaberArm.Value.Support.Hidden);
             previousSaberCarry = saberArmMoving ? Vector3.zero : SaberCarry(WalkFrame());
             previousSaberArm = saberArmPose;
             previousSupportArm = supportArmPose;
-            previousSaberWeapon = saberWeaponPose;
+            previousSaberWeapon = SaberWeapon(previousSaberCarry);
+            previousSaberBladeOpacity = BlendedSaberBladeOpacity;
             saberPoseBlend = 0;
         }
 
@@ -1133,6 +1151,10 @@ namespace SlashDemo
             castHand = hand;
             castAngle = angle * Mathf.Deg2Rad;
             saberArmMoving = false;
+            posingSaberOffhand = false;
+            saberCastBehindBody = false;
+            saberBladeOpacity = 1;
+            saberEdgeLeads = false;
             twoHandedGrip = 0;
         }
 
@@ -1151,14 +1173,31 @@ namespace SlashDemo
             SaberTorsoPivot + Quaternion.Inverse(saberTorsoRotation) * ((Vector3)point - SaberTorsoPivot - saberTorsoOffset);
 
         internal void SetSaberCastPose(Vector2 hand, Vector3 axis, float blend, Vector2? elbowTarget = null,
-            float elbowBend = 0, bool twoHanded = true, bool elbowsDown = false)
+            float elbowBend = 0, bool twoHanded = true, bool elbowsDown = false, bool behindBody = false, float bladeOpacity = 1,
+            Vector3? cuttingDirection = null)
         {
             twoHandedGrip = twoHanded ? blend : 0;
             saberArmMoving = blend > 0;
+            posingSaberOffhand = false;
+            saberCastBehindBody = behindBody && saberArmMoving;
+            saberBladeOpacity = bladeOpacity;
+            saberEdgeLeads = cuttingDirection.HasValue;
             if (saberArmMoving)
-                saberArmPose = paintedGesture.SaberArm.Value.Articulate(hand, Quaternion.Inverse(saberTorsoRotation) * axis,
-                    blend, elbowTarget, elbowBend, twoHanded, elbowsDown,
+            {
+                var toBody = Quaternion.Inverse(saberTorsoRotation);
+                saberArmPose = paintedGesture.SaberArm.Value.Articulate(hand, toBody * axis,
+                    blend, elbowTarget, elbowBend, twoHanded, elbowsDown, toBody * cuttingDirection,
                     out supportArmPose, out saberWeaponPose);
+            }
+        }
+
+        internal Vector3 PoseSaberOffhand(Vector2 target, Vector2 axis, float blend)
+        {
+            var arm = paintedGesture.SaberArm.Value.Support;
+            Vector2 hand = Vector2.Lerp(arm.Grip, target, blend);
+            posingSaberOffhand = blend > 0;
+            supportArmPose = arm.PoseAt(hand, axis, blend, 0, elbowsDown: true);
+            return transform.TransformPoint(SaberBodyPoint(hand));
         }
 
         PaintedSaberArm.WeaponPose SaberWeapon(Vector3 carry)
@@ -1166,6 +1205,8 @@ namespace SlashDemo
             Vector2 grip = paintedGesture.Grip;
             var target = saberArmMoving ? saberWeaponPose
                 : new PaintedSaberArm.WeaponPose(grip, grip + (Vector2)carry, Quaternion.identity);
+            if (saberArmMoving && !saberEdgeLeads)
+                target = paintedGesture.SaberArm.Value.RollBladeEdge(target, saberTorsoRotation);
             if (saberPoseBlend < 1)
             {
                 Vector2 fromGrip = previousSaberArmMoving ? previousSaberWeapon.Grip : grip + (Vector2)previousSaberCarry;
@@ -1173,7 +1214,7 @@ namespace SlashDemo
                 target = new PaintedSaberArm.WeaponPose(grip, Vector2.Lerp(fromGrip, target.Grip, saberPoseBlend),
                     Quaternion.Slerp(fromRotation, target.Rotation, saberPoseBlend));
             }
-            return saberArmMoving ? paintedGesture.SaberArm.Value.RollBladeEdge(target, saberTorsoRotation) : target;
+            return target;
         }
 
         static float CastTorsoWeight(float height)
@@ -1333,7 +1374,7 @@ namespace SlashDemo
             var arm = paintedGesture.SaberArm;
             bool visible = drawArm && source.enabled;
             properties.SetFloat("_SaberCutMode", visible ? 1 : 0);
-            bool supportVisible = visible && (twoHandedGrip > 0 || freeArm);
+            bool supportVisible = visible && (twoHandedGrip > 0 || freeArm || posingSaberOffhand);
             if (supportUsesOwnArt != freeArm)
             {
                 supportUsesOwnArt = freeArm;
@@ -1344,17 +1385,21 @@ namespace SlashDemo
             supportArmRenderer.enabled = supportVisible;
             properties.SetFloat("_SupportCut", supportVisible && !arm.Value.Support.Hidden ? 1 : 0);
             if (!visible && saberArmRenderer.enabled) saberArmMesh.vertices = saberArmRest;
-            saberArmRenderer.enabled = saberBladeRenderer.enabled = visible;
+            float bladeOpacity = BlendedSaberBladeOpacity;
+            saberArmRenderer.enabled = visible;
+            saberBladeRenderer.enabled = visible && bladeOpacity > 0;
             if (!visible) return;
             saberArmMesh.vertices = saberArmVertices;
             saberArmMesh.RecalculateBounds();
             saberArmRenderer.sortingLayerID = source.sortingLayerID;
-            saberArmRenderer.sortingOrder = source.sortingOrder + (arm.Value.BehindBody ? -1 : 2);
+            saberArmRenderer.sortingOrder = source.sortingOrder + (arm.Value.BehindBody || saberCastBehindBody ? -1 : 2);
             saberArmProperties.SetColor("_Color", source.color);
             saberArmRenderer.SetPropertyBlock(saberArmProperties);
             saberBladeRenderer.sortingLayerID = source.sortingLayerID;
             saberBladeRenderer.sortingOrder = saberArmRenderer.sortingOrder - 1;
-            saberBladeProperties.SetColor("_Color", source.color);
+            Color bladeColor = source.color;
+            bladeColor.a *= bladeOpacity;
+            saberBladeProperties.SetColor("_Color", bladeColor);
             saberBladeProperties.SetFloat(SaberBladeGlow, saberBladeGlow);
             saberBladeProperties.SetFloat("_SaberGripExtension", twoHandedGrip);
             saberBladeRenderer.SetPropertyBlock(saberBladeProperties);
@@ -1364,7 +1409,7 @@ namespace SlashDemo
             supportArmMesh.RecalculateBounds();
             supportArmRenderer.sortingLayerID = source.sortingLayerID;
             // In the northwest view the joining hand reaches in front of the chest, under the cape.
-            bool behindCape = arm.Value.Support.Hidden || (legRig.direction == 5 && !freeArm);
+            bool behindCape = saberCastBehindBody || arm.Value.Support.Hidden || (legRig.direction == 5 && !freeArm);
             supportArmRenderer.sortingOrder = source.sortingOrder + (behindCape ? -3 : 3);
             supportArmProperties.SetColor("_Color", source.color);
             supportArmRenderer.SetPropertyBlock(supportArmProperties);
@@ -1638,7 +1683,7 @@ namespace SlashDemo
                                 offset = Vector3.Lerp(from, offset, saberPoseBlend);
                             }
                             saberArmVertices[i] = SaberBodyPoint(armPoint + offset);
-                            if (twoHandedGrip > 0 || freeArm)
+                            if (twoHandedGrip > 0 || freeArm || posingSaberOffhand)
                             {
                                 Vector3 supportPoint = freeArm ? rest[i] : supportArmRest[i];
                                 Vector3 supportBinding = freeArm ? freeArmBindings[i] : supportArmBindings[i];

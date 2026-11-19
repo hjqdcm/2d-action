@@ -189,6 +189,43 @@ namespace SlashDemo.Editor
                         break;
                     case 4:
                         Check(travel.IsSelectionOpen, "Gate picker did not rearm after leaving.");
+                        if (choice == 0)
+                        {
+                            QueueKeys(new KeyboardState(Key.Escape));
+                            Advance(50);
+                        }
+                        else Advance(54);
+                        break;
+                    case 50:
+                        Check(arena.PauseMenuOpen && travel.IsSelectionOpen && arena.Paused && Time.timeScale == 0,
+                            "Esc did not open the pause menu over the gate picker.");
+                        QueueKeys(new KeyboardState());
+                        Advance(51);
+                        break;
+                    case 51:
+                        QueueKeys(new KeyboardState(Key.Escape));
+                        Advance(52);
+                        break;
+                    case 52:
+                        Check(!arena.PauseMenuOpen && travel.IsSelectionOpen && arena.Paused && Time.timeScale == 0 && arena.InputBlocked,
+                            "Closing the pause menu with Esc did not restore the paused gate picker.");
+                        QueueKeys(new KeyboardState());
+                        Advance(53);
+                        break;
+                    case 53:
+                        QueueKeys(new KeyboardState(Key.Escape));
+                        Advance(55);
+                        break;
+                    case 55:
+                        Check(arena.PauseMenuOpen && travel.IsSelectionOpen, "Could not reopen pause over the gate picker.");
+                        arena.ResumeGame();
+                        Check(!arena.PauseMenuOpen && travel.IsSelectionOpen && arena.Paused && Time.timeScale == 0 && arena.InputBlocked,
+                            "Continuing from the pause menu did not restore the paused gate picker.");
+                        QueueKeys(new KeyboardState());
+                        Debug.Log("TRAVEL_PICKER_PAUSE_PASS: Esc and Continue restore the paused destination picker.");
+                        Advance(54);
+                        break;
+                    case 54:
                         swings = original.TotalSwings;
                         QueueMouse(new MouseState().WithButton(MouseButton.Left));
                         Advance(5);
@@ -445,7 +482,7 @@ namespace SlashDemo.Editor
                         Debug.Log("CULTIVATION_REALM_PASS: starts/restarts in Qi Refining, all three higher realms survive outbound travel and tuning, every return home resets to Qi Refining.");
                         Debug.Log("SCENE_TRAVEL_PASS: all destinations, gate/cancel/rearm, R/T disabled, reserved exits have no destination, market portal and shop access.");
                         Debug.Log("FORTUNE_TRAVEL_PASS: route costs, shared visits, voluntary and automatic final battle travel.");
-                        Debug.Log("FINAL_BOSS_PASS: Blood Saber on each entry path, 2000 base health, reduced direct damage, unchanged mist damage, 10x lifesteal, five rotation skills, eight movement facings, invulnerable quarter-health transition, and a single victory portal.");
+                        Debug.Log("FINAL_BOSS_PASS: Blood Saber on each entry path, 2000 base health, reduced direct damage, 10x lifesteal, homing blood dagger with impact and expiry bursts, eight movement facings, invulnerable quarter-health transition, and a single victory portal.");
                         EditorApplication.Exit(0);
                         break;
                 }
@@ -469,6 +506,11 @@ namespace SlashDemo.Editor
             Check(enemy.Alive && boss != null && boss.CombatStyle == EvilCultivatorBoss.Style.BloodSaber
                 && boss.transform.IsChildOf(travel.ActiveMap.transform),
                 "The final battle did not spawn Blood Saber in its map.");
+            var passive = typeof(EvilCultivatorBoss).GetProperty("PassiveBuff",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Check(passive.GetValue(boss) is CombatBuffView lifesteal && lifesteal.duration == 0
+                && Resources.Load<Texture2D>(lifesteal.iconResource) != null,
+                "The permanent Blood Saber lifesteal status must have a HUD icon.");
             int expectedHealth = Mathf.RoundToInt(2000 * arena.Tuning.Settings.enemyHealthMultiplier);
             Check(enemy.maxHealth == expectedHealth, "Blood Saber did not use 2000 as its base health.");
             var skin = boss.transform.Find("Visual/Boss art").GetComponent<SpriteRenderer>();
@@ -482,6 +524,7 @@ namespace SlashDemo.Editor
                 CheckBossLocomotion(arena, enemy, skin);
                 CheckBossSkills(arena, enemy, boss);
                 CheckBloodMist(arena, enemy, boss, skin);
+                CheckBloodDagger(arena, enemy, boss);
                 CheckBloodFrenzy(arena, enemy, boss);
                 CheckBloodSaberStages(arena, enemy, boss);
             }
@@ -509,6 +552,9 @@ namespace SlashDemo.Editor
             var body = boss.GetComponent<Rigidbody2D>();
             var navigation = boss.GetComponent<WildernessNavigation>();
             var warning = boss.GetComponent<ObliqueActor>().GroundWarning;
+            var gait = skin.GetComponent<HeroWalkMesh>();
+            var blade = skin.transform.Find("Saber blade");
+            var bladeMesh = blade.GetComponent<MeshFilter>().sharedMesh;
             var immunity = typeof(SlashPlayer).GetField("invulnerability",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
             var aim = typeof(SlashPlayer).GetProperty(nameof(SlashPlayer.Aim));
@@ -556,7 +602,21 @@ namespace SlashDemo.Editor
                 Vector2 unobstructed = body.position;
                 Check(Mathf.Abs(unobstructed.y - distant.y) < .05f && player.Health == previousHealth,
                     "The open rear landing was offset or dealt damage on arrival.");
-                boss.SendMessage("Tick", .39f);
+                gait.Refresh();
+                Vector2 restAxis = SaberRestAxis(bladeMesh);
+                Vector2 restEdge = -Mathf.Sign(restAxis.x) * Vector2.Perpendicular(restAxis);
+                Vector3 ready = blade.TransformDirection(restAxis);
+                for (int frame = 0; frame < 13; frame++)
+                {
+                    boss.SendMessage("Tick", .03f);
+                    gait.Refresh();
+                    Vector3 axis = blade.TransformDirection(restAxis);
+                    Vector3 edge = blade.TransformDirection(restEdge);
+                    Vector3 leading = Vector3.Cross(Vector3.forward, axis).normalized;
+                    Check(Vector3.Dot(edge, leading) > .98f, "The ambush moved spine-first instead of cutting along the fan.");
+                }
+                Check(Vector3.Angle(ready, blade.TransformDirection(restAxis)) > 40,
+                    "Blood Saber did not sweep the blade across the fan after reappearing.");
                 Check(player.Health == previousHealth && warning.gameObject.activeSelf,
                     "The quick slash resolved before its 0.4-second warning ended.");
                 boss.SendMessage("Tick", .02f);
@@ -564,7 +624,16 @@ namespace SlashDemo.Editor
                     "The quick slash did not hit once for the reduced damage at the end of its warning.");
                 Check(enemy.Health == bossHealthBeforeSlash + 10 * slashDamage,
                     "Blood Saber did not heal for 10 times the damage actually dealt.");
-                boss.SendMessage("Tick", .51f);
+                gait.Refresh();
+                Quaternion lastBladeRotation = blade.rotation;
+                for (int frame = 0; frame < 51; frame++)
+                {
+                    boss.SendMessage("Tick", .01f);
+                    gait.Refresh();
+                    Check(Quaternion.Angle(lastBladeRotation, blade.rotation) < 30,
+                        "The ambush blade flipped while following through or returning to carry.");
+                    lastBladeRotation = blade.rotation;
+                }
                 player.Teleport(start);
                 boss.SendMessage("Tick", .04f);
                 Check(boss.CastingSkill != "血雾突袭", "Blood Saber repeated the ambush during cooldown.");
@@ -595,6 +664,119 @@ namespace SlashDemo.Editor
                 player.invincible = invincible;
                 enemy.damage = previousDamage;
                 player.Teleport(previousPlayerPosition);
+                Physics2D.SyncTransforms();
+            }
+        }
+
+        static void CheckBloodDagger(SlashArena arena, SlashEnemy enemy, EvilCultivatorBoss boss)
+        {
+            const System.Reflection.BindingFlags flags =
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var daggerPosition = typeof(EvilCultivatorBoss).GetField("bloodDaggerPosition", flags);
+            var ambushCooldown = typeof(EvilCultivatorBoss).GetField("bloodMistCooldown", flags);
+            var immunity = typeof(SlashPlayer).GetField("invulnerability", flags);
+            var effects = arena.Travel.ActiveMap.transform.Find("Final boss skill effects");
+            var dagger = effects.Find("Homing blood dagger");
+            var bladeMesh = dagger.GetComponent<MeshFilter>().sharedMesh;
+            Check(bladeMesh.bounds.size.x > bladeMesh.bounds.size.y * 2.5f, "The blood dagger did not have a short blade silhouette.");
+            var mist = effects.Find("Blood dagger mist").GetComponent<SpriteRenderer>();
+            var player = arena.Player;
+            Vector2 center = boss.transform.position;
+            Vector2 distant = center + Vector2.right * 7;
+            Vector2 previousPosition = player.transform.position;
+            int health = player.Health, bossHealth = enemy.Health, damage = enemy.damage;
+            float range = enemy.attackRange;
+            bool invincible = player.invincible;
+            object previousImmunity = immunity.GetValue(player);
+
+            Vector2 Position() => (Vector2)daggerPosition.GetValue(boss);
+
+            void Launch()
+            {
+                boss.SendMessage("Stop");
+                enemy.attackRange = 2.875f;
+                ambushCooldown.SetValue(boss, 30f);
+                player.Teleport(distant);
+                boss.SendMessage("Tick", 4.99f);
+                Check(boss.CastingSkill == null && !dagger.gameObject.activeSelf, "Blood Saber charged a dagger in the first five seconds.");
+                boss.SendMessage("Tick", .02f);
+                Check(boss.CastingSkill == "追魂血匕" && dagger.gameObject.activeSelf && !mist.enabled,
+                    "Blood Saber did not ready the dagger at long range.");
+                float windup = Mathf.Max(.52f, enemy.windupTime * 1.064f);
+                boss.SendMessage("Tick", windup - .01f);
+                Check(boss.CastingSkill == "追魂血匕", "Blood Dagger launched before its shortened windup ended.");
+                var gait = boss.GetComponentInChildren<HeroWalkMesh>();
+                gait.Refresh();
+                Check(gait.transform.Find("Saber support arm").GetComponent<MeshRenderer>().enabled,
+                    "The throwing arm did not articulate in the side view.");
+                boss.SendMessage("Tick", .02f);
+                Check(boss.CastingSkill == null && dagger.gameObject.activeSelf && !mist.enabled && Position() == center,
+                    "The charge did not release a projectile at the boss.");
+                enemy.attackRange = 0;
+            }
+
+            try
+            {
+                enemy.damage = 47;
+                enemy.TakeHit(Mathf.Min(450, bossHealth / 4), Vector2.zero, 0);
+                player.invincible = false;
+                immunity.SetValue(player, 0f);
+                int wounded = enemy.Health;
+                Launch();
+                float releaseHeight = Vector3.Dot(dagger.position - (Vector3)Position(), arena.View.Up);
+                boss.SendMessage("Tick", .25f);
+                Vector2 first = Position();
+                Check((first - center - Vector2.right * (.25f * 2.35f)).sqrMagnitude < .0001f && player.Health == health,
+                    "Blood Dagger did not fly at the configured speed.");
+                float flightHeight = Vector3.Dot(dagger.position - (Vector3)first, arena.View.Up);
+                Check(flightHeight >= releaseHeight && flightHeight - releaseHeight < .16f,
+                    "The dagger did not maintain the throwing hand's height after release.");
+                player.Teleport(first + Vector2.down * 2);
+                boss.SendMessage("Tick", .25f);
+                Check((Position() - first - Vector2.down * (.25f * 2.35f)).sqrMagnitude < .0001f && player.Health == health,
+                    "Blood Dagger did not steer toward the player's current position.");
+                Check(Vector3.Angle(dagger.right, -arena.View.Up) < 1f, "The dagger tip did not follow its turn toward the player.");
+                boss.SendMessage("Tick", .8f);
+                Check(!dagger.gameObject.activeSelf && mist.enabled && (Vector2)mist.transform.position == Position()
+                    && Mathf.Abs(mist.transform.localScale.x - 3.12f) < .005f,
+                    "A Blood Dagger hit did not leave the expanded mist patch at the blast point.");
+                Check(player.Health == health - 29 && enemy.Health == Mathf.Min(enemy.maxHealth, wounded + 290),
+                    "Blood Dagger did not deal 29 blast damage with tenfold lifesteal.");
+                float playerRadius = player.GetComponent<CircleCollider2D>().radius;
+                player.Teleport(Position() + Vector2.right * (1.38f + playerRadius));
+                boss.SendMessage("Tick", .5f);
+                Check(player.Health == health - 29, "Blood Dagger mist ticked early.");
+                boss.SendMessage("Tick", .5f);
+                Check(player.Health == health - 31 && enemy.Health == Mathf.Min(enemy.maxHealth, wounded + 310),
+                    "Blood Dagger mist did not deal two damage and heal for twenty.");
+                player.Teleport(distant);
+                boss.SendMessage("Tick", 3f);
+                Check(!mist.enabled && player.Health == health - 31, "Blood Dagger mist did not expire after four seconds.");
+
+                Launch();
+                for (int i = 0; i < 5; i++)
+                {
+                    player.Teleport(center + Vector2.right * (i % 2 == 0 ? 7 : -7));
+                    boss.SendMessage("Tick", 1f);
+                    Check(dagger.gameObject.activeSelf && !mist.enabled, "Blood Dagger burst before its six-second flight expired.");
+                }
+                player.Teleport(center - Vector2.right * 7);
+                boss.SendMessage("Tick", 1f);
+                Check(!dagger.gameObject.activeSelf && mist.enabled && (Vector2)mist.transform.position == Position()
+                    && player.Health == health - 31, "Blood Dagger expiry did not burst in place at its final position.");
+                boss.SendMessage("Stop");
+                Check(!dagger.gameObject.activeSelf && !mist.enabled, "Blood Dagger effects persisted after combat stopped.");
+            }
+            finally
+            {
+                boss.SendMessage("Stop");
+                enemy.attackRange = range;
+                enemy.damage = damage;
+                enemy.SendMessage("Heal", bossHealth - enemy.Health);
+                player.invincible = invincible;
+                immunity.SetValue(player, previousImmunity);
+                player.Heal(health - player.Health);
+                player.Teleport(previousPosition);
                 Physics2D.SyncTransforms();
             }
         }
@@ -670,8 +852,9 @@ namespace SlashDemo.Editor
                 int before = enemy.Health;
                 boss.SendMessage("Tick", 2f);
                 Check(enemy.Health == before - Mathf.CeilToInt(before * .1f)
-                    && buff.GetValue(boss) is CombatBuffView { timeLeft: 20f },
-                    "Blood Frenzy did not spend ten percent of current health for twenty seconds.");
+                    && buff.GetValue(boss) is CombatBuffView { timeLeft: 20f } frenzy
+                    && Resources.Load<Texture2D>(frenzy.iconResource) != null,
+                    "Blood Frenzy did not spend ten percent of current health or show its timed status icon.");
                 CheckGlow(1);
                 var raisedArm = sleeveMesh.vertices;
                 Check(raisedArm[elbow].y < raisedArm[shoulder].y
@@ -739,12 +922,20 @@ namespace SlashDemo.Editor
             Vector2 previousPosition = player.transform.position;
             float range = enemy.attackRange;
 
-            int ActiveWarnings()
+            void CheckBladeWarnings(int expectedCount, float lengthScale)
             {
                 int active = 0;
                 foreach (var line in lines)
-                    if (line.name == "Telegraph" && line.enabled) active++;
-                return active;
+                {
+                    if (line.name != "Telegraph" || !line.enabled) continue;
+                    active++;
+                    float length = Vector2.Distance(line.GetPosition(1), line.GetPosition(2));
+                    float width = Vector2.Distance(line.GetPosition(0), line.GetPosition(1));
+                    Check(Mathf.Abs(length - 2.5f * range * lengthScale) < .005f
+                        && Mathf.Abs(width - .38f * range) < .005f,
+                        $"Flying blades used the wrong lane dimensions at {enemy.Health}/{enemy.maxHealth} HP.");
+                }
+                Check(active == expectedCount, $"Expected {expectedCount} flying blade lanes, received {active}.");
             }
 
             void StartBlades()
@@ -756,33 +947,55 @@ namespace SlashDemo.Editor
                 Check(boss.CastingSkill == "三途飞刃", "Blood Saber did not cast its flying blades.");
             }
 
+            void FinishBlades()
+            {
+                boss.SendMessage("Tick", 4f);
+                boss.SendMessage("Tick", 4f);
+            }
+
             try
             {
                 boss.SendMessage("Stop");
                 player.invincible = true;
+                int firstLengthStep = (enemy.maxHealth + 9) / 10;
+                enemy.TakeHit(firstLengthStep - 1, Vector2.zero, 0);
+                StartBlades();
+                CheckBladeWarnings(3, 1);
+                enemy.TakeHit(1, Vector2.zero, 0);
+                CheckBladeWarnings(3, 1);
+                FinishBlades();
+                StartBlades();
+                CheckBladeWarnings(3, 1.05f);
+                FinishBlades();
+
                 enemy.TakeHit(enemy.Health - Mathf.CeilToInt(enemy.maxHealth * .50f), Vector2.zero, 0);
                 StartBlades();
-                Check(ActiveWarnings() == 3, "Blood Saber unlocked five blades before falling below half health.");
+                CheckBladeWarnings(3, 1.25f);
                 enemy.TakeHit(1, Vector2.zero, 0);
-                Check(ActiveWarnings() == 3, "Blood Saber added blades to an already telegraphed attack.");
-                boss.SendMessage("Tick", 4f);
-                boss.SendMessage("Tick", 4f);
+                CheckBladeWarnings(3, 1.25f);
+                FinishBlades();
                 StartBlades();
-                Check(ActiveWarnings() == 5 && Mathf.Approximately((float)windup.GetValue(boss),
-                    Mathf.Max(.52f, enemy.windupTime * 1.42f)),
-                    "Blood Saber did not telegraph five blades at normal speed below half health.");
-                boss.SendMessage("Tick", 4f);
-                boss.SendMessage("Tick", 4f);
+                CheckBladeWarnings(5, 1.25f);
+                Check(Mathf.Approximately((float)windup.GetValue(boss), Mathf.Max(.52f, enemy.windupTime * 1.42f)),
+                    "Blood Saber did not telegraph the blades at normal speed below half health.");
+                FinishBlades();
+                enemy.TakeHit(enemy.Health - enemy.maxHealth * 2 / 5, Vector2.zero, 0);
+                StartBlades();
+                CheckBladeWarnings(5, 1.30f);
+                FinishBlades();
+                enemy.TakeHit(enemy.Health - enemy.maxHealth * 3 / 10, Vector2.zero, 0);
+                StartBlades();
+                CheckBladeWarnings(5, 1.30f);
+                FinishBlades();
                 enemy.SendMessage("Heal", bossHealth - enemy.Health);
                 StartBlades();
-                Check(ActiveWarnings() == 5, "Blood Saber lost the five blades after healing.");
-                boss.SendMessage("Tick", 4f);
-                boss.SendMessage("Tick", 4f);
+                CheckBladeWarnings(5, 1);
+                FinishBlades();
 
                 var definition = map.Definition;
                 var effects = map.transform.Find("Final boss skill effects");
                 var temporaryMist = effects.Find("Blood tide mist").GetComponent<SpriteRenderer>();
-                player.Teleport((Vector2)boss.transform.position + Vector2.down * .55f);
+                player.Teleport((Vector2)boss.transform.position + Vector2.up * .55f);
                 player.invincible = false;
                 enemy.attackRange = 0;
                 enemy.TakeHit(enemy.Health - Mathf.CeilToInt(enemy.maxHealth * .25f), Vector2.zero, 0);
@@ -796,6 +1009,7 @@ namespace SlashDemo.Editor
                 Check(boss.CastingSkill == "贯血刀", "Could not interrupt a live attack to test the transition.");
                 var gait = boss.GetComponentInChildren<HeroWalkMesh>();
                 var blade = gait.transform.Find("Saber blade");
+                var bladeRenderer = blade.GetComponent<MeshRenderer>();
                 gait.Refresh();
                 Vector3 previousGrip = blade.localPosition;
                 Quaternion previousBladeAngle = blade.localRotation;
@@ -807,25 +1021,38 @@ namespace SlashDemo.Editor
                 enemy.attackRange = 0;
                 int transitionHealth = enemy.Health;
                 float transitionWindup = (float)windup.GetValue(boss);
+                var transitionBuff = typeof(EvilCultivatorBoss).GetProperty("TransitionBuff", flags);
                 Check(boss.CastingSkill == "血雾升腾" && arenaMist.GetValue(boss) == null && !warning.gameObject.activeSelf,
                     "Blood Saber did not start the non-attacking ground stab immediately below one-quarter health.");
+                Check(transitionBuff.GetValue(boss) is CombatBuffView shield && shield.RemainingFraction == 1
+                    && Resources.Load<Texture2D>(shield.iconResource) != null,
+                    "Blood Saber did not display its invulnerability icon at the start of the transition.");
                 enemy.TakeHit(20, Vector2.zero, 0);
                 Check(enemy.Health == transitionHealth, "Blood Saber took damage at the start of the transition.");
                 boss.SendMessage("Tick", transitionWindup * .75f);
+                gait.Refresh();
+                Check(!bladeRenderer.enabled, "Blood Saber exposed the blade through its back during the transition stab.");
                 enemy.TakeHit(20, Vector2.zero, 0);
                 Check(enemy.Health == transitionHealth && arenaMist.GetValue(boss) == null,
                     "Blood Saber took damage or raised the arena fog before blade contact.");
                 boss.SendMessage("Tick", transitionWindup);
+                gait.Refresh();
+                Check(!bladeRenderer.enabled, "Blood Saber's planted blade showed between its boots during recovery.");
                 var mist = map.transform.Find("Arena blood mist").GetComponent<SpriteRenderer>();
                 Check(mist.enabled && player.Health == health && !temporaryMist.enabled
                     && !warning.gameObject.activeSelf && CountBossEffectLines(effects) == 0,
                     "The blade contact did not raise only the permanent arena fog.");
                 enemy.TakeHit(20, Vector2.zero, 0);
                 Check(enemy.Health == transitionHealth, "Blood Saber took damage during transition recovery.");
+                Check(transitionBuff.GetValue(boss) is CombatBuffView recoveryShield && recoveryShield.RemainingFraction < 1,
+                    "The invulnerability icon stopped counting down during transition recovery.");
                 player.Teleport(definition.Ground(755, 475));
                 boss.SendMessage("Tick", .75f);
+                gait.Refresh();
+                Check(bladeRenderer.enabled, "Blood Saber did not restore the blade to its carry pose.");
                 enemy.TakeHit(1, Vector2.zero, 0);
-                Check(enemy.Health == transitionHealth - 1, "Blood Saber remained invulnerable after withdrawing the blade.");
+                Check(enemy.Health == transitionHealth - 1 && transitionBuff.GetValue(boss) == null,
+                    "Blood Saber retained invulnerability or its icon after withdrawing the blade.");
 
                 object field = arenaMist.GetValue(boss);
                 var contains = field.GetType().GetMethod("Contains");
@@ -917,7 +1144,9 @@ namespace SlashDemo.Editor
             {
                 bool groundStab = !bell && skills[skill] == "裂地血潮";
                 bool sweeps = !bell && skills[skill] == "饮血横斩";
-                player.Teleport(front);
+                Vector2 castPosition = groundStab
+                    ? (Vector2)boss.transform.position + Vector2.down * (1.43f * enemy.attackRange) : front;
+                player.Teleport(castPosition);
                 boss.SendMessage("Tick", .04f);
                 Check(boss.CastingSkill == skills[skill], "Final boss skipped " + skills[skill]);
                 gait.Refresh();
@@ -950,6 +1179,12 @@ namespace SlashDemo.Editor
                     }
                     Check(warning.gameObject.activeSelf && count == outlines[skill][wave],
                         "Final boss drew the wrong warning count for " + skills[skill]);
+                    if (groundStab)
+                        Check(Mathf.Abs(Vector2.Distance(boss.transform.position, primary.GetPosition(0)) - 1.488f * enemy.attackRange) < .005f,
+                            "Blood Tide did not telegraph the expanded radius.");
+                    if (!bell && skills[skill] == "贯血刀")
+                        Check(Mathf.Abs(Vector2.Distance(primary.GetPosition(1), primary.GetPosition(2)) - 2.45f * enemy.attackRange) < .005f,
+                            "Blood Cut did not telegraph the extended lane.");
                     Vector3 sweepStart = Vector3.zero, sweepEnd = Vector3.zero;
                     if (sweeps)
                     {
@@ -1290,6 +1525,7 @@ namespace SlashDemo.Editor
             var windup = typeof(EvilCultivatorBoss).GetField("windup", fields);
             var rigField = typeof(HeroWalkMesh).GetField("paintedGesture", fields);
             var layer = gait.transform.Find("Saber blade");
+            var bladeRenderer = layer.GetComponent<MeshRenderer>();
             var blade = layer.GetComponent<MeshFilter>().sharedMesh;
             var armMesh = gait.transform.Find("Saber arm").GetComponent<MeshFilter>().sharedMesh;
             var support = gait.transform.Find("Saber support arm").GetComponent<MeshRenderer>();
@@ -1361,6 +1597,13 @@ namespace SlashDemo.Editor
                         stabbed = true;
                         Vector3 bladeTip = handle + axis;
                         float bladeCenter = (handle.x + bladeTip.x) * .5f;
+                        if (facing is >= 3 and <= 5)
+                        {
+                            Check(bladeRenderer.sortingOrder < gait.WalkingRenderer.sortingOrder
+                                && support.sortingOrder < gait.WalkingRenderer.sortingOrder,
+                                "Ground stab drew over the body during " + label);
+                        }
+                        Check(bladeRenderer.enabled == (facing != 4), "Wrong planted blade visibility during " + label);
                         Check(Mathf.Abs(bladeTip.y) < .035f, "Ground stab missed the floor during " + label);
                         if (Mathf.Abs(screen.x) > .5f)
                             Check(bladeCenter * screen.x > .075f && bladeTip.x * screen.x > .11f,
@@ -1455,6 +1698,8 @@ namespace SlashDemo.Editor
             {
                 Check(mist.enabled && (Vector2)mist.transform.position == center,
                     "Blood Tide did not leave mist at its impact point.");
+                Check(Mathf.Abs(mist.transform.localScale.x * .5f - 1.488f * previousRange) < .005f,
+                    "Blood Tide mist did not cover the expanded radius.");
                 enemy.TakeHit(100, Vector2.zero, 0);
                 int woundedHealth = enemy.Health;
                 enemy.attackRange = 0;
@@ -1464,7 +1709,7 @@ namespace SlashDemo.Editor
                 boss.SendMessage("Tick", 1f);
                 Check(player.Health == previousHealth && enemy.Health == woundedHealth,
                     "Blood Tide mist dealt damage outside its radius.");
-                player.Teleport(center + Vector2.down * .5f);
+                player.Teleport(center + Vector2.down * (1.43f * previousRange));
                 boss.SendMessage("Tick", .5f);
                 Check(player.Health == previousHealth, "Blood Tide mist ticked before one second of exposure.");
                 boss.SendMessage("Tick", .5f);
@@ -1501,13 +1746,18 @@ namespace SlashDemo.Editor
                 "Blood Saber blade stretched during the arm motion.");
         }
 
-        static void CheckSaberBladeEdge(Transform bladeLayer, Mesh bladeMesh, string skill)
+        static Vector2 SaberRestAxis(Mesh bladeMesh)
         {
             // The last four vertices are the handle extension, ordered back pair then front pair.
             var vertices = bladeMesh.vertices;
             int end = vertices.Length;
-            Vector2 restAxis = ((Vector2)(vertices[end - 1] + vertices[end - 2]
+            return ((Vector2)(vertices[end - 1] + vertices[end - 2]
                 - vertices[end - 3] - vertices[end - 4])).normalized;
+        }
+
+        static void CheckSaberBladeEdge(Transform bladeLayer, Mesh bladeMesh, string skill)
+        {
+            Vector2 restAxis = SaberRestAxis(bladeMesh);
             Vector2 redEdge = -Mathf.Sign(restAxis.x) * Vector2.Perpendicular(restAxis);
             Vector2 posedAxis = bladeLayer.localRotation * (Vector3)restAxis;
             Vector2 posedEdge = bladeLayer.localRotation * (Vector3)redEdge;

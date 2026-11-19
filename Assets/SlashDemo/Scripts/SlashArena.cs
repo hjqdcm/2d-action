@@ -73,6 +73,7 @@ namespace SlashDemo
         readonly List<SlashEnemy> enemies = new List<SlashEnemy>();
         float nextWave = -1;
         float respawnDummies = -1;
+        bool pauseMenuOverSelection;
         bool waitingForMenuRelease;
         int menuReleaseFrame;
         ObliqueView obliqueView;
@@ -98,7 +99,7 @@ namespace SlashDemo
             || (Travel != null && Travel.BlocksGameplayInput);
         public IReadOnlyList<SlashEnemy> Enemies => enemies;
         public bool Paused { get; private set; }
-        public bool PauseMenuOpen => Paused && !Defeated && (Travel == null || !Travel.HasModal)
+        public bool PauseMenuOpen => Paused && !Defeated && (pauseMenuOverSelection || Travel == null || !Travel.HasModal)
             && (Codex == null || !Codex.IsOpen) && (CharacterPanel == null || !CharacterPanel.IsOpen);
         public bool Defeated { get; private set; }
         public int Wave { get; private set; }
@@ -153,16 +154,12 @@ namespace SlashDemo
                 return;
             }
             if (Travel != null && (Travel.IsChallengeDecisionOpen || Travel.IsTreatmentOpen)) return;
-            if (Travel != null && Travel.IsSelectionOpen)
+            if (DemoInput.PausePressed && !Defeated)
             {
-                if (DemoInput.PausePressed)
-                {
-                    Travel.CancelSelection();
-                    TogglePause();
-                }
-                return;
+                if (PauseMenuOpen) ResumeGame();
+                else if (Travel != null && Travel.IsSelectionOpen) pauseMenuOverSelection = true;
+                else TogglePause();
             }
-            if (DemoInput.PausePressed && !Defeated) TogglePause();
             if (Paused || Defeated || Time.deltaTime <= 0) return;
             if (Travel != null && Travel.Current != TravelDestination.Manor) return;
             if (!practiceMode && nextWave > 0 && Time.time >= nextWave
@@ -177,6 +174,7 @@ namespace SlashDemo
 
         public void TogglePause()
         {
+            pauseMenuOverSelection = false;
             effects.RestoreTime();
             Paused = !Paused;
             Time.timeScale = Paused ? 0 : 1;
@@ -190,7 +188,9 @@ namespace SlashDemo
 
         public void ResumeGame()
         {
-            if (PauseMenuOpen) TogglePause();
+            if (!PauseMenuOpen) return;
+            if (pauseMenuOverSelection) pauseMenuOverSelection = false;
+            else TogglePause();
         }
 
         public void ReturnHome()

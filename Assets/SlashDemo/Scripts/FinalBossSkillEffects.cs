@@ -59,10 +59,16 @@ namespace SlashDemo
         readonly List<Trace> traces = new List<Trace>(TraceBudget);
         readonly Trace charge;
         readonly Trace saberTrail;
-        readonly SpriteRenderer bloodTideMist;
-        readonly Material bloodTideMistMaterial;
+        readonly SpriteRenderer bloodTideMist, bloodDaggerMist;
+        readonly Transform bloodDagger;
+        readonly Mesh bloodDaggerMesh;
+        readonly Material bloodTideMistMaterial, bloodDaggerMistMaterial;
         readonly List<(Vector3 point, float time)> saberTrailPoints = new List<(Vector3, float)>(SaberTrailSamples);
         float saberTrailTime;
+        float daggerWakeTimer;
+        bool chargingBloodDagger;
+        Vector3 daggerReleaseHand, daggerLaunchOffset;
+        float daggerFlightHeight;
 
         public FinalBossSkillEffects(SlashArena arena, Transform owner, bool bell)
         {
@@ -86,12 +92,55 @@ namespace SlashDemo
                 saberTrail.Core.sortingOrder = 15002;
                 saberTrail.Halo.sortingOrder = 15001;
                 saberTrail.Core.widthCurve = saberTrail.Halo.widthCurve = StrokeWidth;
-                bloodTideMistMaterial = new Material(Resources.Load<Shader>("SlashDemo/BloodTideMist"))
-                    { hideFlags = HideFlags.DontSave };
+                var mistShader = Resources.Load<Shader>("SlashDemo/BloodTideMist");
+                bloodTideMistMaterial = new Material(mistShader) { hideFlags = HideFlags.DontSave };
                 bloodTideMist = DemoArt.Shape("Blood tide mist", root, "Square", Vector2.zero, Vector2.one, Color.white, -65);
                 bloodTideMist.sharedMaterial = bloodTideMistMaterial;
                 bloodTideMist.enabled = false;
+
+                bloodDagger = new GameObject("Homing blood dagger").transform;
+                bloodDagger.SetParent(root, false);
+                bloodDaggerMesh = CreateBloodDaggerMesh();
+                bloodDagger.gameObject.AddComponent<MeshFilter>().sharedMesh = bloodDaggerMesh;
+                var daggerRenderer = bloodDagger.gameObject.AddComponent<MeshRenderer>();
+                daggerRenderer.sharedMaterial = DemoArt.LineMaterial;
+                daggerRenderer.sortingOrder = 15003;
+                bloodDagger.gameObject.SetActive(false);
+
+                bloodDaggerMistMaterial = new Material(mistShader) { hideFlags = HideFlags.DontSave };
+                bloodDaggerMist = DemoArt.Shape("Blood dagger mist", root, "Square", Vector2.zero, Vector2.one, Color.white, -64);
+                bloodDaggerMist.sharedMaterial = bloodDaggerMistMaterial;
+                bloodDaggerMist.enabled = false;
             }
+        }
+
+        static Mesh CreateBloodDaggerMesh()
+        {
+            var points = new[]
+            {
+                new Vector3(-.57f, 0), new Vector3(-.48f, .085f), new Vector3(-.48f, -.085f),
+                new Vector3(-.49f, .052f), new Vector3(-.49f, -.052f),
+                new Vector3(-.14f, .052f), new Vector3(-.14f, -.052f),
+                new Vector3(-.19f, .19f), new Vector3(-.19f, -.19f), new Vector3(-.035f, 0),
+                new Vector3(-.055f, .135f), new Vector3(-.055f, -.135f), new Vector3(-.025f, 0),
+                new Vector3(.22f, .09f), new Vector3(.22f, -.09f), new Vector3(.66f, 0)
+            };
+            var colors = new[]
+            {
+                new Color(.43f, .14f, .13f), new Color(.71f, .30f, .22f), new Color(.24f, .06f, .09f),
+                new Color(.27f, .11f, .13f), new Color(.085f, .032f, .052f),
+                new Color(.34f, .13f, .14f), new Color(.095f, .034f, .06f),
+                new Color(.64f, .19f, .15f), new Color(.51f, .10f, .14f), new Color(.33f, .07f, .105f),
+                new Color(.86f, .21f, .25f), new Color(.77f, .11f, .16f), new Color(.37f, .028f, .080f),
+                new Color(.89f, .16f, .21f), new Color(.75f, .075f, .12f), new Color(.94f, .31f, .30f)
+            };
+            return new Mesh
+            {
+                name = "Blood dagger blade and hilt", hideFlags = HideFlags.DontSave,
+                vertices = points, colors = colors,
+                triangles = new[] { 0, 1, 2, 3, 5, 4, 4, 5, 6, 7, 9, 8,
+                    10, 12, 11, 10, 13, 12, 12, 13, 15, 12, 14, 11, 12, 15, 14 }
+            };
         }
 
         Trace CreateTrace()
@@ -134,7 +183,78 @@ namespace SlashDemo
                 bell ? Mathf.Lerp(.21f, .79f, energy) : Mathf.Lerp(.16f, .37f, energy));
         }
 
-        public void EndCharge() => charge.Hide();
+        public void EndCharge()
+        {
+            charge.Hide();
+            if (!chargingBloodDagger) return;
+            chargingBloodDagger = false;
+            bloodDagger.gameObject.SetActive(false);
+        }
+
+        public void ChargeBloodDagger(Vector3 hand, Vector2 direction, float radius, float progress)
+        {
+            chargingBloodDagger = true;
+            daggerReleaseHand = hand;
+            float energy = Mathf.SmoothStep(0, 1, progress);
+            float size = radius * Mathf.Lerp(.28f, 1, energy);
+            Quaternion rotation = DaggerRotation(direction) * Quaternion.Euler(0, 0, (1 - energy) * 32);
+            PlaceBloodDagger(hand + rotation * Vector3.right * (.8f * size), size, rotation);
+        }
+
+        public void ShowBloodDagger(Vector2 position, Vector2 direction, float radius, float age, float dt)
+        {
+            if (age == 0)
+            {
+                daggerWakeTimer = 0;
+                daggerFlightHeight = Vector3.Dot(daggerReleaseHand - (Vector3)position, view.Up) + .04f;
+                daggerLaunchOffset = bloodDagger.position - view.LiftPoint(position, daggerFlightHeight);
+            }
+            float height = daggerFlightHeight + Mathf.Sin(age * 6) * .065f;
+            Vector3 point = view.LiftPoint(position, height);
+            float release = Mathf.SmoothStep(0, 1, age / .25f);
+            PlaceBloodDagger(point + daggerLaunchOffset * (1 - release), radius, DaggerRotation(direction));
+            daggerWakeTimer -= dt;
+            if (daggerWakeTimer > 0) return;
+            daggerWakeTimer = .09f;
+            particles.SkillMote(position, height, Vector2.zero, -.13f, Particle.Mist, BloodMistTint, radius * 1.4f, .52f);
+        }
+
+        Quaternion DaggerRotation(Vector2 direction)
+        {
+            Vector2 facing = ObliqueProjection.ProjectGround(direction, view.elevation);
+            return view.Rotation * Quaternion.Euler(0, 0, Mathf.Atan2(facing.y, facing.x) * Mathf.Rad2Deg);
+        }
+
+        void PlaceBloodDagger(Vector3 position, float radius, Quaternion rotation)
+        {
+            bloodDagger.SetPositionAndRotation(position, rotation);
+            bloodDagger.localScale = new Vector3(2 * radius, 2 * radius, 1);
+            bloodDagger.gameObject.SetActive(true);
+        }
+
+        public void BurstBloodDagger(Vector2 center, float blastRadius, float mistRadius)
+        {
+            bloodDagger.gameObject.SetActive(false);
+            Add(Form.Ring, center, Vector2.right, blastRadius, blastRadius * .28f, .065f, .055f, .34f);
+            for (int i = 0; i < 15; i++)
+            {
+                Vector2 outward = DemoArt.Direction(i * 137.5f);
+                bool ember = i % 3 == 0;
+                particles.SkillMote(center + outward * .12f, .17f, outward * (ember ? 3f : 1.35f),
+                    ember ? .65f : .30f, ember ? Particle.Spark : Particle.Mist,
+                    ember ? BloodEmberTint : BloodMistTint, ember ? .09f : .4f, ember ? .27f : .62f);
+            }
+            bloodDaggerMist.transform.position = new Vector3(center.x, center.y, -.035f);
+            bloodDaggerMist.transform.localScale = new Vector3(mistRadius * 2, mistRadius * 2, 1);
+            UpdateBloodDaggerMist(0, 1);
+        }
+
+        public void UpdateBloodDaggerMist(float age, float fade)
+        {
+            bloodDaggerMist.enabled = fade > 0;
+            bloodDaggerMistMaterial.SetFloat("_Age", age);
+            bloodDaggerMistMaterial.SetFloat("_Fade", fade);
+        }
 
         public void BloodFrenzy(Vector2 origin)
         {
@@ -479,9 +599,11 @@ namespace SlashDemo
 
         public void Clear()
         {
-            charge.Hide();
+            EndCharge();
             saberTrail?.Hide();
             if (bloodTideMist != null) bloodTideMist.enabled = false;
+            if (bloodDagger != null) bloodDagger.gameObject.SetActive(false);
+            if (bloodDaggerMist != null) bloodDaggerMist.enabled = false;
             saberTrailPoints.Clear();
             foreach (var trace in traces) trace.Hide();
             if (particles != null) particles.Clear();
@@ -492,6 +614,8 @@ namespace SlashDemo
             if (root != null) Object.Destroy(root.gameObject);
             Object.Destroy(material);
             if (bloodTideMistMaterial != null) Object.Destroy(bloodTideMistMaterial);
+            if (bloodDaggerMesh != null) Object.Destroy(bloodDaggerMesh);
+            if (bloodDaggerMistMaterial != null) Object.Destroy(bloodDaggerMistMaterial);
         }
     }
 }

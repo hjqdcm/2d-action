@@ -51,7 +51,7 @@ namespace SlashDemo
         {
             PlaceInteractionLight("功法图鉴光点", "Tea table");
             PlaceInteractionLight("角色选择光点", "Wardrobe");
-            PlaceInteractionLight("法宝与丹药图鉴光点", "Alchemy furnace");
+            PlaceInteractionLight("炼丹炉图鉴光点", "Alchemy furnace");
         }
 
         void PlaceInteractionLight(string name, string furniture)

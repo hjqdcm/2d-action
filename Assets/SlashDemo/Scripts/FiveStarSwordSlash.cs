@@ -13,7 +13,7 @@ namespace SlashDemo
         public const float Cooldown = 30;
         public const int FlowingCloudRequired = 3, IronSwordRequired = 12;
         const int SlashCount = 5, DamagePerSlash = 36;
-        const float Radius = 2.75f * 1.25f, HalfWidth = .82f;
+        const float Radius = 2.75f * 1.25f;
         const float AnimationTimeScale = 1.35f;
         const float CoreWidth = .11f * 2, HaloWidth = .26f * 2;
         const float Windup = .10f * AnimationTimeScale, Interval = .072f * AnimationTimeScale;
@@ -39,6 +39,7 @@ namespace SlashDemo
         Material material;
         Mesh facets;
         Transform visuals;
+        Vector2 castCenter;
         int emitted;
         float age;
 
@@ -75,6 +76,7 @@ namespace SlashDemo
         {
             Active = true;
             Aim = aim;
+            castCenter = center;
             emitted = 0;
             age = 0;
             if (!owner.InfiniteUltimateForDebug)
@@ -107,7 +109,6 @@ namespace SlashDemo
         void Slash(Vector2 start, Vector2 end, bool last)
         {
             Vector2 direction = (end - start).normalized;
-            Vector2 origin = owner.transform.position;
             arena.Effects.PlaySwing(last);
             arena.Effects.Ghost(owner.transform);
             arena.Effects.DrawSwordSlashFlecks(start, end, Light);
@@ -120,8 +121,8 @@ namespace SlashDemo
                 if (!Active || arena.Paused) break;
                 if (enemy == null || !enemy.Alive || !enemy.isActiveAndEnabled) continue;
                 Vector2 point = enemy.transform.position;
-                if (SwordMotion.DistanceToBlade(point, start, end, out _) > HalfWidth + enemy.Radius
-                    || Blocked(origin, point)) continue;
+                float reach = Radius + enemy.Radius;
+                if ((point - castCenter).sqrMagnitude > reach * reach || Blocked(castCenter, point)) continue;
                 owner.DealHit(enemy, DamagePerSlash, direction, 0, last);
             }
             if (arena.Travel != null && arena.Travel.IsChallengeDecisionOpen) Cancel();

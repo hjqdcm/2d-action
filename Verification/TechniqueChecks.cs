@@ -74,7 +74,7 @@ static class TechniqueChecks
             Check(combo.NextSegment(-1, true, realm) == 0, "fresh attack starts at first segment");
             Check(combo.NextSegment(0, false, realm) == 1, "first connects to second");
             Check(combo.NextSegment(1, false, realm) == 2, "second connects to third");
-            Check(combo.NextSegment(2, false, realm) == 0, "whirlwind cannot trigger before the third segment hits");
+            Check(combo.NextSegment(2, false, realm) == (pursuit ? 3 : 0), "whirlwind only requires Golden Core or higher after the third swing");
             combo.BeginStrike(); combo.RegisterHit(2, 1, realm);
             Check(combo.NextSegment(2, false, realm) == (pursuit ? 3 : 0), "Foundation restarts at one while Golden Core retains pursuit");
             Check(combo.NextSegment(2, true, realm) == 0, "expired chain starts anew at every realm");
@@ -215,7 +215,7 @@ static class TechniqueChecks
         settings.maxStacks = 1; combo.Configure(settings);
         Check(combo.Stacks == 1, "reducing the tuned cap truncates existing stacks");
         combo.Clear(); combo.BeginStrike(); combo.FinishStrike(1);
-        Check(combo.NextSegment(2, false, CultivationRealm.NascentSoul) == 0, "a missed third segment blocks whirlwind even at Nascent Soul");
+        Check(combo.NextSegment(2, false, CultivationRealm.NascentSoul) == 3, "Nascent Soul can follow a missed third segment with whirlwind");
         combo = new FlowingCloudCombo();
         foreach (CultivationRealm realm in Enum.GetValues(typeof(CultivationRealm)))
             for (int initial = 0; initial <= 5; initial++)
@@ -231,7 +231,8 @@ static class TechniqueChecks
                     Near(combo.StackTimeLeft(endedAt), initial > 0 ? 12 - endedAt : 0,
                         "a missed attack keeps using the last confirmed hit's remaining lifetime");
                 }
-                Check(combo.NextSegment(2, false, realm) == 0, "preserved layers cannot replace the hit prerequisite for whirlwind");
+                Check(combo.NextSegment(2, false, realm) == (realm >= CultivationRealm.GoldenCore ? 3 : 0),
+                    "whirlwind availability is independent of layers and contact");
                 combo.FinishStrike(12);
                 Check(combo.Stacks == 0 && combo.StackTimeLeft(12) == 0, "even a missed attack ending at the deadline cannot preserve expired layers");
             }

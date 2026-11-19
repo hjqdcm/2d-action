@@ -5,6 +5,8 @@ namespace SlashDemo
     [RequireComponent(typeof(Rigidbody2D), typeof(CircleCollider2D))]
     public sealed class SlashEnemy : MonoBehaviour
     {
+        const double TrainingIdleSeconds = 5;
+
         public bool trainingDummy;
         public int maxHealth = 60;
         public float moveSpeed = 1.9f;
@@ -40,6 +42,8 @@ namespace SlashDemo
         ApeCombat apeCombat;
         AscensionCultivator cultivator;
         EvilCultivatorBoss finalBoss;
+        long trainingDamage;
+        double trainingFirstHit, trainingLastHit;
 
         void Awake()
         {
@@ -185,8 +189,11 @@ namespace SlashDemo
         {
             if (!Alive || (apeCombat != null && apeCombat.IsAirborne) || finalBoss?.IsTransitionInvulnerable == true) return;
             if (amount > 0 && cultivator != null) amount = cultivator.MitigateHit(amount);
+            int previousHealth = Health;
             int remaining = Mathf.Max(0, Health - amount);
             Health = finalBoss?.LimitHealthForTransition(remaining) ?? remaining;
+            if (trainingDummy && Health < previousHealth)
+                RecordTrainingHit(previousHealth - Health, Time.timeAsDouble);
             flash = 0.10f;
             // All enemies take damage without resetting attacks, poses or movement.
             // Keep force/interrupt arguments compatible with existing sword and skill callers.
@@ -219,6 +226,26 @@ namespace SlashDemo
             deathAge = 0;
             presentation.SetDeathProgress(0);
         }
+
+        void RecordTrainingHit(int damageDealt, double now)
+        {
+            if (trainingDamage == 0 || TrainingSessionExpired(now))
+            {
+                trainingDamage = 0;
+                trainingFirstHit = now;
+            }
+            trainingDamage += damageDealt;
+            trainingLastHit = now;
+        }
+
+        internal (long totalDamage, double dps) GetTrainingStats(double now)
+        {
+            if (trainingDamage == 0 || TrainingSessionExpired(now)) return default;
+            double duration = System.Math.Max(1, trainingLastHit - trainingFirstHit);
+            return (trainingDamage, trainingDamage / duration);
+        }
+
+        bool TrainingSessionExpired(double now) => now - trainingLastHit >= TrainingIdleSeconds;
 
         internal bool TrySpendHealth(int amount)
         {

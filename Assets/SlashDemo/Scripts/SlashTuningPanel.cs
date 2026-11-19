@@ -7,9 +7,8 @@ namespace SlashDemo
     [DisallowMultipleComponent]
     public sealed class SlashTuningPanel : MonoBehaviour
     {
-        const string SaveKey = "SlashDemo.RuntimeTuning.v3";
-        const string PreviousSaveKey = "SlashDemo.RuntimeTuning.v2";
-        const string LegacySaveKey = "SlashDemo.RuntimeTuning.v1";
+        const string SaveKey = "SlashDemo.RuntimeTuning.v4";
+        static readonly string[] SavedKeys = { SaveKey, "SlashDemo.RuntimeTuning.v3", "SlashDemo.RuntimeTuning.v2", "SlashDemo.RuntimeTuning.v1" };
         SlashArena arena;
         SlashTuningSettings defaults;
         public SlashTuningSettings Settings { get; private set; }
@@ -111,10 +110,11 @@ namespace SlashDemo
         {
             try
             {
-                string key = PlayerPrefs.HasKey(SaveKey) ? SaveKey : PlayerPrefs.HasKey(PreviousSaveKey) ? PreviousSaveKey : LegacySaveKey;
-                if (!PlayerPrefs.HasKey(key)) { if (showStatus) SetStatus("尚无保存参数。"); return; }
+                string key = Array.Find(SavedKeys, PlayerPrefs.HasKey);
+                if (key == null) { if (showStatus) SetStatus("尚无保存参数。"); return; }
                 var loaded = JsonUtility.FromJson<SlashTuningSettings>(PlayerPrefs.GetString(key));
-                if (loaded == null || loaded.version < 1 || loaded.version > 3) { SetStatus("保存参数版本无效，保留当前值。"); return; }
+                if (loaded == null || loaded.version < 1 || loaded.version > SlashTuningSettings.CurrentVersion)
+                { SetStatus("保存参数版本无效，保留当前值。"); return; }
                 loaded.Validate(defaults);
                 Settings = loaded;
                 ApplyAll();

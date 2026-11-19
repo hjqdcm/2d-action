@@ -7,7 +7,8 @@ namespace SlashDemo
     {
         // Project defaults synchronized from the user's saved v3 tuning on 2026-10-27.
         public const int DefaultDummyHealth = 1000;
-        public int version = 3;
+        internal const int CurrentVersion = 4;
+        public int version = CurrentVersion;
         public float moveSpeed = 5.4f, dashSpeed = 17, dashDuration = 0.15f, dashCooldown = 0.75f;
         public float comboResetTime = 0.65f;
         public int maxHealth = 100;
@@ -28,10 +29,12 @@ namespace SlashDemo
         [System.Serializable]
         public sealed class IronSwordSettings
         {
+            internal const float DefaultBodyDamageReduction = .25f;
+
             public float foundationChargeBonus = 0.20f, empoweredWidthBonus = 0.30f;
             public float scarDuration = 1.5f, scarTickInterval = 0.25f, scarTickDamageRatio = 0.10f;
             public float scarExplosionRatio = 0.50f, scarHeavyBonus = 0.50f;
-            public float bodyDuration = 3, bodyCooldown = 10, bodyDamageReduction = 0.50f, bodyChargeBonus = 0.30f;
+            public float bodyDuration = 3, bodyCooldown = 10, bodyDamageReduction = DefaultBodyDamageReduction, bodyChargeBonus = 0.30f;
             public float bodyHeavyBonus = 0.30f;
             public IronSwordSettings Clone() => (IronSwordSettings)MemberwiseClone();
             public float ChargeSpeed(CultivationRealm realm, bool bodyActive)
@@ -233,6 +236,9 @@ namespace SlashDemo
             // JsonUtility may omit this object in pre-technique v3 saves.
             if (flowingCloud == null) flowingCloud = (fallback.flowingCloud ?? new FlowingCloudSettings()).Clone();
             if (ironSword == null) ironSword = new IronSwordSettings();
+            // Replace the old Iron Body default in legacy saves and keep other tuned values.
+            if (version < 4 && ironSword.bodyDamageReduction == .50f)
+                ironSword.bodyDamageReduction = IronSwordSettings.DefaultBodyDamageReduction;
             ironSword.Validate(fallback.ironSword ?? new IronSwordSettings());
             if (heavyAttack == null) heavyAttack = new HeavyAttackSettings();
             heavyAttack.Validate(fallback.heavyAttack ?? new HeavyAttackSettings());
@@ -252,7 +258,7 @@ namespace SlashDemo
                 ValidateStrike(strikes[i], f, i);
             }
             flowingCloud.Validate(fallback.flowingCloud ?? new FlowingCloudSettings(), strikes[2]);
-            version = 3;
+            version = CurrentVersion;
             enemySpeedMultiplier = Safe(enemySpeedMultiplier, 0, 3, fallback.enemySpeedMultiplier);
             enemyHealthMultiplier = Safe(enemyHealthMultiplier, 0.2f, 5, fallback.enemyHealthMultiplier);
             enemyDamage = Mathf.Clamp(enemyDamage, 1, 60);

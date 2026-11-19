@@ -314,21 +314,23 @@ namespace SlashDemo.Editor
 
             Place(arena, CultivationRealm.GoldenCore); yield return Frames();
             player = arena.Player;
-            yield return FirstTwo(player);
             foreach (var enemy in arena.Enemies)
             {
                 enemy.transform.position = (Vector2)player.transform.position + new Vector2(-6, 4);
                 enemy.GetComponent<Rigidbody2D>().position = enemy.transform.position;
             }
             Physics2D.SyncTransforms();
+            yield return FirstTwo(player);
             Check(player.RequestAttack(Vector2.right) && player.ComboIndex == 2, "missed-third test starts the third segment");
             yield return Wait(player.strikes[2].duration * 0.45f);
             swings = player.TotalSwings;
             player.RequestAttack(Vector2.right);
             while (player.TotalSwings == swings) yield return null;
-            Check(player.ComboIndex == 0 && player.TotalPursuits == 0 && arena.Effects.ActiveWhirlwindCount == 0,
-                "a buffered fourth input after a missed third segment restarts at one without a whirlwind");
-            Check(player.ComboStacks == 2, "a missed third segment preserves prior layers without unlocking whirlwind");
+            Check(player.IsPursuit && player.TotalPursuits == 1 && player.ComboStacks == 0,
+                "a buffered fourth input starts a whirlwind after three missed swings with zero layers");
+            while (player.IsPursuit && arena.Effects.ActiveWhirlwindCount == 0) yield return null;
+            Check(arena.Effects.ActiveWhirlwindCount == 1 && player.ComboStacks == 0 && player.TotalSwordWaves == 0,
+                "a whirlwind still emits its ring without a target and grants no hit rewards");
             yield return Idle(player);
 
             foreach (var realm in new[] { CultivationRealm.GoldenCore, CultivationRealm.NascentSoul })
@@ -673,11 +675,38 @@ namespace SlashDemo.Editor
             yield return ClickCharacterPanel((alchemyOrigin + new Vector2(310, 44)) * scale);
             Check(arena.Codex.ShowsPills && arena.Paused, "the pill tab switches catalogs without resuming gameplay");
             Capture("Alchemy-PillCodex.png");
+            yield return ClickCharacterPanel((alchemyOrigin + new Vector2(502, 44)) * scale);
+            Check(arena.Codex.AlchemyPage == AlchemyCodexPage.Enemies && arena.InputBlocked,
+                "the enemy tab opens beside the other catalogs while gameplay remains paused");
+            var hud = arena.GetComponent<SlashHUD>();
+            var enemyIndex = typeof(SlashHUD).GetField("enemyCodexIndex", BindingFlags.Instance | BindingFlags.NonPublic);
+            var portraits = (Dictionary<string, Texture2D>)typeof(SlashHUD)
+                .GetField("hudIcons", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(hud);
+            string[] enemyPortraits = {
+                "RockBear-v1", "JadeSnake-v1", "MountainApe-v1", "Cultivators/BodyCultivator-v1",
+                "Cultivators/SwordCultivator-v1", "Cultivators/SpellCultivator-v1", "Cultivators/TalismanCultivator-v1",
+                "Cultivators/BloodSaberCultivator-Front-v3", "Cultivators/SoulBellCultivator-Front-v1"
+            };
+            for (int i = 0; i < enemyPortraits.Length; i++)
+            {
+                yield return ClickCharacterPanel((alchemyOrigin + new Vector2(120, 121 + i * 52)) * scale);
+                Check((int)enemyIndex.GetValue(hud) == i && portraits.TryGetValue("SlashDemo/" + enemyPortraits[i], out var portrait)
+                    && portrait != null, "the selected enemy displays its portrait: " + enemyPortraits[i]);
+                if (i == 7) Capture("Alchemy-EnemyCodex.png");
+            }
             yield return ClickCharacterPanel((alchemyOrigin + new Vector2(118, 44)) * scale);
-            Check(!arena.Codex.ShowsPills && arena.Paused, "the treasure tab switches back to the treasure catalog");
+            Check(arena.Codex.AlchemyPage == AlchemyCodexPage.Treasures && arena.Paused,
+                "the treasure tab switches back to the treasure catalog");
             keys = new KeyboardState(Key.Escape); yield return Frames(3);
             Check(!arena.Codex.IsOpen && !arena.Codex.IsAlchemyOpen && !arena.Paused && !arena.PauseMenuOpen,
                 "Esc closes the alchemy codex and resumes gameplay");
+            keys = new KeyboardState(); yield return Frames(3);
+            keys = new KeyboardState(Key.F); yield return Frames(3);
+            Check(arena.Codex.IsAlchemyOpen && arena.Codex.AlchemyPage == AlchemyCodexPage.Treasures
+                && (int)enemyIndex.GetValue(hud) == 0, "reopening restores the initial catalog and enemy selection");
+            keys = new KeyboardState(); yield return Frames(3);
+            keys = new KeyboardState(Key.F); yield return Frames(3);
+            Check(!arena.Codex.IsOpen && !arena.Paused, "F closes the furnace codex");
             keys = new KeyboardState(); yield return Frames(3);
         }
 
@@ -1364,8 +1393,8 @@ namespace SlashDemo.Editor
                 && guarded.IronBodyActive && guarded.TechniqueCooldownLeft > 9.9f,
                 "Q activates during charge, consumes no gangqi and starts its ten-second cooldown");
             health = guarded.Health;
-            Check(guarded.TakeDamage(50, Vector2.left) && guarded.Health == health - 25 && guarded.IsCharging,
-                "Iron Body reduces accepted damage fifty percent and preserves the ongoing charge");
+            Check(guarded.TakeDamage(48, Vector2.left) && guarded.Health == health - 36 && guarded.IsCharging,
+                "Iron Body reduces accepted damage twenty-five percent and preserves the ongoing charge");
             yield return Wait(3.05f);
             Check(!guarded.IronBodyActive && guarded.IsCharging && guarded.GangQiStacks == 6,
                 "Iron Body expiry removes protection while a held full charge keeps waiting");
@@ -1427,14 +1456,14 @@ namespace SlashDemo.Editor
             var legacy = JsonUtility.FromJson<SlashTuningSettings>(File.ReadAllText("Verification/Artifacts/SavedTuning-2026-10-27.json"));
             legacy.Validate(new SlashTuningSettings());
             Check(legacy.ironSword.bodyCooldown == 10 && legacy.ironSword.scarTickDamageRatio == 0.10f
-                && legacy.ironSword.bodyDuration == 3 && legacy.ironSword.bodyDamageReduction == 0.5f
+                && legacy.ironSword.bodyDuration == 3 && legacy.ironSword.bodyDamageReduction == 0.25f
                 && legacy.ironSword.bodyHeavyBonus == 0.3f,
                 "old tuning saves receive all Iron Sword defaults");
-            var existingIronSave = JsonUtility.FromJson<SlashTuningSettings>("{\"ironSword\":{\"bodyDuration\":2,\"bodyChargeBonus\":0.4}}");
+            var existingIronSave = JsonUtility.FromJson<SlashTuningSettings>("{\"version\":3,\"ironSword\":{\"bodyDuration\":2,\"bodyChargeBonus\":0.4,\"bodyDamageReduction\":0.5}}");
             existingIronSave.Validate(new SlashTuningSettings());
             Check(existingIronSave.ironSword.bodyHeavyBonus == 0.3f && existingIronSave.ironSword.bodyDuration == 2
-                && existingIronSave.ironSword.bodyChargeBonus == 0.4f,
-                "existing Iron Sword saves receive the new heavy-bonus default while retaining their saved tuning");
+                && existingIronSave.ironSword.bodyChargeBonus == 0.4f && existingIronSave.ironSword.bodyDamageReduction == 0.25f,
+                "existing Iron Sword saves receive the updated damage reduction default while retaining their other tuning");
             arena.Tuning.RestoreDefaults();
             yield return ValidateIronZeroImpact();
             yield return ValidateIronDashRelease(arena);

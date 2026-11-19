@@ -32,12 +32,12 @@ namespace SlashDemo
             "闪避扣除一层叠浪，最低为0层；受击打断连招，保留叠浪及其剩余时间；改用重击或传送时清空叠浪。普攻未命中不叠层、不刷新时间，叠浪到期后清空。",
             new TechniqueStage(CultivationRealm.QiRefining, "一式·叠浪", "每次普攻命中后会叠加一层叠浪，每层叠浪使普攻伤害提高8%、普攻移速提高3%，最多叠加5层，持续2秒，当叠浪层数为5层时，额外使普攻伤害提升20%。重击清空叠浪，闪避扣除1层叠浪。"),
             new TechniqueStage(CultivationRealm.FoundationEstablishment, "二式·起风", "每层叠浪会额外提升5%的普攻攻速。释放完流云疾斩后，首次达到满层叠浪时，减少1秒流云疾斩的冷却时间，每次释放仅触发一次。"),
-            new TechniqueStage(CultivationRealm.GoldenCore, "三式·风舞", "第3段普攻命中后继续普攻可以释放第4段普攻——旋风斩，该次普攻会对周围360度的敌人造成一次伤害，如果旋风斩命中了敌人，则可以叠加两次叠浪。"),
+            new TechniqueStage(CultivationRealm.GoldenCore, "三式·风舞", "第3段普攻后继续普攻可释放第4段旋风斩，前三段空挥也可衔接。旋风斩对周围360度的敌人各造成一次伤害，首次命中时叠加两层叠浪。"),
             new TechniqueStage(CultivationRealm.NascentSoul, "四式·剑潮", "旋风斩命中会额外释放一道剑气，剑气伤害视为普攻伤害，若剑气命中敌人，则会减少1秒流云疾斩的冷却时间。"));
 
         public static readonly TechniqueDefinition IronSword = new TechniqueDefinition(
             "black-iron-sword", "玄铁剑罡", "重击 / 蓄力", "以罡蓄势，择机松手。",
-            "剑罡护体", "3秒内蓄力不会被受击打断，受到的伤害减少50%，蓄力速度提升30%，重击伤害提升30%。不消耗罡气，冷却10秒。",
+            "剑罡护体", $"3秒内蓄力不会被受击打断，受到的伤害减少{SlashTuningSettings.IronSwordSettings.DefaultBodyDamageReduction * 100:0}%，蓄力速度提升30%，重击伤害提升30%。不消耗罡气，冷却10秒。",
             "松手必定释放重击，罡气随重击清空；练气时冲刺取消蓄力，筑基起蓄力中冲刺会按当前进度立即释放重击。只可修习一本功法，切换时清空旧功法状态。",
             new TechniqueStage(CultivationRealm.QiRefining, "一式·蓄罡", "重击蓄力未满时可以提前释放重击。蓄力时会逐渐积累罡气，释放重击时会消耗全部罡气并根据消耗的罡气数提升伤害和剑气范围。"),
             new TechniqueStage(CultivationRealm.FoundationEstablishment, "二式·聚锋", "蓄力速度提升20%，以至少5层罡气释放时，剑气额外加宽30%。蓄力中使用冲刺时，可以立即释放重击，并消耗罡气触发对应的效果。"),
@@ -181,9 +181,7 @@ namespace SlashDemo
         {
             if (expired || previous < 0 || previous >= 3) return 0;
             if (previous == 2)
-            {
-                return realm >= CultivationRealm.GoldenCore && StrikeHit ? 3 : 0;
-            }
+                return realm >= CultivationRealm.GoldenCore ? 3 : 0;
             return previous + 1;
         }
 
