@@ -194,6 +194,7 @@ namespace SlashDemo.Editor
                         Check(enemy.GetComponent<ObliqueActor>().GroundWarning.gameObject.activeSelf,"Hit hid claw warning.");
                         enemy.TakeHit(100000,Vector2.zero,0);
                         Check(!enemy.Alive && arena.Enemies.Count==0,"Death did not stop skill controller.");
+                        Check(arena.Travel.TryClaimLoot(0), "Bear clear did not grant a pill choice.");
                         arena.TogglePause(); arena.ReturnHome();
                         Check(arena.Travel.Current==TravelDestination.Manor,"Return home failed.");
                         Check(particles.ActiveCount==0 && !particles.Renderer.enabled,"Returning home leaked attack particles.");

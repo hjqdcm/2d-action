@@ -20,7 +20,8 @@ namespace SlashDemo.Editor
         static Keyboard keyboard;
         static KeyboardState? queuedKeys;
         static MouseState? queuedMouse;
-        static CultivationRealm OutboundRealm => (CultivationRealm)(choice % (int)CultivationRealm.NascentSoul + 1);
+        static CultivationRealm OutboundRealm => Destination.destination == TravelDestination.Tribulation
+            ? CultivationRealm.QiRefining : (CultivationRealm)(choice % (int)CultivationRealm.NascentSoul + 1);
         static TravelMapDefinition Destination => choice < TravelMaps.Choices.Length ? TravelMaps.Choices[choice]
             : TravelMaps.Get(TravelDestination.FinalBattle);
 
@@ -150,6 +151,9 @@ namespace SlashDemo.Editor
                         Check(original.Realm == CultivationRealm.QiRefining, "Restart did not reset the realm.");
                         Check(arena.Resources.SpiritStones == 50 && arena.Resources.FortunePoints == 15,
                             "A new run must start with 50 spirit stones and 15 fortune points.");
+                        Check(arena.Resources.FortuneSpent == 0 && arena.Resources.TribulationFortuneSpent == 0
+                            && !arena.Resources.TribulationUnlocked,
+                            "A new run retained previous tribulation unlock progress.");
                         Check(arena.Resources.TryChangeSpiritStones(-5) && arena.Resources.TryChangeFortunePoints(2),
                             "Could not set non-default balances for travel validation.");
                         Check(!travel.ShowsDestination(TravelDestination.HealingLodge) && !travel.ShowsDestination(TravelDestination.Market),
@@ -157,6 +161,14 @@ namespace SlashDemo.Editor
                         if (SceneTravel.UsesServiceVisit(Destination.destination))
                             Check(arena.Resources.TryChangeFortunePoints(-10) && arena.Resources.TryChangeFortunePoints(10)
                                 && arena.Resources.ServiceVisits == 2, "Gross spending did not grant two shared visits.");
+                        if (Destination.destination == TravelDestination.Tribulation)
+                        {
+                            Check(arena.Resources.TryChangeFortunePoints(-11)
+                                && arena.Resources.TryChangeFortunePoints(11)
+                                && !arena.Resources.TryChangeFortunePoints(-arena.Resources.FortunePoints - 1)
+                                && arena.Resources.FortuneSpent == 11 && !arena.Resources.TribulationUnlocked
+                                && arena.Resources.ServiceVisits == 2, "Refunded or failed spending changed unlock progress or shared visits.");
+                        }
                         expectedFortune = arena.Resources.FortunePoints - SceneTravel.FortuneCost(Destination.destination);
                         original.SetRealm(OutboundRealm);
                         original.invincible = false;
@@ -174,6 +186,18 @@ namespace SlashDemo.Editor
                     case 1:
                         Check(arena.Player == original && arena.practiceMode, "R or T shortcut is still active.");
                         Check(travel.IsSelectionOpen && arena.Paused && Time.timeScale == 0 && arena.InputBlocked, "Gate picker did not pause and block combat.");
+                        if (Destination.destination == TravelDestination.Tribulation)
+                        {
+                            Check(travel.ShowsDestination(TravelDestination.Tribulation)
+                                && !travel.CanSelectDestination(TravelDestination.Tribulation), "The locked tribulation route was unavailable for preview or could already be selected.");
+                            travel.SelectDestination(TravelDestination.Tribulation);
+                            Check(travel.Current == TravelDestination.Manor && travel.IsSelectionOpen, "The locked route could be entered.");
+                            Check(arena.Resources.TryChangeFortunePoints(-1)
+                                && arena.Resources.TryChangeFortunePoints(1)
+                                && arena.Resources.FortuneSpent == 12 && arena.Resources.TribulationUnlocked
+                                && travel.CanSelectDestination(TravelDestination.Tribulation),
+                                "The tribulation route did not unlock at exactly twelve gross points.");
+                        }
                         travel.CancelSelection();
                         QueueKeys(new KeyboardState());
                         Advance(2);
@@ -267,6 +291,17 @@ namespace SlashDemo.Editor
                     case 8:
                         Check(travel.Current == Destination.destination && !travel.IsSelectionOpen, "Reserved exit unexpectedly teleported the player.");
                         Debug.Log("SCENE_TRAVEL_DESTINATION_PASS: " + travel.Current + "; entry, routes, character state, camera, click suppression, inactive reserved exit.");
+                        if (travel.Current == TravelDestination.Tribulation)
+                        {
+                            Check(arena.Enemies.Count == 0 && travel.Portal == null && !arena.InCombat,
+                                "Tribulation must arrive with neither a portal nor combat.");
+                            var center = TravelMaps.TribulationCenter;
+                            original.Teleport(travel.ActiveMap.Definition.Ground(center.x, center.y));
+                            Check(travel.ShowTribulationPrompt, "The tribulation light is not interactable at the center.");
+                            QueueKeys(new KeyboardState(Key.F));
+                            Advance(60);
+                            break;
+                        }
                         if (travel.Current == TravelDestination.HealingLodge)
                         {
                             Check(travel.Portal == null && !travel.ShowTreatmentPrompt, "Treatment must start at the bed, with no portal yet.");
@@ -291,6 +326,36 @@ namespace SlashDemo.Editor
                             Advance(30);
                             break;
                         }
+                        QueueKeys(new KeyboardState(Key.Escape));
+                        Advance(9);
+                        break;
+                    case 60:
+                        Check(travel.IsTribulationDecisionOpen && arena.Paused && !arena.PauseMenuOpen,
+                            "F did not open the paused tribulation confirmation.");
+                        travel.ResolveTribulation(false);
+                        Check(!travel.HasModal && !arena.InCombat && travel.Portal != null
+                            && Vector2.Distance(travel.Portal.transform.position, travel.ActiveMap.Definition.Entry) < .01f,
+                            "Declining did not spawn an exit at the tribulation entrance.");
+                        QueueKeys(new KeyboardState());
+                        Advance(62);
+                        break;
+                    case 62:
+                        Check(travel.ShowTribulationPrompt, "Declining removed the center light.");
+                        QueueKeys(new KeyboardState(Key.F));
+                        Advance(63);
+                        break;
+                    case 63:
+                        Check(travel.IsTribulationDecisionOpen, "The light did not reopen the confirmation.");
+                        var tribulationExit = travel.Portal;
+                        travel.ResolveTribulation(true);
+                        Check(travel.IsTribulationActive && arena.InCombat && travel.TribulationRound == 1
+                            && travel.Portal == null && !tribulationExit.gameObject.activeSelf,
+                            "Starting did not begin round one and remove the exit.");
+                        ValidateTribulation(arena);
+                        QueueKeys(new KeyboardState());
+                        Advance(61);
+                        break;
+                    case 61:
                         QueueKeys(new KeyboardState(Key.Escape));
                         Advance(9);
                         break;
@@ -397,10 +462,12 @@ namespace SlashDemo.Editor
                         QueueMouse(new MouseState().WithButton(MouseButton.Left));
                         arena.ReturnHome();
                         Check(arena.Player == original && original.Health == health, "Return Home reset the player or health.");
-                        Check(original.Realm == CultivationRealm.QiRefining && original.RealmDisplayName == "练气",
-                            "Return Home did not reset the realm to Qi Refining.");
+                        var homeRealm = Destination.destination == TravelDestination.Tribulation
+                            ? CultivationRealm.FoundationEstablishment : CultivationRealm.QiRefining;
+                        Check(original.Realm == homeRealm && original.RealmDisplayName == SlashPlayer.GetRealmName(homeRealm),
+                            "Return Home did not restore the realm earned this run.");
                         arena.Tuning.ApplyAll();
-                        Check(original.Realm == CultivationRealm.QiRefining, "Tuning reapplied the old realm after returning home.");
+                        Check(original.Realm == homeRealm, "Tuning reapplied the old realm after returning home.");
                         Check(Mathf.Abs(original.moveSpeed - 7.1f) < 0.001f, "Return Home lost character tuning.");
                         Check(travel.Current == TravelDestination.Manor && travel.ActiveMap == null, "Return Home did not unload destination map.");
                         Check(Vector2.Distance(original.transform.position, ManorEnvironment.SpawnPoint) < 0.001f, "Return Home missed the central courtyard.");
@@ -422,7 +489,52 @@ namespace SlashDemo.Editor
                         Check(!arena.InputBlocked && !travel.IsSelectionOpen, "Controls did not resume after returning home.");
                         Check(arena.Resources.SpiritStones == 45 && arena.Resources.FortunePoints == expectedFortune,
                             "Returning home must preserve both resource balances.");
+                        if (Destination.destination == TravelDestination.Tribulation)
+                        {
+                            Check(arena.Resources.TribulationUnlocked && arena.Resources.FortuneSpent == 12,
+                                "Returning home lost tribulation unlock progress.");
+                            original.Teleport(SceneTravel.ManorGate.center);
+                            Advance(64);
+                            break;
+                        }
                         Debug.Log("PAUSE_RETURN_HOME_PASS: " + Destination.destination + "; same player/health/tuning/camera, manor and dummies restored, menu closed, no click-through.");
+                        goto case 12;
+                    case 64:
+                        Check(travel.IsSelectionOpen && !travel.ShowsDestination(TravelDestination.Tribulation)
+                            && !travel.CanSelectDestination(TravelDestination.Tribulation),
+                            "The tribulation route reappeared after returning home, before beating Blood Saber.");
+                        travel.SelectDestination(TravelDestination.Tribulation);
+                        Check(travel.Current == TravelDestination.Manor && travel.IsSelectionOpen,
+                            "The hidden tribulation route could still be selected.");
+                        travel.SelectDestination(TravelDestination.FinalBattle);
+                        Advance(65);
+                        break;
+                    case 65:
+                        var bloodSaber = CheckFinalBoss(arena);
+                        var fortunes = arena.Resources;
+                        int oldVisits = fortunes.ServiceVisits;
+                        bloodSaber.TakeHit(100000, Vector2.zero, 0);
+                        Check(bloodSaber.Alive && !travel.ShowsDestination(TravelDestination.Tribulation),
+                            "Blood Saber's phase transition unlocked tribulation before victory.");
+                        bloodSaber.SendMessage("Tick", 4f);
+                        bloodSaber.SendMessage("Tick", .75f);
+                        bloodSaber.TakeHit(100000, Vector2.zero, 0);
+                        Check(!bloodSaber.Alive && travel.Portal != null
+                            && travel.ShowsDestination(TravelDestination.Tribulation)
+                            && !travel.CanSelectDestination(TravelDestination.Tribulation)
+                            && fortunes.TribulationFortuneSpent == 0,
+                            "Defeating Blood Saber did not show the locked route with a fresh spending counter.");
+                        Check(fortunes.FortunePoints == expectedFortune && fortunes.FortuneSpent == 12 && fortunes.ServiceVisits == oldVisits,
+                            "Resetting tribulation spending changed the fortune balance or service progress.");
+                        Check(fortunes.TryChangeFortunePoints(-11) && fortunes.TribulationFortuneSpent == 11
+                            && !travel.CanSelectDestination(TravelDestination.Tribulation),
+                            "The reopened tribulation route unlocked before twelve new points were spent.");
+                        Check(fortunes.TryChangeFortunePoints(-1) && fortunes.TribulationFortuneSpent == 12
+                            && travel.CanSelectDestination(TravelDestination.Tribulation),
+                            "The reopened tribulation route did not unlock after twelve new points were spent.");
+                        Debug.Log("TRIBULATION_TRAVEL_PASS: initial unlock, ten waves, Foundation Establishment, hidden until Blood Saber falls, then twelve new points to unlock.");
+                        goto case 12;
+                    case 12:
                         choice++;
                         if (choice <= TravelMaps.Choices.Length)
                         {
@@ -448,13 +560,35 @@ namespace SlashDemo.Editor
                     case 41:
                         Check(travel.Current == TravelDestination.Wilderness && arena.Enemies.Count > 0,
                             "Exhaustion interrupted an active encounter.");
+                        int stonesBeforeClear = arena.Resources.SpiritStones;
                         foreach (var enemy in new System.Collections.Generic.List<SlashEnemy>(arena.Enemies))
                             enemy.TakeHit(100000, Vector2.zero, 0);
+                        int stonesFromClear = arena.Resources.SpiritStones - stonesBeforeClear;
+                        Check(stonesFromClear >= 10 && stonesFromClear <= 30 && travel.IsLootChoiceOpen && arena.Paused
+                            && !travel.TryOpenPortal(), "Wilderness did not award stones and block travel until the pill was chosen.");
+                        Check(!travel.TryClaimLoot(3) && travel.TryClaimLoot(2) && !travel.TryClaimLoot(0)
+                            && !travel.IsLootChoiceOpen, "The wilderness must grant one of the three pills exactly once.");
                         Advance(42);
                         break;
                     case 42:
                         Check(travel.Current == TravelDestination.FinalBattle && travel.ActiveMap != null,
                             "Exhaustion did not send the player to the final arena after combat.");
+                        arena.Player.invincible = false;
+                        Check(arena.Player.TakePoisonDamage(arena.Player.EffectiveMaxHealth / 2),
+                            "Could not lower the player's health before testing the potion hotkey.");
+                        health = arena.Player.Health;
+                        QueueKeys(new KeyboardState(Key.Digit1));
+                        Advance(44);
+                        break;
+                    case 44:
+                        bool potionActive = false;
+                        foreach (var buff in arena.GetComponent<SlashHUD>().VisibleBuffs)
+                            if (buff.id.StartsWith("SlashDemo/Pills/", StringComparison.Ordinal) && buff.duration == 60
+                                && buff.RemainingFraction > 0)
+                                potionActive = true;
+                        Check(potionActive || arena.Player.Health > health,
+                            "The wilderness reward did not auto-fill slot one and take effect after using the hotkey.");
+                        QueueKeys(new KeyboardState());
                         var boss = CheckFinalBoss(arena);
                         boss.TakeHit(100000, Vector2.zero, 0);
                         Check(boss.Health == 1 && boss.GetComponent<EvilCultivatorBoss>().CastingSkill == "血雾升腾"
@@ -479,7 +613,7 @@ namespace SlashDemo.Editor
                         InputSystem.onBeforeUpdate -= InjectGameplayInput;
                         InputSystem.RemoveDevice(mouse);
                         InputSystem.RemoveDevice(keyboard);
-                        Debug.Log("CULTIVATION_REALM_PASS: starts/restarts in Qi Refining, all three higher realms survive outbound travel and tuning, every return home resets to Qi Refining.");
+                        Debug.Log("CULTIVATION_REALM_PASS: starts/restarts in Qi Refining, outbound travel and tuning retain the current realm, and returning home restores the realm earned this run.");
                         Debug.Log("SCENE_TRAVEL_PASS: all destinations, gate/cancel/rearm, R/T disabled, reserved exits have no destination, market portal and shop access.");
                         Debug.Log("FORTUNE_TRAVEL_PASS: route costs, shared visits, voluntary and automatic final battle travel.");
                         Debug.Log("FINAL_BOSS_PASS: Blood Saber on each entry path, 2000 base health, reduced direct damage, 10x lifesteal, homing blood dagger with impact and expiry bursts, eight movement facings, invulnerable quarter-health transition, and a single victory portal.");
@@ -494,6 +628,62 @@ namespace SlashDemo.Editor
                 Debug.LogError("SCENE_TRAVEL_FAIL: " + exception);
                 EditorApplication.Exit(1);
             }
+        }
+
+        static void ValidateTribulation(SlashArena arena)
+        {
+            var travel = arena.Travel;
+            var player = arena.Player;
+            var challenge = travel.ActiveMap.transform.Find("渡劫");
+            var zones = new System.Collections.Generic.List<Transform>();
+            foreach (Transform child in challenge)
+                if (child.name == "落雷区域") zones.Add(child);
+            Check(zones.Count == 9 && challenge.Find("雷云") != null, "Tribulation did not create its storm and nine warning areas.");
+            float firstRadius = zones[0].Find("落雷边界").localScale.x;
+            Vector2 center = zones[0].position;
+            Vector2 safePoint = travel.ActiveMap.ReservedExit.transform.position;
+            Check(Vector2.Distance(center, player.transform.position) < .001f, "The first warning did not target the player's position.");
+            zones[1].position = center + Vector2.right * (firstRadius * .5f);
+
+            int startingHealth = player.Health, originalMax = player.maxHealth;
+            bool wasInvincible = player.invincible;
+            player.maxHealth = (originalMax / 10 + 1) * 10 + 1;
+            player.invincible = false;
+            int damage = Mathf.CeilToInt(player.EffectiveMaxHealth * .1f);
+            challenge.SendMessage("Advance", .79f);
+            Check(player.Health == startingHealth, "Tribulation struck before the 0.8-second warning ended.");
+            challenge.SendMessage("Advance", .02f);
+            Check(player.Health == startingHealth - damage, "Overlapping strikes must deal a single rounded-up 10% hit.");
+            challenge.SendMessage("Advance", .1f);
+            Check(player.Health == startingHealth - damage, "Lingering lightning applied damage again.");
+            player.maxHealth = originalMax;
+            player.invincible = wasInvincible;
+            player.Heal(damage);
+            Check(player.Health == startingHealth, "Tribulation fixture failed to restore test health.");
+
+            for (int round = 2; round <= 10; round++)
+            {
+                player.Teleport(center + Vector2.right * (.5f * (round - 1)));
+                challenge.SendMessage("Advance", 1f);
+                challenge.SendMessage("Advance", 1f);
+                Check(Vector2.Distance(zones[0].position, player.transform.position) < .001f,
+                    "The new round did not target the player's current position.");
+                float radius = zones[0].Find("落雷边界").localScale.x;
+                Check(travel.TribulationRound == round && Mathf.Abs(radius - firstRadius * (1 + .04f * (round - 1))) < .001f,
+                    "Tribulation rounds or radius growth are incorrect.");
+                player.Teleport(safePoint);
+                challenge.SendMessage("Advance", 2f);
+                Check(player.Health == startingHealth && travel.Portal == null, "A safe area caused damage or the portal returned early.");
+                Check(player.Realm == CultivationRealm.QiRefining, "Tribulation advanced the realm before the encounter ended.");
+            }
+
+            challenge.SendMessage("Advance", 1f);
+            Check(travel.TribulationCleared && !arena.InCombat && !challenge.gameObject.activeSelf
+                && travel.Portal != null && Vector2.Distance(travel.Portal.transform.position, travel.ActiveMap.Definition.Entry) < .01f,
+                "Surviving ten rounds did not clear the storm and restore the exit.");
+            Check(player.Realm == CultivationRealm.FoundationEstablishment && !travel.ShowsDestination(TravelDestination.Tribulation)
+                && !travel.CanSelectDestination(TravelDestination.Tribulation), "Clearing tribulation did not promote the player and hide the route.");
+            player.Teleport(travel.Portal.transform.position);
         }
 
         static SlashEnemy CheckFinalBoss(SlashArena arena, bool exerciseSkills = false)
@@ -2005,6 +2195,9 @@ namespace SlashDemo.Editor
                     break;
                 case TravelDestination.Wilderness:
                     route = new[] { entry, new Vector2(800, 740), new Vector2(800, 520), new Vector2(800, 270) };
+                    break;
+                case TravelDestination.Tribulation:
+                    route = new[] { entry, new Vector2(765, 610), TravelMaps.TribulationCenter };
                     break;
                 case TravelDestination.FinalBattle:
                     Check(map.Definition.WorldSize == TravelMaps.Get(TravelDestination.Wilderness).WorldSize,

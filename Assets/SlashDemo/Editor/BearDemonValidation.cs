@@ -230,6 +230,7 @@ namespace SlashDemo.Editor
                         Check(bear.Health == hp - 20, "Bear did not take combat damage.");
                         bear.TakeHit(100000, Vector2.up, 1, true);
                         Check(!bear.Alive && arena.Enemies.Count == 0, "Bear death did not unregister it.");
+                        Check(arena.Travel.TryClaimLoot(0), "Bear clear did not grant a pill choice.");
                         Advance(6, 2.5); break;
                     case 6:
                         Check(arena.Enemies.Count == 0 && arena.Travel.ActiveMap.GetComponentsInChildren<SlashEnemy>().Length == 0,

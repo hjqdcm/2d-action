@@ -3,6 +3,7 @@ using UnityEngine;
 namespace SlashDemo
 {
     public enum CharacterPanelPage { Techniques, Attributes, Items }
+    public enum CharacterInventoryPage { Pills, Treasures }
 
     [DefaultExecutionOrder(-95)]
     [DisallowMultipleComponent]
@@ -13,6 +14,7 @@ namespace SlashDemo
         public bool IsOpen { get; private set; }
         public bool IsWardrobeOpen { get; private set; }
         public CharacterPanelPage ActivePage { get; private set; }
+        public CharacterInventoryPage ActiveInventoryPage { get; private set; }
         public bool ConsumedInputThisFrame => consumedFrame == Time.frameCount;
         public bool ShowWardrobePrompt => CanOpen && !arena.InputBlocked && NearWardrobe;
         public void Initialize(SlashArena owner) { arena = owner; }
@@ -50,6 +52,7 @@ namespace SlashDemo
         {
             if (!CanOpen) return false;
             ActivePage = CharacterPanelPage.Techniques;
+            ActiveInventoryPage = CharacterInventoryPage.Pills;
             OpenPanel(false);
             return true;
         }
@@ -72,6 +75,13 @@ namespace SlashDemo
         public void SelectPage(CharacterPanelPage page)
         {
             if (IsOpen && !IsWardrobeOpen && page >= CharacterPanelPage.Techniques && page <= CharacterPanelPage.Items) ActivePage = page;
+        }
+
+        public void SelectInventoryPage(CharacterInventoryPage page)
+        {
+            if (IsOpen && !IsWardrobeOpen && ActivePage == CharacterPanelPage.Items
+                && (page == CharacterInventoryPage.Pills || page == CharacterInventoryPage.Treasures))
+                ActiveInventoryPage = page;
         }
 
         public void Close()

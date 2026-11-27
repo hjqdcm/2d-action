@@ -163,6 +163,7 @@ namespace SlashDemo.Editor
                         field.Launch(remaining,arena.View.LiftPoint(target,1)); field.Advance(.5f);
                         keeper.TakeHit(100000,Vector2.zero,0);
                         Check(field.ActiveCount==0 && arena.Travel.Portal!=null,"Final kill did not clean hazards before portal.");
+                        Check(arena.Travel.TryClaimLoot(0), "Snake clear did not grant a pill choice.");
                         var old=arena.Travel.ActiveMap;
                         arena.TogglePause(); arena.ReturnHome();
                         Check(!old.gameObject.activeSelf && arena.Enemies.Count==3,"Return home leaked the venom map.");

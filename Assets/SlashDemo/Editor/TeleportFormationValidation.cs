@@ -112,6 +112,7 @@ namespace SlashDemo.Editor
                         Check(portal.GetComponent<Collider2D>() == null, "Portal blocks walking.");
                         travel.EnemyDefeated(bears[2]);
                         Check(oldMap.GetComponentsInChildren<TeleportFormation>().Length == 1, "Repeated notification duplicated portal.");
+                        Check(travel.TryClaimLoot(0) && !travel.TryClaimLoot(0), "Wilderness loot did not resolve exactly once.");
                         player.Teleport((Vector2)portal.transform.position + Vector2.right * 4);
                         keys = new KeyboardState(Key.F); Advance(2); break;
                     case 2:
@@ -139,6 +140,12 @@ namespace SlashDemo.Editor
                             EditorApplication.Exit(0); return;
                         }
                         var destination = TravelMaps.Choices[choice].destination;
+                        if (destination == TravelDestination.Tribulation && !arena.Resources.TribulationUnlocked)
+                        {
+                            int remaining = GameResources.TribulationUnlockSpend - (int)arena.Resources.TribulationFortuneSpent;
+                            Check(arena.Resources.TryChangeFortunePoints(-remaining) && arena.Resources.TryChangeFortunePoints(remaining),
+                                "Could not unlock the tribulation route for portal validation.");
+                        }
                         travel.SelectDestination(destination);
                         Check(travel.Current == destination && travel.ActiveMap != oldMap && !oldMap.gameObject.activeSelf,
                             "Direct map travel retained old map.");

@@ -113,7 +113,8 @@ namespace SlashDemo
         int codexIndex;
         Vector2 techniqueScroll;
         Vector2 attributeScroll;
-        readonly List<float> conditionalEffectHeights = new List<float>();
+        Vector2 pillInventoryScroll, treasureInventoryScroll;
+        readonly List<float> pillEffectHeights = new List<float>();
         Vector2 codexScroll;
         Vector2 treasureScroll;
         Vector2 pillScroll;
@@ -123,6 +124,16 @@ namespace SlashDemo
         float alchemyCardWidth;
         static readonly string[] CharacterPageNames = { "功法", "属性", "物品" };
         GUIStyle small, health, damage, status, travelTitle, travelButton;
+        GUIStyle routeTitle, routeBalanceValue, pricedButtonTitle;
+        const string SpiritStoneIcon = "SlashDemo/SpiritStoneIcon";
+        const string FortunePointIcon = "SlashDemo/FortunePointIcon";
+        const string SpiritStoneDescription = "修仙界通用货币，常用于交易丹药、法宝等修炼物资。";
+        const string FortunePointDescription = "游历所需的机缘，可用于前往山野、升仙台等地。";
+        static readonly Rect SpiritStoneIconCrop = new Rect(.125f, .125f, .75f, .75f);
+        static readonly Rect FortunePointIconCrop = new Rect(.22f, .235f, .58f, .58f);
+        static readonly Rect SquareIconCrop = new Rect(.165f, .165f, .67f, .67f);
+        readonly GUIContent damageNumberContent = new GUIContent();
+        readonly GUIContent resourceAmountContent = new GUIContent();
         GUIStyle buffName, buffStacks, passiveStacks, buffTooltipBody, buffTooltipTitle, bossCastName;
         readonly Dictionary<string, Texture2D> hudIcons = new Dictionary<string, Texture2D>(StringComparer.Ordinal);
         readonly Dictionary<string, BuffCountdownMask> buffCountdowns = new Dictionary<string, BuffCountdownMask>(StringComparer.Ordinal);
@@ -144,12 +155,14 @@ namespace SlashDemo
         }
         static readonly Color Ink = new Color(0.24f, 0.25f, 0.20f);
         static readonly Color Bronze = new Color(0.53f, 0.42f, 0.25f);
+        static readonly Color PaperTint = new Color(.88f, .83f, .70f, .80f);
         static readonly Color Muted = new Color(0.43f, 0.40f, 0.31f);
         static readonly Color Jade = new Color(0.22f, 0.43f, 0.34f);
         static readonly Color Cinnabar = new Color(0.61f, 0.23f, 0.18f);
         static readonly Color[] AlchemyNameColors = {
             Color.white, new Color(0.46f, 0.75f, 1f), new Color(0.81f, 0.63f, 1f), new Color(1f, 0.65f, 0.32f)
         };
+        static readonly string[] AlchemyQualityNames = { "白色", "蓝色", "紫色", "橙色" };
 
         void Awake()
         {
@@ -177,6 +190,9 @@ namespace SlashDemo
             status = new GUIStyle(small) { alignment = TextAnchor.MiddleCenter };
             bossCastName = new GUIStyle(small) { alignment = TextAnchor.MiddleRight };
             travelTitle = new GUIStyle(status) { fontSize = 27, fontStyle = FontStyle.Bold };
+            routeTitle = new GUIStyle(travelTitle) { alignment = TextAnchor.MiddleLeft };
+            routeBalanceValue = new GUIStyle(travelTitle) { fontSize = 34 };
+            pricedButtonTitle = new GUIStyle(status) { fontSize = 18, fontStyle = FontStyle.Bold };
             travelButton = new GUIStyle(GUI.skin.button) { font = font, fontSize = 20 };
             travelButton.normal.textColor = Ink;
             codexBody = new GUIStyle(small) { fontSize = 17, wordWrap = true };
@@ -200,7 +216,7 @@ namespace SlashDemo
                 {
                     // Deterministic grain leaves gameplay's random sequence untouched.
                     float grain = (((x * 73 + y * 151 + x * y * 19) % 101) / 100f - 0.5f) * 0.025f;
-                    pixels[y * 64 + x] = new Color(0.88f + grain, 0.83f + grain, 0.70f + grain, 0.80f);
+                    pixels[y * 64 + x] = new Color(PaperTint.r + grain, PaperTint.g + grain, PaperTint.b + grain, PaperTint.a);
                 }
             texture.SetPixels(pixels);
             texture.Apply(false, true);
@@ -230,7 +246,7 @@ namespace SlashDemo
             Box(new Rect(rect.xMax - thickness, rect.y + thickness, thickness, rect.height - thickness * 2), color);
         }
 
-        void DrawFrame(Rect rect)
+        void DrawFrame(Rect rect, float paperOpacity = 1)
         {
             // Only outline the frame; opaque backing layers would hide the scene through the paper.
             Outline(new Rect(rect.x + 1, rect.y + 3, rect.width, rect.height), new Color(0.08f, 0.10f, 0.07f, 0.15f), 2);
@@ -244,11 +260,11 @@ namespace SlashDemo
             if (paper != null)
             {
                 Color previous = GUI.color;
-                GUI.color = Color.white;
+                GUI.color = new Color(1, 1, 1, paperOpacity);
                 GUI.DrawTextureWithTexCoords(inside, paper, new Rect(0, 0, inside.width / 64, inside.height / 64));
                 GUI.color = previous;
             }
-            else Box(inside, new Color(.88f, .83f, .70f, .80f));
+            else Box(inside, new Color(PaperTint.r, PaperTint.g, PaperTint.b, PaperTint.a * paperOpacity));
             Box(new Rect(rect.x + 3, rect.y + 3, rect.width - 6, 1), new Color(1, 0.96f, 0.79f, 0.4f));
             for (int i = 0; i < 4; i++)
             {
@@ -287,8 +303,8 @@ namespace SlashDemo
             DrawFrame(healthPanel);
             Label(new Rect(50, 36, 282, 23), "境界 · " + player.RealmDisplayName, small, Jade);
             Label(new Rect(50, 64, 90, 23), "气血", small, Ink);
-            Label(new Rect(220, 64, 112, 25), player.Health + " / " + player.maxHealth, small, Cinnabar);
-            DrawGauge(new Rect(50, 102, 282, 8), player.Health / (float)player.maxHealth, Cinnabar);
+            Label(new Rect(220, 64, 112, 25), player.Health + " / " + player.EffectiveMaxHealth, small, Cinnabar);
+            DrawGauge(new Rect(50, 102, 282, 8), player.Health / (float)player.EffectiveMaxHealth, Cinnabar);
             DrawBuffBar(new Rect(50, healthPanel.yMax + 10, 282, 0), scale);
 
             DrawFrame(new Rect(width / 2 - 105, height - 58, 210, 31));
@@ -296,12 +312,22 @@ namespace SlashDemo
             Label(new Rect(width / 2 - 105, height - 58, 210, 30), player.DashReady >= 1 ? "冲刺就绪" : "冲刺冷却中", status, player.DashReady >= 1 ? Jade : Muted);
             DrawActiveSkill(height);
             DrawUltimateSkill(height);
+            const float potionTop = 20, potionSize = 62, potionGap = 12, potionPadding = 10;
+            float potionWidth = GameResources.PotionSlotCount * (potionSize + potionGap) - potionGap;
+            float potionStart = (width - potionWidth) * .5f;
+            var potionFrame = new Rect(potionStart - potionPadding, potionTop - potionPadding,
+                potionWidth + potionPadding * 2, potionSize + potionPadding * 2);
+            DrawFrame(potionFrame, paperOpacity: .5f);
+            for (int i = 0; i < GameResources.PotionSlotCount; i++)
+                DrawPotionSlot(new Rect(potionStart + i * (potionSize + potionGap), potionTop, potionSize, potionSize),
+                    i, selected: false, translucent: true);
+            float fightStatusTop = potionFrame.yMax + 12;
             AscensionCultivator challenger = null;
             if (arena.Travel != null && arena.Travel.ChallengeRound > 0 && arena.Enemies.Count > 0)
             {
                 challenger = arena.Enemies[0].GetComponent<AscensionCultivator>();
                 string skill = challenger != null ? challenger.CastingSkill : null;
-                var round = new Rect(width / 2 - 190, 25, 380, skill == null ? 44 : 69);
+                var round = new Rect(width / 2 - 190, fightStatusTop, 380, skill == null ? 44 : 69);
                 DrawFrame(round);
                 Label(new Rect(round.x, round.y, round.width, 44),
                     "升仙台 · 第 " + arena.Travel.ChallengeRound + " / " + AscensionCultivator.PathCount
@@ -312,18 +338,25 @@ namespace SlashDemo
             }
             else if (arena.Travel != null && arena.Travel.ChallengeEndedByDefeat)
             {
-                var result = new Rect(width / 2 - 220, 25, 440, 72);
+                var result = new Rect(width / 2 - 220, fightStatusTop, 440, 72);
                 DrawFrame(result);
                 Label(new Rect(result.x, result.y + 5, result.width, 28),
                     "升仙台 · 本轮完成 " + arena.Travel.ChallengeCompletedRounds + " 战", status, Ink);
                 Label(new Rect(result.x, result.y + 35, result.width, 28), "已恢复一半气血 · 可使用传送阵离开", status, Jade);
+            }
+            if (arena.Travel != null && (arena.Travel.IsTribulationActive || arena.Travel.TribulationCleared))
+            {
+                var round = new Rect(width / 2 - 160, fightStatusTop, 320, 44);
+                DrawFrame(round);
+                Label(round, arena.Travel.TribulationCleared ? "渡劫完成"
+                    : $"渡劫 · 第 {arena.Travel.TribulationRound} / {TribulationChallenge.RoundCount} 轮", status, Ink);
             }
             if (arena.Travel?.Current == TravelDestination.FinalBattle && arena.Enemies.Count > 0)
             {
                 var opponent = arena.Enemies[0];
                 var boss = opponent.GetComponent<EvilCultivatorBoss>();
                 if (boss != null && opponent.Alive)
-                    DrawBossStatus(width, scale, opponent, boss);
+                    DrawBossStatus(width, fightStatusTop, scale, opponent, boss);
             }
             if (arena.Travel != null && arena.Travel.ShowPortalPrompt)
             {
@@ -336,6 +369,12 @@ namespace SlashDemo
                 var prompt = new Rect(width / 2 - 175, height / 2 + 80, 350, 50);
                 DrawFrame(prompt);
                 Label(prompt, "F  床边疗伤", status, Ink);
+            }
+            if (arena.Travel != null && arena.Travel.ShowTribulationPrompt)
+            {
+                var prompt = new Rect(width / 2 - 175, height / 2 + 80, 350, 50);
+                DrawFrame(prompt);
+                Label(prompt, "F 开始渡劫", status, Ink);
             }
             if (arena.Travel != null && arena.Travel.ShowShopPrompt)
             {
@@ -381,7 +420,9 @@ namespace SlashDemo
             else if (arena.Codex != null && arena.Codex.IsOpen) DrawTechniqueCodex(width, height);
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsWardrobeOpen) DrawWardrobe(width, height);
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsOpen) DrawCharacterPanel(width, height);
+            else if (arena.Travel != null && arena.Travel.IsLootChoiceOpen) DrawLootChoice(width, height);
             else if (arena.Travel != null && arena.Travel.IsChallengeDecisionOpen) DrawChallengeDecision(width, height);
+            else if (arena.Travel != null && arena.Travel.IsTribulationDecisionOpen) DrawTribulationDecision(width, height);
             else if (arena.Travel != null && arena.Travel.IsTreatmentOpen) DrawTreatmentDecision(width, height);
             else if (arena.Travel != null && arena.Travel.IsShopOpen) DrawShop(width, height);
             else if (arena.PauseMenuOpen) DrawPauseMenu(width, height);
@@ -426,9 +467,9 @@ namespace SlashDemo
             for (int i = 0; i < buffs.Count; i++) DrawBuffSlot(BuffBarLayout.Slot(i, area), buffs[i], scale);
         }
 
-        void DrawBossStatus(float width, float scale, SlashEnemy opponent, EvilCultivatorBoss boss)
+        void DrawBossStatus(float width, float top, float scale, SlashEnemy opponent, EvilCultivatorBoss boss)
         {
-            var panel = new Rect(width / 2 - 220, 25, 440, 51);
+            var panel = new Rect(width / 2 - 220, top, 440, 51);
             DrawFrame(panel);
             var gauge = new Rect(panel.x + 24, panel.y + 34, panel.width - 48, 8);
             Label(new Rect(gauge.x, panel.y + 3, 250, 26),
@@ -450,7 +491,7 @@ namespace SlashDemo
         void DrawBuffSlot(Rect slot, CombatBuffView buff, float scale)
         {
             DrawFrame(slot);
-            if (!DrawHudIcon(slot, buff.iconResource, buff.cropIconToSquare))
+            if (!DrawHudIcon(slot, buff.iconResource, buff.cropIconToSquare ? SquareIconCrop : (Rect?)null))
                 Label(new Rect(slot.x + 4, slot.y + 20, slot.width - 8, 20), buff.name, buffName, Jade);
             DrawBuffCountdown(slot, buff);
             if (buff.stacks > 0 || buff.showZeroStacks)
@@ -463,7 +504,7 @@ namespace SlashDemo
             HoverBuffSlot(slot, buff, scale);
         }
 
-        bool DrawHudIcon(Rect slot, string resource, bool cropIconToSquare = false)
+        bool DrawHudIcon(Rect slot, string resource, Rect? crop = null)
         {
             if (string.IsNullOrEmpty(resource)) return false;
             if (!hudIcons.TryGetValue(resource, out Texture2D icon))
@@ -473,10 +514,10 @@ namespace SlashDemo
             }
             if (icon == null) return false;
             var iconRect = new Rect(slot.x + 2, slot.y + 2, slot.width - 4, slot.height - 4);
-            if (cropIconToSquare)
+            if (crop.HasValue)
             {
                 if (Event.current.type == EventType.Repaint)
-                    GUI.DrawTextureWithTexCoords(iconRect, icon, new Rect(.165f, .165f, .67f, .67f));
+                    GUI.DrawTextureWithTexCoords(iconRect, icon, crop.Value);
             }
             else GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit);
             return true;
@@ -497,8 +538,7 @@ namespace SlashDemo
             if (buff.duration <= 0 || Event.current.type != EventType.Repaint) return;
             if (!buffCountdowns.TryGetValue(buff.id, out var countdown))
             { countdown = new BuffCountdownMask(); buffCountdowns.Add(buff.id, countdown); }
-            float remaining = buff.RemainingFraction;
-            countdown.Update(remaining);
+            countdown.Update(buff.RemainingFraction);
             Rect icon = new Rect(slot.x + 2, slot.y + 2, slot.width - 4, slot.height - 4);
             GUI.DrawTexture(icon, countdown.Texture);
         }
@@ -510,12 +550,17 @@ namespace SlashDemo
             float bodyHeight = buffTooltipBody.CalcHeight(new GUIContent(hoveredBuff.description), width - 24);
             Rect rect = BuffBarLayout.Tooltip(hoveredBuffSlot, new Vector2(width, bodyHeight + 56), viewport);
             int previousDepth = GUI.depth; GUI.depth = -15;
+            DrawTooltip(rect, hoveredBuff.name, hoveredBuff.description, bodyHeight);
+            GUI.depth = previousDepth;
+        }
+
+        void DrawTooltip(Rect rect, string title, string description, float bodyHeight)
+        {
             Box(rect, new Color(0.025f, 0.06f, 0.08f, 0.98f));
             Outline(rect, Bronze);
-            Label(new Rect(rect.x + 12, rect.y + 9, rect.width - 24, 27), hoveredBuff.name, buffTooltipTitle, new Color(0.64f, 0.91f, 0.86f));
-            Label(new Rect(rect.x + 12, rect.y + 40, rect.width - 24, bodyHeight), hoveredBuff.description, buffTooltipBody,
+            Label(new Rect(rect.x + 12, rect.y + 9, rect.width - 24, 27), title, buffTooltipTitle, new Color(0.64f, 0.91f, 0.86f));
+            Label(new Rect(rect.x + 12, rect.y + 40, rect.width - 24, bodyHeight), description, buffTooltipBody,
                 new Color(0.92f, 0.92f, 0.84f));
-            GUI.depth = previousDepth;
         }
 
         void DrawActiveSkill(float height)
@@ -548,6 +593,21 @@ namespace SlashDemo
             if (ultimate == null) return;
             DrawSkillSlot(new Rect(238, height - 174, 108, 108), ultimateIcon, ultimate.Ready || ultimate.Active,
                 player.InfiniteUltimateForDebug ? 0 : ultimate.CooldownLeft, "R · " + FiveStarSwordSlash.Name);
+        }
+
+        void DrawPotionSlot(Rect rect, int slot, bool selected, bool translucent = false)
+        {
+            var entry = arena.Resources.PotionSlots[slot];
+            Box(rect, translucent ? new Color(PaperTint.r, PaperTint.g, PaperTint.b, .24f) : new Color(.14f, .20f, .21f, .92f));
+            if (entry.HasValue && Event.current.type == EventType.Repaint)
+                DrawHudIcon(new Rect(rect.x + 7, rect.y + 7, rect.width - 14, rect.height - 14), entry.Value.IconResource);
+            Color border = selected ? new Color(.95f, .77f, .39f)
+                : !translucent && entry.HasValue ? AlchemyNameColors[(int)entry.Value.Quality] : Bronze;
+            if (translucent) border.a = .65f;
+            Outline(rect, border);
+            var hotkey = new Rect(rect.x + 3, rect.y + 3, 19, 19);
+            Box(hotkey, new Color(.10f, .14f, .13f, translucent ? .76f : .94f));
+            Label(hotkey, (slot + 1).ToString(), buffStacks, Color.white);
         }
 
         bool DrawCharacterButton(Rect rect, string text, bool selected)
@@ -596,18 +656,143 @@ namespace SlashDemo
         void DrawCharacterItems(Rect panel)
         {
             const float margin = 28, gap = 16;
-            float width = (panel.width - margin * 2 - gap) / 2;
-            var stones = new Rect(panel.x + margin, panel.y + 106, width, 68);
+            float width = panel.width - margin * 2;
+            float balanceWidth = (width - gap) / 2;
+            var stones = new Rect(panel.x + margin, panel.y + 106, balanceWidth, 68);
             var fortune = new Rect(stones.xMax + gap, stones.y, stones.width, stones.height);
-            DrawResourceBalance(stones, "灵石", arena.Resources.SpiritStones);
-            DrawResourceBalance(fortune, "机缘点", arena.Resources.FortunePoints);
+            DrawResourceBalance(stones, SpiritStoneIcon, arena.Resources.SpiritStones);
+            DrawResourceBalance(fortune, FortunePointIcon, arena.Resources.FortunePoints);
+
+            var character = arena.CharacterPanel;
+            var pillsTab = new Rect(stones.x, stones.yMax + 14, 132, 40);
+            var treasureTab = new Rect(pillsTab.xMax + 12, pillsTab.y, pillsTab.width, pillsTab.height);
+            if (DrawCharacterButton(pillsTab, "丹药", character.ActiveInventoryPage == CharacterInventoryPage.Pills))
+                character.SelectInventoryPage(CharacterInventoryPage.Pills);
+            if (DrawCharacterButton(treasureTab, "法宝", character.ActiveInventoryPage == CharacterInventoryPage.Treasures))
+                character.SelectInventoryPage(CharacterInventoryPage.Treasures);
+
+            float inventoryY = pillsTab.yMax + 14;
+            if (character.ActiveInventoryPage == CharacterInventoryPage.Pills)
+            {
+                DrawPotionConfiguration(new Rect(stones.x, inventoryY, balanceWidth, 114));
+                inventoryY += 120;
+                DrawInventoryList(new Rect(stones.x, inventoryY, width, panel.yMax - inventoryY - margin),
+                    arena.Resources.Pills, ref pillInventoryScroll, isPills: true);
+            }
+            else
+            {
+                DrawInventoryList(new Rect(stones.x, inventoryY, width, panel.yMax - inventoryY - margin),
+                    arena.Resources.Treasures, ref treasureInventoryScroll);
+            }
+
+            Vector2 pointer = Event.current.mousePosition;
+            if (stones.Contains(pointer))
+                DrawInventoryResourceTooltip(stones, "灵石", SpiritStoneDescription);
+            else if (fortune.Contains(pointer))
+                DrawInventoryResourceTooltip(fortune, "机缘点", FortunePointDescription);
         }
 
-        void DrawResourceBalance(Rect card, string name, int balance)
+        void DrawInventoryResourceTooltip(Rect card, string title, string description)
+        {
+            const float width = 360;
+            float bodyHeight = buffTooltipBody.CalcHeight(new GUIContent(description), width - 24);
+            DrawTooltip(new Rect(card.x, card.yMax + 8, width, bodyHeight + 56), title, description, bodyHeight);
+        }
+
+        void DrawPotionConfiguration(Rect area)
+        {
+            Label(new Rect(area.x, area.y, area.width, 26), "药水槽", codexHeading, Ink);
+            bool enabled = GUI.enabled;
+            bool canConfigure = arena.CanConfigurePotions;
+            GUI.enabled = enabled && canConfigure;
+            for (int i = 0; i < GameResources.PotionSlotCount; i++)
+            {
+                var slot = new Rect(area.x + i * 72, area.y + 31, 58, 58);
+                if (GUI.Button(slot, GUIContent.none, GUIStyle.none)) arena.PotionConfigSlot = i;
+                DrawPotionSlot(slot, i, arena.PotionConfigSlot == i);
+            }
+            int selected = arena.PotionConfigSlot;
+            GUI.enabled = enabled && canConfigure && arena.Resources.PotionSlots[selected].HasValue;
+            if (GUI.Button(new Rect(area.xMax - 124, area.y + 45, 124, 32), "清空所选", travelButton))
+                arena.Resources.TryAssignPotion(selected, null);
+            GUI.enabled = enabled;
+            Label(new Rect(area.x, area.y + 91, area.width, 23),
+                canConfigure ? "选择槽位后，从下方丹药装入。" : "战斗间隙可配置药水槽。", small, Muted);
+        }
+
+        void DrawInventoryList(Rect viewport, IReadOnlyDictionary<AlchemyEntry, int> items, ref Vector2 scroll,
+            bool isPills = false)
+        {
+            const float rowHeight = 108, gap = 9;
+            bool canConfigure = isPills && arena.CanConfigurePotions;
+            if (items.Count == 0)
+            {
+                Label(new Rect(viewport.x, viewport.y, viewport.width, 28),
+                    isPills ? "尚未获得丹药" : "尚未获得法宝", codexBody, Muted);
+                scroll = Vector2.zero;
+                return;
+            }
+
+            float width = viewport.width - 18;
+            float height = items.Count * (rowHeight + gap) - gap;
+            scroll.y = Mathf.Clamp(scroll.y, 0, Mathf.Max(0, height - viewport.height));
+            scroll = GUI.BeginScrollView(viewport, scroll, new Rect(0, 0, width, height));
+            float y = 0;
+            IEnumerable<AlchemyEntry> entries = isPills ? arena.Resources.PillOrder : items.Keys;
+            foreach (var entry in entries)
+            {
+                if (y >= scroll.y + viewport.height) break;
+                if (y + rowHeight >= scroll.y)
+                {
+                    Box(new Rect(0, y, width, rowHeight), new Color(.14f, .20f, .21f));
+                    var icon = new Rect(10, y + 10, 62, 62);
+                    if (Event.current.type == EventType.Repaint) DrawHudIcon(icon, entry.IconResource);
+                    Label(new Rect(82, y + 8, width - 142, 27), entry.Name, codexBody, AlchemyNameColors[(int)entry.Quality]);
+                    Label(new Rect(width - 46, y + 8, 40, 27), $"×{items[entry]}", status, Color.white);
+                    float descriptionWidth = width - (canConfigure ? 218 : 94);
+                    Label(new Rect(82, y + 38, descriptionWidth, rowHeight - 43), entry.Effect, alchemyDescription, Color.white);
+                    if (canConfigure)
+                    {
+                        bool enabled = GUI.enabled;
+                        GUI.enabled = enabled && arena.Resources.CanAssignPotion(arena.PotionConfigSlot, entry);
+                        if (GUI.Button(new Rect(width - 124, y + 54, 112, 34), "装入", travelButton))
+                            arena.Resources.TryAssignPotion(arena.PotionConfigSlot, entry);
+                        GUI.enabled = enabled;
+                    }
+                }
+                y += rowHeight + gap;
+            }
+            GUI.EndScrollView();
+        }
+
+        void DrawResourceBalance(Rect card, string icon, int balance)
         {
             DrawFrame(card);
-            Label(new Rect(card.x + 20, card.y, card.width - 200, card.height), name, codexHeading, Ink);
-            Label(new Rect(card.xMax - 176, card.y, 156, card.height), balance.ToString(), travelTitle, Jade);
+            DrawResourceAmount(card, icon, balance.ToString(), travelTitle, Jade, 46);
+        }
+
+        void DrawResourceAmount(Rect area, string icon, string amount, GUIStyle style, Color color, float iconSize)
+        {
+            resourceAmountContent.text = amount;
+            float textWidth = Mathf.Ceil(style.CalcSize(resourceAmountContent).x) + 2;
+            const float gap = 6;
+            float left = area.center.x - (iconSize + gap + textWidth) * .5f;
+            var iconRect = new Rect(left, area.center.y - iconSize * .5f, iconSize, iconSize);
+            Color previous = GUI.color;
+            if (!GUI.enabled) GUI.color = new Color(previous.r, previous.g, previous.b, previous.a * .45f);
+            DrawHudIcon(iconRect, icon, icon == FortunePointIcon ? FortunePointIconCrop : SpiritStoneIconCrop);
+            GUI.color = previous;
+            Label(new Rect(iconRect.xMax + gap, area.y, textWidth, area.height), amount, style, color);
+        }
+
+        bool DrawPricedButton(Rect button, string title, string cost, string icon = null)
+        {
+            bool pressed = GUI.Button(button, GUIContent.none, travelButton);
+            Label(new Rect(button.x, button.y + 4, button.width, 24), title, pricedButtonTitle, Ink);
+            var price = new Rect(button.x, button.y + 27, button.width, 22);
+            if (icon == null) Label(price, cost, status, Ink);
+            else DrawResourceAmount(price, icon, cost, status, Ink, 22);
+            return pressed;
         }
 
         void DrawCharacterAttributes(Rect panel)
@@ -619,16 +804,16 @@ namespace SlashDemo
             float columnWidth = (width - gap) / 2;
             float effectsY = headingHeight + rowsPerColumn * rowHeight + 18;
             var player = arena.Player;
-            var effects = player.ActiveConditionalAlchemyEffects;
+            var effects = player.ActivePills;
             float contentHeight = headingHeight + rowsPerColumn * rowHeight;
-            conditionalEffectHeights.Clear();
+            pillEffectHeights.Clear();
             if (effects.Count > 0)
             {
                 contentHeight = effectsY + headingHeight;
-                foreach (var entry in effects)
+                foreach (var entry in effects.Keys)
                 {
                     float height = 40 + codexBody.CalcHeight(new GUIContent(entry.Effect), width - 24);
-                    conditionalEffectHeights.Add(height);
+                    pillEffectHeights.Add(height);
                     contentHeight += height;
                 }
             }
@@ -636,46 +821,47 @@ namespace SlashDemo
             var content = new Rect(0, 0, width, contentHeight);
             attributeScroll.y = Mathf.Clamp(attributeScroll.y, 0, Mathf.Max(0, contentHeight - viewport.height));
             attributeScroll = GUI.BeginScrollView(viewport, attributeScroll, content);
-            const string noBonus = "+0%";
             float chargeTime = (player.heavyAttack?.chargeTime ?? new SlashTuningSettings.HeavyAttackSettings().chargeTime)
+                * (1 - player.AlchemyReduction(AlchemyStat.ChargeReduction))
                 / (player.HasIronSword ? player.IronChargeSpeed : 1);
             var row = new Rect(0, headingHeight, columnWidth, rowHeight);
             Label(new Rect(row.x + 12, 0, row.width - 24, headingHeight), "生存与机动", codexHeading, Ink);
-            DrawAttributeRow(ref row, "最大生命", player.maxHealth.ToString());
-            DrawAttributeRow(ref row, "受到伤害减免", player.IronBodyActive ? $"{player.IronSword.bodyDamageReduction:P0}" : "0%");
-            DrawAttributeRow(ref row, "受到的治疗量加成", noBonus);
-            DrawAttributeRow(ref row, "受到的持续伤害减免", "0%");
-            DrawAttributeRow(ref row, "受击硬直时间缩短", "0%");
+            DrawAttributeRow(ref row, "最大生命", player.EffectiveMaxHealth.ToString());
+            float ironReduction = player.IronBodyActive ? player.IronSword.bodyDamageReduction : 0;
+            DrawAttributeRow(ref row, "受到伤害减免", $"{(1 - (1 - ironReduction) * (1 - player.AlchemyDamageReduction)):P0}");
+            DrawAttributeRow(ref row, "受到的治疗量加成", $"+{player.AlchemyBonus(AlchemyStat.Healing):P0}");
+            DrawAttributeRow(ref row, "受到的持续伤害减免", $"{player.AlchemyReduction(AlchemyStat.DotReduction):P0}");
+            DrawAttributeRow(ref row, "受击硬直时间缩短", $"{player.AlchemyReduction(AlchemyStat.HitRecovery):P0}");
             DrawAttributeRow(ref row, "移动速度", $"{player.WalkingSpeed:0.##} 单位/秒");
-            DrawAttributeRow(ref row, "冲刺距离", $"{player.dashSpeed * player.dashDuration:0.##} 单位");
-            DrawAttributeRow(ref row, "冲刺冷却时间", $"{player.dashCooldown:0.##} 秒");
+            DrawAttributeRow(ref row, "冲刺距离", $"{player.DashDistance:0.##} 单位");
+            DrawAttributeRow(ref row, "冲刺冷却时间", $"{player.EffectiveDashCooldown:0.##} 秒");
             DrawAttributeRow(ref row, "重击满蓄力时间", $"{chargeTime:0.##} 秒");
-            float techniqueCooldown = player.HasIronSword ? player.IronSword.bodyCooldown : player.FlowingCloud.activeCooldown;
-            DrawAttributeRow(ref row, "Q · 主动技能冷却时间", $"{techniqueCooldown:0.##} 秒");
-            DrawAttributeRow(ref row, "R · 大招冷却时间", $"{FiveStarSwordSlash.Cooldown:0.##} 秒");
+            DrawAttributeRow(ref row, "Q · 主动技能冷却时间", $"{player.TechniqueCooldown:0.##} 秒");
+            DrawAttributeRow(ref row, "R · 大招冷却时间", $"{player.UltimateCooldown:0.##} 秒");
 
             row = new Rect(columnWidth + gap, headingHeight, columnWidth, rowHeight);
             Label(new Rect(row.x + 12, 0, row.width - 24, headingHeight), "攻击与暴击", codexHeading, Ink);
-            DrawAttributeRow(ref row, "造成的伤害加成", noBonus);
-            DrawAttributeRow(ref row, "普攻伤害加成", $"+{player.ComboDamageBonus * 100:0.#}%");
+            DrawAttributeRow(ref row, "造成的伤害加成", $"+{player.AlchemyDamageBonus:P0}");
+            float normalDamage = (1 + player.ComboDamageBonus) * (1 + player.AlchemyBonus(AlchemyStat.NormalDamage)) - 1;
+            DrawAttributeRow(ref row, "普攻伤害加成", $"+{normalDamage * 100:0.#}%");
             DrawAttributeRow(ref row, "普攻攻速加成", $"+{(player.NormalAttackSpeedMultiplier - 1) * 100:0.#}%");
-            DrawAttributeRow(ref row, "普攻判定距离加成", noBonus);
-            DrawAttributeRow(ref row, "重击伤害加成", noBonus);
-            DrawAttributeRow(ref row, "剑气伤害加成", noBonus);
-            DrawAttributeRow(ref row, "剑气飞行距离加成", noBonus);
-            DrawAttributeRow(ref row, "Q · 主动技能伤害加成", noBonus);
-            DrawAttributeRow(ref row, "R · 大招伤害加成", noBonus);
+            DrawAttributeRow(ref row, "普攻判定距离加成", $"+{player.AlchemyBonus(AlchemyStat.NormalReach):P0}");
+            DrawAttributeRow(ref row, "重击伤害加成", $"+{player.AlchemyBonus(AlchemyStat.HeavyDamage):P0}");
+            DrawAttributeRow(ref row, "剑气伤害加成", $"+{player.AlchemyBonus(AlchemyStat.WaveDamage):P0}");
+            DrawAttributeRow(ref row, "剑气飞行距离加成", $"+{player.AlchemyBonus(AlchemyStat.WaveDistance):P0}");
+            DrawAttributeRow(ref row, "Q · 主动技能伤害加成", $"+{player.AlchemyBonus(AlchemyStat.TechniqueDamage):P0}");
+            DrawAttributeRow(ref row, "R · 大招伤害加成", $"+{player.AlchemyBonus(AlchemyStat.UltimateDamage):P0}");
             DrawAttributeRow(ref row, "暴击率", $"{player.CriticalChance * 100:0.#}%");
             DrawAttributeRow(ref row, "暴击伤害", $"+{player.CriticalDamage * 100:0.#}%");
 
             if (effects.Count > 0)
             {
-                Label(new Rect(12, effectsY, width - 24, headingHeight), "已获得的条件效果", codexHeading, Ink);
+                Label(new Rect(12, effectsY, width - 24, headingHeight), "生效中的丹药", codexHeading, Ink);
                 float y = effectsY + headingHeight;
-                for (int i = 0; i < effects.Count; i++)
+                int index = 0;
+                foreach (var entry in effects.Keys)
                 {
-                    var entry = effects[i];
-                    float height = conditionalEffectHeights[i];
+                    float height = pillEffectHeights[index++];
                     Box(new Rect(0, y, width, 1), Bronze);
                     Label(new Rect(12, y + 4, width - 24, 28), entry.Name, codexHeading, Jade);
                     Label(new Rect(12, y + 34, width - 24, height - 40), entry.Effect, codexBody, Ink);
@@ -1008,6 +1194,50 @@ namespace SlashDemo
             GUI.depth = previousDepth;
         }
 
+        void DrawLootChoice(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -30;
+            Box(new Rect(0, 0, width, height), new Color(.08f, .12f, .10f, .70f));
+            var panel = new Rect(width / 2 - 510, height / 2 - 232, 1020, 464);
+            Box(panel, new Color(.88f, .83f, .70f, .98f));
+            DrawFrame(panel);
+
+            var travel = arena.Travel;
+            bool treasure = travel.Current == TravelDestination.AscensionPlatform;
+            Label(new Rect(panel.x, panel.y + 18, panel.width, 42),
+                treasure ? "升仙台结算 · 选择法宝" : "山野通关 · 选择丹药", travelTitle, Ink);
+            int total = travel.ChallengeCompletedRounds;
+            var details = new Rect(panel.x, panel.y + 63, panel.width, 30);
+            if (treasure)
+                Label(details, $"胜利 {total} 场 · 法宝 {total - travel.RemainingLootChoices + 1} / {total} · 三选一", status, Jade);
+            else
+                DrawResourceAmount(details, SpiritStoneIcon, $"+{travel.LootSpiritStones} · 丹药三选一", status, Jade, 28);
+
+            const float margin = 24, gap = 16;
+            var options = travel.LootOptions;
+            float cardWidth = (panel.width - 2 * margin - (options.Count - 1) * gap) / options.Count;
+            for (int i = 0; i < options.Count; i++)
+            {
+                var entry = options[i];
+                var color = AlchemyNameColors[(int)entry.Quality];
+                var card = new Rect(panel.x + margin + i * (cardWidth + gap), panel.y + 106, cardWidth, 332);
+                Box(card, new Color(.14f, .20f, .21f));
+                Outline(card, color);
+                var icon = new Rect(card.center.x - 43, card.y + 15, 86, 86);
+                if (Event.current.type == EventType.Repaint) DrawHudIcon(icon, entry.IconResource);
+                Label(new Rect(card.x, card.y + 104, card.width, 30), entry.Name, alchemyTitle, color);
+                Label(new Rect(card.x, card.y + 134, card.width, 22), AlchemyQualityNames[(int)entry.Quality], status, color);
+                Label(new Rect(card.x + 16, card.y + 163, card.width - 32, 111), entry.Effect, alchemyDescription, Color.white);
+                if (GUI.Button(new Rect(card.x + 16, card.yMax - 52, card.width - 32, 38), "领取", travelButton))
+                {
+                    travel.TryClaimLoot(i);
+                    break;
+                }
+            }
+            GUI.depth = previousDepth;
+        }
+
         void DrawChallengeDecision(float width, float height)
         {
             int previousDepth = GUI.depth;
@@ -1028,15 +1258,31 @@ namespace SlashDemo
                 Label(new Rect(panel.x, panel.y + 148, panel.width, 28), "下一战对手气血与伤害再提升 10%", status, Ink);
                 if (GUI.Button(new Rect(panel.x + 38, panel.y + 189, 232, 50), "继续挑战", travelButton))
                     travel.ResolveChallenge(true);
-                else if (GUI.Button(new Rect(panel.x + 290, panel.y + 189, 232, 50), "结束挑战 · 开启传送阵", travelButton))
+                else if (GUI.Button(new Rect(panel.x + 290, panel.y + 189, 232, 50), "结束挑战 · 领取法宝", travelButton))
                     travel.ResolveChallenge(false);
             }
             else
             {
                 Label(new Rect(panel.x, panel.y + 123, panel.width, 30), "通关回复 · 最大气血的 50%，至多回满", status, Ink);
-                if (GUI.Button(new Rect(panel.center.x - 120, panel.y + 189, 240, 50), "开启传送阵", travelButton))
+                if (GUI.Button(new Rect(panel.center.x - 120, panel.y + 189, 240, 50), "领取法宝", travelButton))
                     travel.ResolveChallenge(false);
             }
+            GUI.depth = previousDepth;
+        }
+
+        void DrawTribulationDecision(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -30;
+            Box(new Rect(0, 0, width, height), new Color(.08f, .12f, .10f, .65f));
+            var panel = new Rect(width / 2 - 230, height / 2 - 88, 460, 176);
+            Box(panel, new Color(.88f, .83f, .70f, .98f));
+            DrawFrame(panel);
+            Label(new Rect(panel.x, panel.y + 23, panel.width, 48), "是否开始渡劫", travelTitle, Ink);
+            if (GUI.Button(new Rect(panel.x + 35, panel.y + 100, 185, 46), "是", travelButton))
+                arena.Travel.ResolveTribulation(true);
+            else if (GUI.Button(new Rect(panel.x + 240, panel.y + 100, 185, 46), "否", travelButton))
+                arena.Travel.ResolveTribulation(false);
             GUI.depth = previousDepth;
         }
 
@@ -1051,10 +1297,10 @@ namespace SlashDemo
             Label(new Rect(panel.x, panel.y + 22, panel.width, 48), "床边疗伤", travelTitle, Ink);
             Label(new Rect(panel.x, panel.y + 83, panel.width, 28),
                 $"回复最大气血的 {SceneTravel.TreatmentHealPercent}%，至多回满", status, Ink);
-            if (GUI.Button(new Rect(panel.x + 38, panel.y + 140, 232, 46),
-                $"治疗 · {SceneTravel.TreatmentCost} 灵石", travelButton))
+            if (DrawPricedButton(new Rect(panel.x + 38, panel.y + 134, 232, 56),
+                "治疗", SceneTravel.TreatmentCost.ToString(), SpiritStoneIcon))
                 arena.Travel.ResolveTreatment(true);
-            else if (GUI.Button(new Rect(panel.x + 290, panel.y + 140, 232, 46), "放弃治疗", travelButton))
+            else if (GUI.Button(new Rect(panel.x + 290, panel.y + 134, 232, 56), "放弃治疗", travelButton))
                 arena.Travel.ResolveTreatment(false);
             GUI.depth = previousDepth;
         }
@@ -1064,7 +1310,7 @@ namespace SlashDemo
             int previousDepth = GUI.depth;
             GUI.depth = -30;
             var panel = DrawPaperModal(width, height);
-            DrawResourceBalance(new Rect(panel.x + 28, panel.y + 22, 330, 68), "剩余灵石", arena.Resources.SpiritStones);
+            DrawResourceBalance(new Rect(panel.x + 28, panel.y + 22, 330, 68), SpiritStoneIcon, arena.Resources.SpiritStones);
             if (GUI.Button(new Rect(panel.xMax - 212, panel.y + 24, 184, 42), "关闭 F / Esc", travelButton))
                 arena.Travel.CloseShop();
             // TODO: Display the selected stall's goods once the shop catalog is available.
@@ -1082,28 +1328,44 @@ namespace SlashDemo
             foreach (var choice in TravelMaps.Choices)
                 if (travel.ShowsDestination(choice.destination)) choiceCount++;
             float panelWidth = margin * 2 + cardWidth * choiceCount + gap * (choiceCount - 1);
-            var panel = new Rect((width - panelWidth) / 2, height / 2 - 220, panelWidth, 440);
+            const float panelHeight = 460;
+            var panel = new Rect((width - panelWidth) / 2, (height - panelHeight) / 2, panelWidth, panelHeight);
             // Give the choice panel a legible backing while the two HUD frames stay translucent.
             Box(panel, new Color(0.88f, 0.83f, 0.70f, 0.96f));
             DrawFrame(panel);
-            Label(new Rect(panel.x, panel.y + 15, panel.width, 45), "选择去处", travelTitle, Ink);
-            string balances = $"机缘点 {arena.Resources.FortunePoints}";
-            if (arena.Resources.ServicesUnlocked) balances += $"　医庐与坊市共用次数 {arena.Resources.ServiceVisits}";
-            Label(new Rect(panel.x, panel.y + 52, panel.width, 24), balances, status, Ink);
+            var resources = arena.Resources;
+            Label(new Rect(panel.x + margin, panel.y + 16, 240, 42), "选择去处", routeTitle, Ink);
+            if (resources.ServicesUnlocked)
+                Label(new Rect(panel.x + margin, panel.y + 56, 270, 23), $"医庐与坊市共用次数 {resources.ServiceVisits}", small, Ink);
+
+            string balance = resources.FortunePoints.ToString();
+            resourceAmountContent.text = balance;
+            float balanceWidth = Mathf.Max(204, Mathf.Ceil(routeBalanceValue.CalcSize(resourceAmountContent).x) + 130);
+            var balanceCard = new Rect(panel.xMax - margin - balanceWidth, panel.y + 16, balanceWidth, 65);
+            Box(balanceCard, new Color(.98f, .92f, .77f, .25f));
+            Outline(balanceCard, new Color(Bronze.r, Bronze.g, Bronze.b, .48f));
+            var balanceColor = new Color(.38f, .26f, .13f);
+            Label(new Rect(balanceCard.x + 14, balanceCard.y, 48, balanceCard.height), "剩余", status, Muted);
+            DrawResourceAmount(new Rect(balanceCard.x + 62, balanceCard.y, balanceCard.width - 74, balanceCard.height),
+                FortunePointIcon, balance, routeBalanceValue, balanceColor, 44);
+
             int i = 0;
             foreach (var choice in TravelMaps.Choices)
             {
                 if (!travel.ShowsDestination(choice.destination)) continue;
-                var card = new Rect(panel.x + margin + i++ * (cardWidth + gap), panel.y + 80, cardWidth, 250);
+                var card = new Rect(panel.x + margin + i++ * (cardWidth + gap), panel.y + 96, cardWidth, 250);
                 DrawFrame(card);
                 var thumbnail = Resources.Load<Texture2D>(choice.resource);
                 if (thumbnail != null)
                     GUI.DrawTexture(new Rect(card.x + 12, card.y + 12, 246, 164), thumbnail, ScaleMode.ScaleToFit);
-                string cost = SceneTravel.UsesServiceVisit(choice.destination)
-                    ? "共用次数 1" : $"机缘点 {SceneTravel.FortuneCost(choice.destination)}";
+                bool usesServiceVisit = SceneTravel.UsesServiceVisit(choice.destination);
+                string cost = usesServiceVisit ? "共用次数 1" : SceneTravel.FortuneCost(choice.destination).ToString();
+                if (choice.destination == TravelDestination.Tribulation && !resources.TribulationUnlocked)
+                    cost = $"累计消耗 {resources.TribulationFortuneSpent}/{GameResources.TribulationUnlockSpend}";
                 bool previousEnabled = GUI.enabled;
                 GUI.enabled = previousEnabled && travel.CanSelectDestination(choice.destination);
-                bool selected = GUI.Button(new Rect(card.x + 12, card.y + 190, 246, 44), $"{choice.title} · {cost}", travelButton);
+                bool selected = DrawPricedButton(new Rect(card.x + 12, card.y + 184, 246, 54), choice.title, cost,
+                    usesServiceVisit ? null : FortunePointIcon);
                 GUI.enabled = previousEnabled;
                 if (selected)
                 {
@@ -1113,10 +1375,10 @@ namespace SlashDemo
                 }
             }
             if (!string.IsNullOrEmpty(travel.Error))
-                Label(new Rect(panel.x + 20, panel.y + 330, panel.width - 40, 28), travel.Error, status, Cinnabar);
-            if (GUI.Button(new Rect(panel.center.x - 206, panel.y + 365, 198, 44), "暂不出发", travelButton))
+                Label(new Rect(panel.x + 20, panel.y + 346, panel.width - 40, 28), travel.Error, status, Cinnabar);
+            if (GUI.Button(new Rect(panel.center.x - 206, panel.y + 381, 198, 44), "暂不出发", travelButton))
                 travel.CancelSelection();
-            if (GUI.Button(new Rect(panel.center.x + 8, panel.y + 365, 198, 44), "直接挑战关底 Boss", travelButton))
+            if (GUI.Button(new Rect(panel.center.x + 8, panel.y + 381, 198, 44), "直接挑战关底 Boss", travelButton))
                 travel.SelectDestination(TravelDestination.FinalBattle);
             GUI.depth = previousDepth;
         }
@@ -1179,7 +1441,9 @@ namespace SlashDemo
                 if (p.z <= 0) continue;
                 var color = item.color;
                 color.a *= 1 - t;
-                var rect = new Rect(p.x / scale - 50, (Screen.height - p.y) / scale - 22, 100, 40);
+                damageNumberContent.text = item.text;
+                float width = Mathf.Max(100, Mathf.Ceil(damage.CalcSize(damageNumberContent).x) + 4);
+                var rect = new Rect(p.x / scale - width * .5f, (Screen.height - p.y) / scale - 22, width, 40);
                 Label(new Rect(rect.x + 2, rect.y + 2, rect.width, rect.height), item.text, damage,
                     new Color(0, 0, 0, color.a * 0.8f));
                 Label(rect, item.text, damage, color);

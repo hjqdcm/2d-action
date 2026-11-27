@@ -10,12 +10,75 @@ namespace SlashDemo
         public const int StartingSpiritStones = 50;
         public const int StartingFortunePoints = 15;
         public const int FortunePerServiceVisit = 5;
-        int fortuneTowardServiceVisit;
+        public const int TribulationUnlockSpend = 12;
+        public const int PotionSlotCount = 3;
+        readonly Dictionary<AlchemyEntry, int> pills = new Dictionary<AlchemyEntry, int>();
+        readonly List<AlchemyEntry> pillOrder = new List<AlchemyEntry>();
+        readonly AlchemyEntry?[] potionSlots = new AlchemyEntry?[PotionSlotCount];
+        readonly Dictionary<AlchemyEntry, int> treasures = new Dictionary<AlchemyEntry, int>();
+        long tribulationSpendingBaseline;
         public int SpiritStones { get; private set; } = StartingSpiritStones;
         public int FortunePoints { get; private set; } = StartingFortunePoints;
+        public long FortuneSpent { get; private set; }
+        public long TribulationFortuneSpent => FortuneSpent - tribulationSpendingBaseline;
+        public bool TribulationUnlocked => TribulationFortuneSpent >= TribulationUnlockSpend;
+        internal bool FoundationTribulationCleared { get; set; }
+        internal bool BloodSaberDefeated { get; private set; }
         public int ServiceVisits { get; private set; }
         public bool ServicesUnlocked { get; private set; }
+        internal IReadOnlyDictionary<AlchemyEntry, int> Pills => pills;
+        internal IReadOnlyList<AlchemyEntry> PillOrder => pillOrder;
+        internal IReadOnlyList<AlchemyEntry?> PotionSlots => potionSlots;
+        internal IReadOnlyDictionary<AlchemyEntry, int> Treasures => treasures;
         internal bool FinalBattleEnteredOnExhaustion { get; set; }
+
+        internal void CollectLoot(AlchemyEntry item, bool isTreasure)
+        {
+            var inventory = isTreasure ? treasures : pills;
+            if (!inventory.TryGetValue(item, out int count) && !isTreasure) pillOrder.Add(item);
+            inventory[item] = count + 1;
+        }
+
+        internal bool CanAssignPotion(int slot, AlchemyEntry entry)
+        {
+            if (!pills.TryGetValue(entry, out int available)) return false;
+            for (int i = 0; i < potionSlots.Length; i++)
+                if (i != slot && potionSlots[i].HasValue && potionSlots[i].Value.Equals(entry)) available--;
+            return available > 0;
+        }
+
+        internal bool TryAssignPotion(int slot, AlchemyEntry? entry)
+        {
+            if (slot < 0 || slot >= potionSlots.Length || (entry.HasValue && !CanAssignPotion(slot, entry.Value))) return false;
+            potionSlots[slot] = entry;
+            return true;
+        }
+
+        internal void RefillPotionSlots()
+        {
+            for (int i = 0; i < potionSlots.Length; i++)
+            {
+                if (potionSlots[i].HasValue) continue;
+                foreach (var entry in pillOrder)
+                    if (TryAssignPotion(i, entry)) break;
+            }
+        }
+
+        internal bool TryDrinkPotion(int slot, out AlchemyEntry entry)
+        {
+            entry = default;
+            if (slot < 0 || slot >= potionSlots.Length || !potionSlots[slot].HasValue) return false;
+            entry = potionSlots[slot].Value;
+            if (!pills.TryGetValue(entry, out int count) || count <= 0) return false;
+            potionSlots[slot] = null;
+            if (count > 1) pills[entry] = count - 1;
+            else
+            {
+                pills.Remove(entry);
+                pillOrder.Remove(entry);
+            }
+            return true;
+        }
 
         public bool TryChangeSpiritStones(int delta)
         {
@@ -30,9 +93,10 @@ namespace SlashDemo
             FortunePoints = balance;
             if (delta < 0)
             {
-                long spent = fortuneTowardServiceVisit - (long)delta;
-                ServiceVisits += (int)(spent / FortunePerServiceVisit);
-                fortuneTowardServiceVisit = (int)(spent % FortunePerServiceVisit);
+                long previousThresholds = FortuneSpent / FortunePerServiceVisit;
+                FortuneSpent -= (long)delta;
+                long newVisits = FortuneSpent / FortunePerServiceVisit - previousThresholds;
+                ServiceVisits = (int)System.Math.Min(int.MaxValue, ServiceVisits + newVisits);
                 ServicesUnlocked |= ServiceVisits > 0;
             }
             return true;
@@ -40,11 +104,24 @@ namespace SlashDemo
 
         internal void UseServiceVisit() => ServiceVisits--;
 
+        internal void RecordBloodSaberDefeat()
+        {
+            if (BloodSaberDefeated) return;
+            BloodSaberDefeated = true;
+            if (FoundationTribulationCleared) tribulationSpendingBaseline = FortuneSpent;
+        }
+
         internal void Reset()
         {
+            pills.Clear();
+            pillOrder.Clear();
+            System.Array.Clear(potionSlots, 0, potionSlots.Length);
+            treasures.Clear();
             SpiritStones = StartingSpiritStones;
             FortunePoints = StartingFortunePoints;
-            fortuneTowardServiceVisit = ServiceVisits = 0;
+            FortuneSpent = ServiceVisits = 0;
+            tribulationSpendingBaseline = 0;
+            FoundationTribulationCleared = BloodSaberDefeated = false;
             ServicesUnlocked = FinalBattleEnteredOnExhaustion = false;
         }
 
@@ -102,6 +179,10 @@ namespace SlashDemo
         public bool PauseMenuOpen => Paused && !Defeated && (pauseMenuOverSelection || Travel == null || !Travel.HasModal)
             && (Codex == null || !Codex.IsOpen) && (CharacterPanel == null || !CharacterPanel.IsOpen);
         public bool Defeated { get; private set; }
+        public double CombatTime { get; private set; }
+        public bool InCombat => (Travel != null && Travel.IsTribulationActive) || HasLiveCombatEnemy();
+        internal bool CanConfigurePotions => !Defeated && player.IsAlive && !InCombat && (Travel == null || !Travel.HasModal);
+        internal int PotionConfigSlot { get; set; }
         public int Wave { get; private set; }
         public int Kills { get; private set; }
         public string LocationName => player != null && ManorEnvironment.InTraining(player.transform.position)
@@ -147,20 +228,35 @@ namespace SlashDemo
                 && !DemoInput.GameplayHeld)
                 waitingForMenuRelease = false;
             if (Codex != null && (Codex.IsOpen || Codex.ConsumedInputThisFrame)) return;
-            if (CharacterPanel != null && (CharacterPanel.IsOpen || CharacterPanel.ConsumedInputThisFrame)) return;
+            if (CharacterPanel != null && (CharacterPanel.IsOpen || CharacterPanel.ConsumedInputThisFrame))
+            {
+                int slot = DemoInput.PotionSlotPressed;
+                if (slot >= 0 && CharacterPanel.IsOpen && CharacterPanel.ActivePage == CharacterPanelPage.Items
+                    && CharacterPanel.ActiveInventoryPage == CharacterInventoryPage.Pills
+                    && CanConfigurePotions) PotionConfigSlot = slot;
+                return;
+            }
             if (Travel != null && Travel.IsShopOpen)
             {
                 if (DemoInput.PausePressed) Travel.CloseShop();
                 return;
             }
-            if (Travel != null && (Travel.IsChallengeDecisionOpen || Travel.IsTreatmentOpen)) return;
+            if (Travel != null && (Travel.IsLootChoiceOpen || Travel.IsChallengeDecisionOpen
+                || Travel.IsTribulationDecisionOpen || Travel.IsTreatmentOpen)) return;
             if (DemoInput.PausePressed && !Defeated)
             {
                 if (PauseMenuOpen) ResumeGame();
                 else if (Travel != null && Travel.IsSelectionOpen) pauseMenuOverSelection = true;
                 else TogglePause();
             }
-            if (Paused || Defeated || Time.deltaTime <= 0) return;
+            if (Paused || Defeated) return;
+            float dt = Time.deltaTime;
+            if (dt > 0 && InCombat) CombatTime += dt;
+            player.AdvancePills(CombatTime);
+            int potionSlot = DemoInput.PotionSlotPressed;
+            if (potionSlot >= 0 && !InputBlocked && player.IsAlive
+                && Resources.TryDrinkPotion(potionSlot, out var potion)) player.DrinkPill(potion);
+            if (dt <= 0) return;
             if (Travel != null && Travel.Current != TravelDestination.Manor) return;
             if (!practiceMode && nextWave > 0 && Time.time >= nextWave
                 && ManorEnvironment.InTraining(player.transform.position))
@@ -170,6 +266,14 @@ namespace SlashDemo
                 respawnDummies = -1;
                 if (enemies.Count == 0) SpawnDummies();
             }
+        }
+
+        bool HasLiveCombatEnemy()
+        {
+            foreach (var enemy in enemies)
+                if (enemy != null && enemy.Alive && enemy.isActiveAndEnabled && !enemy.trainingDummy)
+                    return true;
+            return false;
         }
 
         public void TogglePause()
@@ -217,6 +321,8 @@ namespace SlashDemo
             effects.Clear();
             CameraRig.ResetFeedback();
             Paused = Defeated = false;
+            CombatTime = 0;
+            PotionConfigSlot = 0;
             Wave = Kills = 0;
             nextWave = respawnDummies = -1;
             foreach (Transform child in actors)
@@ -239,8 +345,9 @@ namespace SlashDemo
 
         public void EnemyKilled(SlashEnemy enemy)
         {
-            enemies.Remove(enemy);
+            bool wasRegistered = enemies.Remove(enemy);
             Kills++;
+            if (wasRegistered && !enemy.trainingDummy && !InCombat && player.IsAlive) FinishPotionBattle();
             if (Travel != null) Travel.EnemyDefeated(enemy);
             if (Travel != null && Travel.Current != TravelDestination.Manor) return;
             if (practiceMode)
@@ -253,6 +360,12 @@ namespace SlashDemo
                 player.Heal(15);
                 nextWave = Time.time + 3;
             }
+        }
+
+        internal void FinishPotionBattle()
+        {
+            player.ResetAlchemyBattle();
+            Resources.RefillPotionSlots();
         }
 
         public void PlayerDied()
@@ -284,6 +397,8 @@ namespace SlashDemo
             player.EquipTechnique(TechniqueCatalog.FlowingCloud, true);
             player.ResetRealm();
             Resources.Reset();
+            CombatTime = 0;
+            PotionConfigSlot = 0;
             player.Heal(player.maxHealth);
             Destroy(defeatedPlayer.gameObject);
             CameraRig.target = player.transform;

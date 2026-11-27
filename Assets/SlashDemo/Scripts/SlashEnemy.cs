@@ -10,12 +10,22 @@ namespace SlashDemo
         public bool trainingDummy;
         public int maxHealth = 60;
         public float moveSpeed = 1.9f;
+        double treasureSlowUntil;
+        float treasureSlow;
+        internal float EffectiveMoveSpeed => moveSpeed * (Time.timeAsDouble < treasureSlowUntil ? 1 - treasureSlow : 1);
+        internal void ApplyTreasureSlow(float amount)
+        {
+            treasureSlow = amount;
+            treasureSlowUntil = Time.timeAsDouble + 2;
+        }
         public float windupTime = 0.58f;
         public int damage = 12;
         public float attackRange = 1.15f;
         public bool rockBear;
         public int Health { get; private set; }
         public bool Alive => Health > 0;
+        internal bool CanTakeHit => Alive && (apeCombat == null || !apeCombat.IsAirborne)
+            && finalBoss?.IsTransitionInvulnerable != true;
         public bool IsChasing => Alive && !trainingDummy && (bearCombat?.IsChasing ?? snakeCombat?.IsChasing
             ?? apeCombat?.IsChasing ?? cultivator?.IsChasing ?? finalBoss?.IsChasing ?? phase == Phase.Chase);
         public float Radius => GetComponent<CircleCollider2D>().radius;
@@ -180,14 +190,14 @@ namespace SlashDemo
                     float gap = snake != null || ape != null ? Radius + other.Radius + .65f : 1.1f;
                     if (away.magnitude < gap && away.sqrMagnitude > 0.001f) separation += away.normalized * (gap - away.magnitude);
                 }
-                velocity += (toward + separation * 1.8f).normalized * moveSpeed;
+                velocity += (toward + separation * 1.8f).normalized * EffectiveMoveSpeed;
             }
             body.linearVelocity = navigation != null ? navigation.ConstrainVelocity(velocity, Time.fixedDeltaTime) : velocity;
         }
 
         public void TakeHit(int amount, Vector2 direction, float force, bool heavy = false, bool interrupt = true, bool critical = false)
         {
-            if (!Alive || (apeCombat != null && apeCombat.IsAirborne) || finalBoss?.IsTransitionInvulnerable == true) return;
+            if (!CanTakeHit) return;
             if (amount > 0 && cultivator != null) amount = cultivator.MitigateHit(amount);
             int previousHealth = Health;
             int remaining = Mathf.Max(0, Health - amount);

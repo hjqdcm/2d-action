@@ -18,7 +18,7 @@ namespace SlashDemo.Editor
         static SlashEnemy[] pack;
         static Vector2[] initial;
         static int stage, health, encounterCount;
-        static double next, deadline;
+        static double next, deadline, combatAtClear;
         static void Check(bool value, string message) { if (!value) throw new Exception(message); }
         static void Advance(int value, double delay = .3) { stage = value; next = EditorApplication.timeSinceStartup + delay; }
 
@@ -143,17 +143,28 @@ namespace SlashDemo.Editor
                         Check(arena.Travel.Portal == null, "Portal spawned before fourth snake died.");
                         pack[3].TakeHit(100000, Vector2.zero, 0);
                         Check(arena.Travel.Portal != null && arena.Enemies.Count == 0, "Snake clear did not spawn portal.");
+                        combatAtClear = arena.CombatTime;
+                        Check(combatAtClear > 0 && arena.Travel.IsLootChoiceOpen, "Battle time or the pill offer was missing on clear.");
+                        Advance(9); break;
+                    case 9:
+                        Check(arena.CombatTime == combatAtClear, "Battle time advanced while choosing a drop.");
+                        Check(arena.Travel.TryClaimLoot(0), "Snake clear did not grant a pill choice.");
                         Advance(5, .8); break;
                     case 5:
+                        Check(arena.CombatTime == combatAtClear, "Battle time advanced between claiming loot and leaving the cleared map.");
                         Check(arena.Travel.ActiveMap.GetComponentsInChildren<SlashEnemy>().Length == 0, "Snake respawned in cleared map.");
                         arena.TogglePause(); arena.ReturnHome();
                         Check(arena.Enemies.Count == 3, "Manor dummies missing.");
                         arena.Player.Teleport(SceneTravel.ManorGate.center); Advance(6); break;
                     case 6:
+                        Check(arena.CombatTime == combatAtClear, "Battle time advanced in the manor or the route picker.");
                         Enter(arena, WildernessCreature.Bear);
                         BearPackValidation.CheckFormation(arena);
                         BearAllyChargeValidation.Verify(arena);
                         BearSpacingValidation.Verify(arena);
+                        Advance(10); break;
+                    case 10:
+                        Check(arena.CombatTime > combatAtClear, "Battle time did not resume when the next fight started.");
                         arena.TogglePause(); arena.ReturnHome();
                         arena.Player.Teleport(SceneTravel.ManorGate.center); Advance(7); break;
                     case 7:

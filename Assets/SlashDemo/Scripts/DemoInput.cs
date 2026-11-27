@@ -31,6 +31,18 @@ namespace SlashDemo
         public static bool UltimatePressed => Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
         public static bool InteractPressed => Keyboard.current != null && Keyboard.current.fKey.wasPressedThisFrame;
         public static bool CharacterPanelPressed => Keyboard.current != null && Keyboard.current.tabKey.wasPressedThisFrame;
+        public static int PotionSlotPressed
+        {
+            get
+            {
+                var keyboard = Keyboard.current;
+                if (keyboard == null) return -1;
+                if (keyboard.digit1Key.wasPressedThisFrame || keyboard.numpad1Key.wasPressedThisFrame) return 0;
+                if (keyboard.digit2Key.wasPressedThisFrame || keyboard.numpad2Key.wasPressedThisFrame) return 1;
+                if (keyboard.digit3Key.wasPressedThisFrame || keyboard.numpad3Key.wasPressedThisFrame) return 2;
+                return -1;
+            }
+        }
         public static bool GameplayHeld => AttackHeld || HeavyHeld || DashHeld || SkillHeld
             || (Keyboard.current != null && (Keyboard.current.fKey.isPressed || Keyboard.current.rKey.isPressed));
         public static bool MouseAvailable => Mouse.current != null;

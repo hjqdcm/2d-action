@@ -525,7 +525,7 @@ namespace SlashDemo
                         velocity = IsMelee ? CloseIn(enemy.attackRange, dt) : Strafe(delta, .9f);
                         break;
                     case Phase.Pursuit:
-                        float speed = enemy.moveSpeed;
+                        float speed = enemy.EffectiveMoveSpeed;
                         if (CultivationPath != Path.Sword)
                         {
                             float retreat = Vector2.Dot(PlayerVelocity(), delta.normalized);
@@ -592,7 +592,7 @@ namespace SlashDemo
             Vector2 point = PredictPlayer(.22f);
             float gap = Vector2.Distance(body.position, point) - Mathf.Max(.75f, range * .48f);
             if (gap <= 0) return Vector2.zero;
-            return Navigation.ChaseDirection(body.position, point) * Mathf.Min(enemy.moveSpeed, gap / dt);
+            return Navigation.ChaseDirection(body.position, point) * Mathf.Min(enemy.EffectiveMoveSpeed, gap / dt);
         }
 
         Vector2 Strafe(Vector2 delta, float speedScale)
@@ -610,7 +610,7 @@ namespace SlashDemo
                     heading = reverse;
                 }
             }
-            return heading * (enemy.moveSpeed * speedScale);
+            return heading * (enemy.EffectiveMoveSpeed * speedScale);
         }
 
         Vector2 PlayerVelocity()

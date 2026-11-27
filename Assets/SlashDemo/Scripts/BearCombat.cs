@@ -213,7 +213,7 @@ namespace SlashDemo
             {
                 if (steering != null) velocity += steering.Velocity(body.position,arena.Player.transform.position);
                 else if (Vector2.Distance(body.position,arena.Player.transform.position) > enemy.attackRange * .9f)
-                    velocity += bear.ChaseDirection(body.position,arena.Player.transform.position) * enemy.moveSpeed;
+                    velocity += bear.ChaseDirection(body.position,arena.Player.transform.position) * enemy.EffectiveMoveSpeed;
             }
             body.linearVelocity = bear.ConstrainVelocity(velocity,Time.fixedDeltaTime);
         }

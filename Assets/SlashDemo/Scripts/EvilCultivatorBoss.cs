@@ -610,7 +610,7 @@ namespace SlashDemo
         internal void FixedTick(float dt)
         {
             var player = arena.Player;
-            float moveSpeed = bloodFrenzyRemaining > 0 ? enemy.moveSpeed * BloodFrenzyMoveSpeed : enemy.moveSpeed;
+            float moveSpeed = bloodFrenzyRemaining > 0 ? enemy.EffectiveMoveSpeed * BloodFrenzyMoveSpeed : enemy.EffectiveMoveSpeed;
             var velocity = IsChasing && player != null && player.IsAlive
                 ? navigation.ChaseDirection(body.position, player.transform.position) * moveSpeed : Vector2.zero;
             var constrained = navigation.ConstrainVelocity(velocity, dt);

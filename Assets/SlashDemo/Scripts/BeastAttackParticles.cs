@@ -171,6 +171,20 @@ namespace SlashDemo
             Emit(ground, height, velocity, rise, (int)shape, color, size, life);
         }
 
+        internal void LightningImpact(Vector2 ground, float radius)
+        {
+            SkillMote(ground, .10f, Vector2.zero, 0, SkillParticle.Mote, new Color(.36f, .63f, 1, .65f), radius * .5f, .20f);
+            SkillMote(ground, .16f, Vector2.zero, 0, SkillParticle.Star, new Color(.90f, .98f, 1, .95f), radius * .31f, .16f);
+            for (int i = 0; i < 12; i++)
+            {
+                Vector2 direction = DemoArt.Direction(i * 30 + R(-10, 10));
+                Vector2 origin = ground + direction * R(.08f, .28f);
+                Vector2 velocity = direction * radius * R(1.7f, 3.5f);
+                Color color = Color.Lerp(new Color(.40f, .66f, 1, .88f), new Color(.92f, .98f, 1, .96f), R(0, 1));
+                SkillMote(origin, .06f, velocity, R(.4f, 1.6f), SkillParticle.Spark, color, R(.09f, .18f), R(.18f, .36f));
+            }
+        }
+
         public void Advance(float dt)
         {
             if(arena==null || arena.Paused || dt<=0) return;

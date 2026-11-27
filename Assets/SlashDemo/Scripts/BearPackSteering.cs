@@ -69,12 +69,12 @@ namespace SlashDemo
 
         public Vector2 Velocity(Vector2 from,Vector2 player)
         {
-            if(self.moveSpeed<=0) return Vector2.zero;
+            if(self.EffectiveMoveSpeed<=0) return Vector2.zero;
             int count=0;
             foreach(var other in arena.Enemies) if(Ally(other)) count++;
             if(count==0)
                 return Vector2.Distance(from,player)>self.attackRange*.9f
-                    ? navigation.ChaseDirection(from,player)*self.moveSpeed : Vector2.zero;
+                    ? navigation.ChaseDirection(from,player)*self.EffectiveMoveSpeed : Vector2.zero;
 
             float ring=Mathf.Max(self.Radius+arena.Player.GetComponent<CircleCollider2D>().radius+.35f,self.attackRange*.86f);
             nextTarget-=Time.fixedDeltaTime;
@@ -100,11 +100,11 @@ namespace SlashDemo
             }
             desired=Vector2.ClampMagnitude(desired+Separation(from)*3f,1);
             if(desired.sqrMagnitude<.0001f) return Vector2.zero;
-            float lookAhead=.45f+self.moveSpeed*Time.fixedDeltaTime;
+            float lookAhead=.45f+self.EffectiveMoveSpeed*Time.fixedDeltaTime;
             if(!navigation.Clear(from,from+desired.normalized*lookAhead))
             {
                 if(pathDirection.sqrMagnitude>.01f && navigation.Clear(from,from+pathDirection.normalized*lookAhead))
-                    return pathDirection*self.moveSpeed;
+                    return pathDirection*self.EffectiveMoveSpeed;
                 Vector2 original=desired;
                 bool found=false;
                 for(int step=1;step<=3 && !found;step++) for(int side=0;side<2;side++)
@@ -116,7 +116,7 @@ namespace SlashDemo
                 }
                 if(!found) return Vector2.zero;
             }
-            return desired*self.moveSpeed;
+            return desired*self.EffectiveMoveSpeed;
         }
     }
 }

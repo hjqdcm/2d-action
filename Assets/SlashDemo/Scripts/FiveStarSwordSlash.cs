@@ -66,7 +66,18 @@ namespace SlashDemo
             body = owner.GetComponent<Rigidbody2D>();
         }
 
-        public int Required => owner.HasIronSword ? IronSwordRequired : FlowingCloudRequired;
+        bool spentFullProgress;
+        TreasureAttack treasureAttack;
+        public int Required
+        {
+            get
+            {
+                int required = owner.HasIronSword ? IronSwordRequired : FlowingCloudRequired;
+                if (!spentFullProgress) return required;
+                int reduction = owner.HasIronSword ? 3 : 1;
+                return Mathf.Max(1, required - reduction * owner.TreasureStacks(TreasureTrigger.UltimateRequirement));
+            }
+        }
         public string Requirement => owner.HasIronSword ? "满蓄力重击" : "满层 Q";
         public bool Ready => !Active && (owner.InfiniteUltimateForDebug || (CooldownLeft <= 0 && Progress >= Required));
         public void RecordQualification() => Progress = Mathf.Min(Required, Progress + 1);
@@ -79,10 +90,12 @@ namespace SlashDemo
             castCenter = center;
             emitted = 0;
             age = 0;
+            treasureAttack = owner.BeginTreasureAttack(PlayerAttackKind.Ultimate, DamagePerSlash);
             if (!owner.InfiniteUltimateForDebug)
             {
+                spentFullProgress |= Progress >= Required;
                 Progress = 0;
-                CooldownLeft = Cooldown;
+                CooldownLeft = owner.UltimateCooldown;
             }
             float angle = Mathf.Atan2(aim.y, aim.x) * Mathf.Rad2Deg;
             for (int i = 0; i < points.Length; i++)
@@ -116,6 +129,7 @@ namespace SlashDemo
 
             targets.Clear();
             targets.AddRange(arena.Enemies);
+            bool hit = false;
             foreach (var enemy in targets)
             {
                 if (!Active || arena.Paused) break;
@@ -123,8 +137,10 @@ namespace SlashDemo
                 Vector2 point = enemy.transform.position;
                 float reach = Radius + enemy.Radius;
                 if ((point - castCenter).sqrMagnitude > reach * reach || Blocked(castCenter, point)) continue;
-                owner.DealHit(enemy, DamagePerSlash, direction, 0, last);
+                hit |= owner.DealHit(enemy, DamagePerSlash, direction, 0, last, PlayerAttackKind.Ultimate, treasureAttack: treasureAttack);
             }
+            if (last && hit)
+                CooldownLeft = Mathf.Max(0, CooldownLeft - 3 * owner.TreasureStacks(TreasureTrigger.UltimateRefund));
             if (arena.Travel != null && arena.Travel.IsChallengeDecisionOpen) Cancel();
         }
 
@@ -255,6 +271,10 @@ namespace SlashDemo
         {
             Active = false;
             if (visuals != null) visuals.gameObject.SetActive(false);
+            var finished = treasureAttack;
+            treasureAttack = null;
+            if (owner.isActiveAndEnabled && owner.IsAlive && arena != null && !arena.Paused)
+                owner.FinishTreasureAttack(finished);
         }
 
         public void Dispose()

@@ -604,6 +604,15 @@ namespace SlashDemo.Editor
                     "native top button switches to " + (CharacterPanelPage)i + " without leaking an attack");
                 Capture(i == 1 ? "CharacterPanel-Attributes.png" : "CharacterPanel-Items.png");
             }
+            Check(arena.CharacterPanel.ActiveInventoryPage == CharacterInventoryPage.Pills,
+                "The backpack should open on the pill page.");
+            yield return ClickCharacterPanel((panelOrigin + new Vector2(238, 208)) * scale);
+            Check(arena.CharacterPanel.ActivePage == CharacterPanelPage.Items
+                && arena.CharacterPanel.ActiveInventoryPage == CharacterInventoryPage.Treasures
+                && arena.Paused && player.TotalSwings == swings, "The native treasure tab should stay inside the paused backpack.");
+            yield return ClickCharacterPanel((panelOrigin + new Vector2(94, 208)) * scale);
+            Check(arena.CharacterPanel.ActiveInventoryPage == CharacterInventoryPage.Pills
+                && arena.Paused && player.TotalSwings == swings, "The native pill tab should return to potion configuration.");
             yield return ClickCharacterPanel((panelOrigin + new Vector2(118, 45)) * scale);
             Check(arena.CharacterPanel.ActivePage == CharacterPanelPage.Techniques, "native top button switches back to Techniques");
             keys = new KeyboardState(Key.Tab, Key.Q); yield return Frames(3);

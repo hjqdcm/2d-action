@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -730,8 +731,40 @@ namespace SlashDemo.Editor
             Check(arena.Enemies.Count == 0 && travel.Portal == null && travel.IsChallengeDecisionOpen && travel.DefeatedChallenger == defeated.name,
                 "Defeat did not open the choice before creating a portal.");
             Check(travel.ChallengeCompletedRounds == travel.ChallengeRound, "Victory did not record the completed fight.");
+            Check(!travel.IsLootChoiceOpen, "A win offered loot before the challenge was settled.");
             Check(arena.Paused && Time.timeScale == 0 && arena.InputBlocked && !arena.PauseMenuOpen
                 && !player.RequestAttack(Vector2.right), "Combat or the pause menu bypassed the challenge dialog.");
+        }
+
+        static void ClaimSettlementLoot(int wins)
+        {
+            var travel = arena.Travel;
+            var assembly = typeof(SlashArena).Assembly;
+            var bonusMethod = typeof(SlashPlayer).GetMethod("AlchemyBonus", Private);
+            object ultimateDamage = Enum.Parse(assembly.GetType("SlashDemo.AlchemyStat"), "UltimateDamage");
+            float initialBonus = (float)bonusMethod.Invoke(player, new[] { ultimateDamage });
+            var optionsProperty = typeof(SceneTravel).GetProperty("LootOptions", Private);
+            // Keep health, healing and survival effects out of the challenge's fixed combat expectations.
+            var catalog = (IEnumerable)assembly.GetType("SlashDemo.TreasureCatalog").GetProperty("All").GetValue(null);
+            object reward = null;
+            foreach (var entry in catalog)
+                if ((string)entry.GetType().GetField("Name").GetValue(entry) == "刻星牌") { reward = entry; break; }
+            Check(reward != null, "Deterministic treasure is missing from the catalog.");
+            for (int i = 0; i < wins; i++)
+            {
+                Check(travel.IsLootChoiceOpen && arena.Paused && !travel.ShowPortalPrompt,
+                    "Settlement did not pause travel for the next treasure choice.");
+                var options = (Array)optionsProperty.GetValue(travel);
+                int selected = i % 3;
+                options.SetValue(reward, selected);
+                Check(!travel.TryClaimLoot(-1) && !travel.TryClaimLoot(3) && travel.TryClaimLoot(selected),
+                    "Settlement must accept exactly the three displayed choices.");
+            }
+            float currentBonus = (float)bonusMethod.Invoke(player, new[] { ultimateDamage });
+            Check(Mathf.Abs(currentBonus - initialBonus - wins * .05f) < .0001f,
+                "Claiming duplicate treasures did not add one bonus per reward.");
+            Check(!travel.IsLootChoiceOpen && !arena.Paused && !travel.TryClaimLoot(0),
+                "Settlement did not release the pause after exactly one reward per victory.");
         }
 
         static AscensionCultivator ReenterThroughPortal()
@@ -765,11 +798,12 @@ namespace SlashDemo.Editor
             TickCombat.Invoke(cultivator, new object[] { opponent.windupTime + .01f });
             Check(arena.Player == player && player.Health == Mathf.CeilToInt(player.maxHealth * .5f)
                 && player.Realm == realm && player.Technique == technique, "Challenge loss changed the character or failed to restore half health.");
-            Check(!arena.Defeated && !arena.Paused && !travel.HasModal && !arena.GetComponent<SlashHUD>().DefeatPanelVisible
+            Check(!arena.Defeated && !arena.GetComponent<SlashHUD>().DefeatPanelVisible
                 && travel.Portal != null && travel.ChallengeEndedByDefeat, "Challenge loss entered the ordinary defeat flow or did not open a portal.");
             Check(travel.ChallengeCompletedRounds == completedRounds && travel.ChallengeRound == completedRounds + 1
                 && arena.Kills == kills && arena.Enemies.Count == 0 && opponent.Alive && !opponent.gameObject.activeSelf,
                 "The losing fight was counted as a win or left the challenger active.");
+            ClaimSettlementLoot(completedRounds);
         }
 
         static void ReducePlayerTo(int health)
@@ -856,6 +890,7 @@ namespace SlashDemo.Editor
                             arena.Travel.ResolveChallenge(true);
                             Check(arena.Travel.IsChallengeDecisionOpen && arena.Enemies.Count == 0, "A fifth fight was possible.");
                             arena.Travel.ResolveChallenge(false);
+                            ClaimSettlementLoot(4);
                             stage = 5;
                         }
                         break;
@@ -888,11 +923,15 @@ namespace SlashDemo.Editor
                         break;
                     case 7:
                         var portal = arena.Travel.Portal;
-                        Check(portal != null && !arena.Travel.HasModal && arena.Enemies.Count == 0 && arena.Travel.ChallengeRound == 1
+                        Check(portal != null && arena.Travel.IsLootChoiceOpen && arena.Enemies.Count == 0 && arena.Travel.ChallengeRound == 1
                             && arena.Travel.ChallengeCompletedRounds == 1 && !arena.Travel.ChallengeEndedByDefeat && player.Health < player.maxHealth,
-                            "The early exit button did not open a portal after only one fight.");
+                            "The early exit button did not settle the first victory.");
                         arena.Travel.ResolveChallenge(false);
                         Check(arena.Travel.Portal == portal, "Duplicate resolution created a second portal.");
+                        ClaimSettlementLoot(1);
+                        stage = 10;
+                        break;
+                    case 10:
                         ReenterThroughPortal();
                         player.SetRealm(CultivationRealm.GoldenCore);
                         LoseCurrentFight(0);
@@ -926,6 +965,7 @@ namespace SlashDemo.Editor
                         Check(player.Health == healedHealth && arena.Travel.ChallengeCompletedRounds == 4,
                             "Final victory did not add half the maximum health to the existing health.");
                         arena.Travel.ResolveChallenge(false);
+                        ClaimSettlementLoot(4);
                         Check(player.Health == healedHealth, "Opening the final portal applied the heal again.");
                         arena.Restart();
                         Check(arena.Travel.Current == TravelDestination.Manor && arena.Travel.ChallengeRound == 0

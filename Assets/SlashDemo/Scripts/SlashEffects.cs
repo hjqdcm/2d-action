@@ -35,6 +35,8 @@ namespace SlashDemo
             public Vector2 origin;
             public float age, previousAge = -1, reach, knockback;
             public int damage, createdFrame;
+            public int baseDamage;
+            public TreasureAttack treasureAttack;
             public bool notified;
             public System.Action onFirstHit;
             public readonly HashSet<SlashEnemy> hit = new HashSet<SlashEnemy>();
@@ -49,7 +51,8 @@ namespace SlashDemo
             public SlashPlayer heavyOwner;
             public float scarHeavyBonus;
             public SwordScar scar;
-            public bool normalAttack, notified;
+            public TreasureAttack treasureAttack;
+            public bool normalAttack, bonusWave, notified;
             public Transform root;
             public LineRenderer outer, core;
             public Vector2 position, direction;
@@ -68,6 +71,7 @@ namespace SlashDemo
             public float length, reach, width, age, nextTick;
             public int damage, seed, debrisSpawned;
             public bool explodes;
+            public SwordWave nextFullWave;
             public SlashTuningSettings.IronSwordSettings settings;
         }
         readonly List<SwordScar> swordScars = new List<SwordScar>(8);
@@ -370,12 +374,16 @@ namespace SlashDemo
 
         public void LaunchWhirlwind(SlashPlayer owner, Vector2 origin, SlashPlayer.Strike strike,
             float initialAge, System.Action onFirstHit)
+            => LaunchWhirlwind(owner, origin, strike, initialAge, onFirstHit, null, strike.damage);
+
+        internal void LaunchWhirlwind(SlashPlayer owner, Vector2 origin, SlashPlayer.Strike strike,
+            float initialAge, System.Action onFirstHit, TreasureAttack treasureAttack, int baseDamage)
         {
             CancelWhirlwinds(owner);
             // Apply the complete circle once, in the same update that draws the full sword-light ribbon.
             var ring = new WhirlwindRing { owner = owner, origin = origin, age = Mathf.Max(0, initialAge),
                 reach = strike.reach, damage = strike.damage, knockback = strike.knockback,
-                createdFrame = Time.frameCount, onFirstHit = onFirstHit };
+                createdFrame = Time.frameCount, onFirstHit = onFirstHit, treasureAttack = treasureAttack, baseDamage = baseDamage };
             whirlwinds.Add(ring);
             ResolveWhirlwind(ring);
         }
@@ -393,7 +401,7 @@ namespace SlashDemo
                 ring.hit.Add(enemy);
                 Vector2 direction = (Vector2)enemy.transform.position - ring.origin;
                 ring.owner.DealHit(enemy, ring.damage, direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right,
-                    ring.knockback, true);
+                    ring.knockback, true, treasureAttack: ring.treasureAttack, baseDamage: ring.baseDamage);
                 if (!ring.notified) { ring.notified = true; ring.onFirstHit?.Invoke(); }
                 HitStop(0.033f);
             }
@@ -555,15 +563,27 @@ namespace SlashDemo
         public void LaunchSwordWave(Vector2 position, Vector2 direction, SlashTuningSettings.HeavyAttackSettings settings,
             SlashPlayer normalAttackOwner = null, SlashPlayer heavyOwner = null, float scarHeavyBonus = 0,
             SlashTuningSettings.IronSwordSettings scarSettings = null, bool scarExplodes = false, SlashPlayer attacker = null)
+            => LaunchAlchemySwordWave(position, direction, settings, normalAttackOwner, heavyOwner, scarHeavyBonus,
+                scarSettings, scarExplodes, attacker);
+
+        internal void LaunchAlchemySwordWave(Vector2 position, Vector2 direction, SlashTuningSettings.HeavyAttackSettings settings,
+            SlashPlayer normalAttackOwner = null, SlashPlayer heavyOwner = null, float scarHeavyBonus = 0,
+            SlashTuningSettings.IronSwordSettings scarSettings = null, bool scarExplodes = false, SlashPlayer attacker = null,
+            TreasureAttack treasureAttack = null, bool bonusWave = false)
         {
             var root = new GameObject("Charged sword wave").transform;
             root.SetParent(transform, false);
             var wave = new SwordWave { root = root, position = position,
                 direction = direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right,
                 settings = settings.Clone(), normalAttackOwner = normalAttackOwner, normalAttack = normalAttackOwner != null,
-                heavyOwner = heavyOwner, scarHeavyBonus = scarHeavyBonus, attacker = attacker ?? normalAttackOwner ?? heavyOwner };
+                heavyOwner = heavyOwner, scarHeavyBonus = scarHeavyBonus, attacker = attacker ?? normalAttackOwner ?? heavyOwner,
+                treasureAttack = treasureAttack, bonusWave = bonusWave };
+            if (wave.attacker != null) wave.settings.distance *= 1 + wave.attacker.AlchemyBonus(AlchemyStat.WaveDistance);
+            if (treasureAttack?.FullIron == true && heavyOwner.HasTreasure(TreasureTrigger.EarlyScarBurst))
+                foreach (var scar in swordScars)
+                    if (scar.owner == heavyOwner && scar.nextFullWave == null && scar.age <= 5) scar.nextFullWave = wave;
             if (scarSettings != null && heavyOwner != null)
-                wave.scar = CreateSwordScar(heavyOwner, position, wave.direction, settings, scarSettings, scarExplodes);
+                wave.scar = CreateSwordScar(heavyOwner, position, wave.direction, wave.settings, scarSettings, scarExplodes);
             int points = SwordMotion.WaveArcSegments + 1;
             wave.outer = DemoArt.Line("Ice glow", root, new Vector3[points], new Color(0.3f, 0.73f, 1, 0.55f), SwordWaveGlowThickness, 0);
             wave.core = DemoArt.Line("White edge", root, new Vector3[points], new Color(0.9f, 0.98f, 1), SwordWaveCoreThickness, 1);
@@ -623,7 +643,14 @@ namespace SlashDemo
                             && IsOnSwordScar(wave.heavyOwner, enemy.transform.position, enemy.Radius))
                             damage = Mathf.RoundToInt(damage * (1 + wave.scarHeavyBonus));
                         if (wave.attacker != null)
-                            wave.attacker.DealHit(enemy, damage, wave.direction, wave.settings.knockback, !wave.normalAttack);
+                        {
+                            var kind = wave.normalAttack ? PlayerAttackKind.SwordTide
+                                : wave.bonusWave ? PlayerAttackKind.Secondary : PlayerAttackKind.Heavy;
+                            wave.attacker.DealHit(enemy, damage, wave.direction, wave.settings.knockback, kind == PlayerAttackKind.Heavy,
+                                kind, direct: kind == PlayerAttackKind.Heavy,
+                                castBonus: wave.attacker.AlchemyBonus(AlchemyStat.WaveDamage),
+                                treasureAttack: wave.treasureAttack, baseDamage: wave.settings.damage);
+                        }
                         else enemy.TakeHit(damage, wave.direction, wave.settings.knockback, !wave.normalAttack);
                         if (!wave.notified)
                         {
@@ -631,6 +658,7 @@ namespace SlashDemo
                             if (wave.normalAttackOwner != null) wave.normalAttackOwner.OnSwordTideHit();
                         }
                     }
+                    DetonateCrossedScars(wave, next);
                     wave.position = next;
                     wave.traveled += step;
                     // The scar follows the traveled sword edge, so a new scar cannot precede its wave's hit.
@@ -639,11 +667,47 @@ namespace SlashDemo
                     {
                         Destroy(wave.root.gameObject);
                         waves.RemoveAt(i);
+                        wave.attacker?.FinishTreasureAttack(wave.treasureAttack);
                         continue;
                     }
                 }
                 DrawSwordWave(wave);
             }
+        }
+
+        void DetonateCrossedScars(SwordWave wave, Vector2 next)
+        {
+            if (wave.treasureAttack?.FullIron != true || !wave.attacker.HasTreasure(TreasureTrigger.EarlyScarBurst)) return;
+            for (int i = swordScars.Count - 1; i >= 0; i--)
+            {
+                var scar = swordScars[i];
+                if (scar.nextFullWave != wave || scar.age > 5 || scar.length <= 0 || scar.visual.root == null) continue;
+                Vector2 origin = wave.position - scar.origin;
+                Vector2 movement = next - wave.position;
+                Vector2 side = new Vector2(-scar.direction.y, scar.direction.x);
+                float halfWidth = (wave.settings.width + scar.width) * .5f;
+                float enter = 0, exit = 1;
+                if (!CrossesAxis(Vector2.Dot(origin, scar.direction), Vector2.Dot(movement, scar.direction),
+                        0, scar.length, ref enter, ref exit)
+                    || !CrossesAxis(Vector2.Dot(origin, side), Vector2.Dot(movement, side),
+                        -halfWidth, halfWidth, ref enter, ref exit)) continue;
+                swordScars.RemoveAt(i);
+                float ratio = scar.settings.scarExplosionRatio * (1 + .20f * wave.attacker.TreasureStacks(TreasureTrigger.EarlyScarBurst));
+                DamageSwordScar(scar, ratio, true);
+                CreateSwordScarBurst(scar);
+                TotalScarExplosions++;
+                DisposeBladeLight(scar.visual);
+                DisposeBladeLight(scar.dark);
+            }
+        }
+
+        static bool CrossesAxis(float origin, float delta, float min, float max, ref float enter, ref float exit)
+        {
+            if (Mathf.Abs(delta) < .0001f) return origin >= min && origin <= max;
+            float first = (min - origin) / delta, last = (max - origin) / delta;
+            enter = Mathf.Max(enter, Mathf.Min(first, last));
+            exit = Mathf.Min(exit, Mathf.Max(first, last));
+            return enter <= exit;
         }
 
         SwordScar CreateSwordScar(SlashPlayer owner, Vector2 origin, Vector2 direction,
@@ -713,8 +777,14 @@ namespace SlashDemo
                 if (enemy == null || !enemy.Alive || !ScarContains(scar, enemy.transform.position, enemy.Radius)
                     || !scarTargets.Add(enemy)) continue;
                 int damage = Mathf.Max(1, Mathf.RoundToInt(scar.damage * ratio));
-                if (explosion && scar.owner != null) scar.owner.DealHit(enemy, damage, scar.direction, 0, true);
-                else enemy.TakeHit(damage, scar.direction, 0, explosion, interrupt: explosion);
+                if (explosion && scar.owner != null)
+                    scar.owner.DealHit(enemy, damage, scar.direction, 0, true, PlayerAttackKind.Heavy, direct: false);
+                else
+                {
+                    if (scar.owner != null)
+                        damage = scar.owner.ScaleAlchemyDamage(damage, PlayerAttackKind.Heavy, scar.owner.TreasureMarkBonus(enemy));
+                    enemy.TakeHit(damage, scar.direction, 0, explosion, interrupt: explosion);
+                }
             }
         }
 

@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace SlashDemo
 {
-    public enum TravelDestination { Manor, AscensionPlatform, Wilderness, HealingLodge, Market, FinalBattle }
+    public enum TravelDestination { Manor, AscensionPlatform, Wilderness, HealingLodge, Market, FinalBattle, Tribulation }
 
     // All coordinates use the artwork's 1536 x 1024 reference, like the manor.
     public sealed class TravelMapDefinition
@@ -26,7 +26,7 @@ namespace SlashDemo
         public Vector2 WorldSize => destination switch
         {
             TravelDestination.AscensionPlatform or TravelDestination.HealingLodge => ManorEnvironment.WorldSize * .75f,
-            TravelDestination.Wilderness or TravelDestination.FinalBattle => new Vector2(36, 24),
+            TravelDestination.Wilderness or TravelDestination.FinalBattle or TravelDestination.Tribulation => new Vector2(36, 24),
             TravelDestination.Market => new Vector2(27, 18),
             _ => ManorEnvironment.WorldSize
         };
@@ -38,13 +38,18 @@ namespace SlashDemo
             return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
         }
         public Vector2 Entry => Ground(entry.x, entry.y);
-        public Color MistColor => destination == TravelDestination.Wilderness
-            ? new Color(0.48f, 0.53f, 0.44f) : new Color(0.70f, 0.74f, 0.70f);
+        public Color MistColor => destination switch
+        {
+            TravelDestination.Wilderness => new Color(0.48f, 0.53f, 0.44f),
+            TravelDestination.Tribulation => new Color(0.36f, 0.40f, 0.43f),
+            _ => new Color(0.70f, 0.74f, 0.70f)
+        };
     }
 
     public static class TravelMaps
     {
         public static readonly Vector2 MarketPortal = new Vector2(758, 938);
+        public static readonly Vector2 TribulationCenter = new Vector2(765, 455);
 
         static readonly TravelMapDefinition FinalBattle = new TravelMapDefinition(
             TravelDestination.FinalBattle, "关底战场", "SlashDemo/EvilCultivatorArena-v2",
@@ -78,7 +83,17 @@ namespace SlashDemo
                 Points(219,113, 657,113, 657,157, 584,157, 584,248, 219,248),
                 Points(923,349, 1424,349, 1424,492, 1327,492, 1327,552, 923,552),
                 Points(142,152, 186,152, 186,222, 142,222),
-                Points(1344,152, 1390,152, 1390,222, 1344,222))
+                Points(1344,152, 1390,152, 1390,222, 1344,222)),
+            new TravelMapDefinition(TravelDestination.Tribulation, "渡劫场", "SlashDemo/CultivatorTribulation-v1",
+                new Vector2(765, 710), new Rect(690, 970, 120, 24),
+                // Keep the upper trail clear of the pines and leave a margin inside the cliff rim.
+                Points(646,1000, 840,1000, 866,940, 915,872, 983,833, 1062,791, 1103,754,
+                    1210,719, 1326,675, 1380,637, 1300,607, 1249,559, 1307,515, 1374,466,
+                    1351,421, 1266,394, 1176,362, 1204,306, 1166,272, 1123,272, 1050,252,
+                    1003,226, 948,207, 877,208, 805,205, 722,211, 654,232, 555,255, 491,278,
+                    416,294, 350,324, 255,382, 232,415, 163,449, 138,518, 169,545, 136,603,
+                    192,632, 281,634, 323,649, 358,700, 418,739, 470,751, 552,773, 590,817,
+                    584,880, 622,924, 646,1000))
         };
 
         [Serializable]

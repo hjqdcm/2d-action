@@ -13,8 +13,11 @@ namespace SlashDemo
         bool gateArmed = true, waitingForRelease;
         int releaseAfterFrame;
         string error;
+        readonly Queue<AlchemyEntry[]> lootChoices = new Queue<AlchemyEntry[]>();
         WildernessEncounter wildernessEncounter;
         AscensionChallenge ascension;
+        TribulationChallenge tribulation;
+        Transform tribulationMarker;
         Transform treatmentMarker;
         Transform pillStallMarker, treasureStallMarker;
         readonly List<(SlashEnemy enemy, bool active)> manorEnemies = new List<(SlashEnemy, bool)>();
@@ -27,6 +30,13 @@ namespace SlashDemo
             && Vector2.Distance(arena.Player.transform.position, Portal.transform.position) <= TeleportFormation.InteractionRadius;
         public bool IsSelectionOpen { get; private set; }
         public bool IsChallengeDecisionOpen { get; private set; }
+        public bool IsTribulationDecisionOpen { get; private set; }
+        public bool IsTribulationActive => tribulation != null && tribulation.isActiveAndEnabled;
+        public int TribulationRound => IsTribulationActive ? tribulation.Round : 0;
+        public bool TribulationCleared { get; private set; }
+        public bool ShowTribulationPrompt => tribulationMarker != null && arena.Player.IsAlive && !arena.InputBlocked
+            && (arena.Tuning == null || !arena.Tuning.IsOpen)
+            && Vector2.Distance(arena.Player.transform.position, tribulationMarker.position) <= 1.55f;
         public bool IsTreatmentOpen { get; private set; }
         public bool ShowTreatmentPrompt => treatmentMarker != null && arena.Player.IsAlive && !arena.InputBlocked
             && (arena.Tuning == null || !arena.Tuning.IsOpen)
@@ -43,7 +53,12 @@ namespace SlashDemo
         public int ChallengeCompletedRounds => ascension?.CompletedRounds ?? 0;
         public bool ChallengeEndedByDefeat => ascension != null && Portal != null && ascension.CompletedRounds < ascension.Round;
         public string DefeatedChallenger { get; private set; }
-        public bool HasModal => IsSelectionOpen || IsChallengeDecisionOpen || IsTreatmentOpen || IsShopOpen;
+        public bool IsLootChoiceOpen => lootChoices.Count > 0;
+        internal int RemainingLootChoices => lootChoices.Count;
+        internal IReadOnlyList<AlchemyEntry> LootOptions => lootChoices.Peek();
+        internal int LootSpiritStones { get; private set; }
+        public bool HasModal => IsSelectionOpen || IsLootChoiceOpen || IsChallengeDecisionOpen
+            || IsTribulationDecisionOpen || IsTreatmentOpen || IsShopOpen;
         public string Error => error;
         public bool BlocksGameplayInput => HasModal || waitingForRelease;
         public static Rect ManorGate => ManorEnvironment.GroundRect(new Rect(630, 770, 100, 75));
@@ -76,7 +91,8 @@ namespace SlashDemo
             // Finish the current encounter before exhaustion sends the player onward.
             if (!arena.InputBlocked && arena.Player.IsAlive && (arena.Tuning == null || !arena.Tuning.IsOpen)
                 && arena.Resources.FortunePoints == 0 && !arena.Resources.FinalBattleEnteredOnExhaustion
-                && (Current == TravelDestination.Manor || Portal != null))
+                && (Current == TravelDestination.Manor || (Portal != null
+                    && (Current != TravelDestination.Tribulation || TribulationCleared))))
             {
                 if (!EnterDestination(TravelDestination.FinalBattle))
                 {
@@ -92,7 +108,8 @@ namespace SlashDemo
                     if (DemoInput.InteractPressed && !DemoInput.PausePressed) CloseShop();
                     return;
                 }
-                if (DemoInput.InteractPressed && !TryOpenShop() && !TryOpenTreatment()) TryOpenPortal();
+                if (DemoInput.InteractPressed && !TryOpenShop() && !TryOpenTreatment() && !TryOpenTribulation())
+                    TryOpenPortal();
                 return;
             }
             if (IsSelectionOpen) return;
@@ -141,6 +158,52 @@ namespace SlashDemo
             return true;
         }
 
+        bool TryOpenTribulation()
+        {
+            if (!ShowTribulationPrompt) return false;
+            IsTribulationDecisionOpen = true;
+            PauseForModal();
+            return true;
+        }
+
+        public void ResolveTribulation(bool begin)
+        {
+            if (!IsTribulationDecisionOpen || Current != TravelDestination.Tribulation || !arena.Player.IsAlive) return;
+            if (begin)
+            {
+                if (Portal != null)
+                {
+                    Portal.gameObject.SetActive(false);
+                    Destroy(Portal.gameObject);
+                    Portal = null;
+                }
+                tribulationMarker.gameObject.SetActive(false);
+                Destroy(tribulationMarker.gameObject);
+                tribulationMarker = null;
+                tribulation = TribulationChallenge.Begin(arena, ActiveMap, FinishTribulation);
+            }
+            else SpawnTribulationPortal();
+            CloseModal();
+        }
+
+        void SpawnTribulationPortal()
+        {
+            if (Portal == null) Portal = TeleportFormation.Spawn(ActiveMap, ActiveMap.Definition.Entry, 1.1f);
+        }
+
+        void FinishTribulation(bool survived)
+        {
+            tribulation = null;
+            if (!survived) return;
+            var player = arena.Player;
+            if (player.Realm == CultivationRealm.QiRefining)
+                player.SetRealm(CultivationRealm.FoundationEstablishment);
+            arena.Resources.FoundationTribulationCleared = true;
+            arena.FinishPotionBattle();
+            TribulationCleared = true;
+            SpawnTribulationPortal();
+        }
+
         bool NearStall(Transform marker) => marker != null
             && Vector2.Distance(arena.Player.transform.position, marker.position) <= 1.35f;
 
@@ -164,7 +227,7 @@ namespace SlashDemo
 
             // On the courtyard paving just below the treatment room steps.
             Portal = TeleportFormation.Spawn(ActiveMap, ActiveMap.Definition.Ground(965, 574), 1.8f);
-            if (heal) player.Heal(Mathf.CeilToInt(player.maxHealth * (TreatmentHealPercent / 100f)));
+            if (heal) player.Heal(Mathf.CeilToInt(player.EffectiveMaxHealth * (TreatmentHealPercent / 100f)));
             Destroy(treatmentMarker.gameObject);
             treatmentMarker = null;
             CloseModal();
@@ -191,10 +254,35 @@ namespace SlashDemo
             }
             foreach (var enemy in arena.Enemies)
                 if (enemy != null && enemy.Alive && !enemy.trainingDummy && enemy.gameObject.activeInHierarchy) return;
+            if (Current == TravelDestination.FinalBattle && !defeated.Alive
+                && defeated.TryGetComponent<EvilCultivatorBoss>(out var boss)
+                && boss.CombatStyle == EvilCultivatorBoss.Style.BloodSaber)
+                arena.Resources.RecordBloodSaberDefeat();
             var venom=ActiveMap.GetComponent<SerpentVenomField>();
             if(venom!=null) venom.Clear();
             ActiveMap.ReleaseCombatGate();
             Portal = TeleportFormation.Spawn(ActiveMap, defeated.transform.position);
+            if (Current == TravelDestination.Wilderness && arena.Player.IsAlive && !arena.Defeated)
+            {
+                lootChoices.Enqueue(AlchemyLoot.RollOptions(PillCatalog.All));
+                var resources = arena.Resources;
+                LootSpiritStones = Mathf.Min(Random.Range(10, 31), int.MaxValue - resources.SpiritStones);
+                resources.TryChangeSpiritStones(LootSpiritStones);
+                PauseForModal();
+            }
+        }
+
+        public bool TryClaimLoot(int index)
+        {
+            if (!lootChoices.TryPeek(out var options) || index < 0 || index >= options.Length
+                || !arena.Player.IsAlive || arena.Defeated) return false;
+
+            arena.Resources.CollectLoot(options[index], isTreasure: Current == TravelDestination.AscensionPlatform);
+            if (Current == TravelDestination.AscensionPlatform) arena.Player.AcquireTreasure(options[index]);
+            if (Current == TravelDestination.Wilderness) arena.Resources.RefillPotionSlots();
+            lootChoices.Dequeue();
+            if (!IsLootChoiceOpen) CloseModal();
+            return true;
         }
 
         public void ResolveChallenge(bool continueChallenge)
@@ -207,18 +295,28 @@ namespace SlashDemo
                 arena.Effects.Clear();
                 ascension.SpawnNext(arena, ActiveMap);
                 HealChallengeVictory();
+                CloseModal();
             }
             else
             {
                 Portal = TeleportFormation.Spawn(ActiveMap, ascension.Opponent.transform.position);
+                IsChallengeDecisionOpen = false;
+                DefeatedChallenger = null;
+                OfferChallengeLoot();
             }
-            CloseModal();
+        }
+
+        void OfferChallengeLoot()
+        {
+            for (int i = 0; i < ascension.CompletedRounds; i++)
+                lootChoices.Enqueue(AlchemyLoot.RollOptions(TreasureCatalog.All));
+            if (IsLootChoiceOpen) PauseForModal();
         }
 
         void HealChallengeVictory()
         {
             var player = arena.Player;
-            player.Heal(Mathf.CeilToInt(player.maxHealth * .5f));
+            player.Heal(Mathf.CeilToInt(player.EffectiveMaxHealth * .5f));
         }
 
         internal bool TrySettleChallengeDefeat(SlashEnemy opponent)
@@ -229,6 +327,7 @@ namespace SlashDemo
             Portal = TeleportFormation.Spawn(ActiveMap, arena.Player.transform.position);
             ascension.RemoveOpponent(arena);
             arena.Effects.Clear();
+            OfferChallengeLoot();
             return true;
         }
 
@@ -248,11 +347,17 @@ namespace SlashDemo
         public static bool UsesServiceVisit(TravelDestination destination) =>
             destination == TravelDestination.HealingLodge || destination == TravelDestination.Market;
 
-        public bool ShowsDestination(TravelDestination destination) =>
-            !UsesServiceVisit(destination) || arena.Resources.ServicesUnlocked;
+        public bool ShowsDestination(TravelDestination destination)
+        {
+            var resources = arena.Resources;
+            if (destination == TravelDestination.Tribulation)
+                return !resources.FoundationTribulationCleared || resources.BloodSaberDefeated;
+            return !UsesServiceVisit(destination) || resources.ServicesUnlocked;
+        }
 
         public bool CanSelectDestination(TravelDestination destination) => destination != TravelDestination.Manor
             && ShowsDestination(destination) && arena.Resources.FortunePoints >= FortuneCost(destination)
+            && (destination != TravelDestination.Tribulation || arena.Resources.TribulationUnlocked)
             && (!UsesServiceVisit(destination) || arena.Resources.ServiceVisits > 0);
 
         public void SelectDestination(TravelDestination destination)
@@ -281,6 +386,7 @@ namespace SlashDemo
             }
             // Preserve the player object, health, tuning and camera; only transient motion is cleared.
             arena.Effects.Clear();
+            arena.Player.ResetAlchemyBattle();
             manor.gameObject.SetActive(false);
             if (Current == TravelDestination.Manor)
             {
@@ -305,6 +411,12 @@ namespace SlashDemo
             if (destination == TravelDestination.FinalBattle)
                 EvilCultivatorBoss.Spawn(arena, map, finalBossStyle, finalBossArt);
             if (destination == TravelDestination.HealingLodge) PlaceTreatmentMarker(map);
+            if (destination == TravelDestination.Tribulation)
+            {
+                var center = TravelMaps.TribulationCenter;
+                tribulationMarker = DemoArt.InteractionLight("渡劫光点", map.transform,
+                    map.Definition.Ground(center.x, center.y), 1210, roundCore: true);
+            }
             if (destination == TravelDestination.Market)
             {
                 var position = TravelMaps.MarketPortal;
@@ -327,8 +439,11 @@ namespace SlashDemo
         {
             IsSelectionOpen = false;
             IsChallengeDecisionOpen = false;
+            IsTribulationDecisionOpen = false;
             IsTreatmentOpen = false;
             IsShopOpen = false;
+            lootChoices.Clear();
+            LootSpiritStones = 0;
             DefeatedChallenger = null;
             error = null;
             waitingForRelease = true;
@@ -345,6 +460,7 @@ namespace SlashDemo
         public void ReturnHome()
         {
             RestoreManor();
+            arena.Player.ResetAlchemyBattle();
             foreach (var entry in manorEnemies)
                 if (entry.enemy != null) entry.enemy.gameObject.SetActive(entry.active);
             manorEnemies.Clear();
@@ -359,7 +475,8 @@ namespace SlashDemo
             foreach (var entry in manorEnemies)
                 if (entry.enemy != null) arena.RegisterEnemy(entry.enemy);
             Current = TravelDestination.Manor;
-            arena.Player.ResetRealm();
+            arena.Player.SetRealm(arena.Resources.FoundationTribulationCleared
+                ? CultivationRealm.FoundationEstablishment : CultivationRealm.QiRefining);
             manor.gameObject.SetActive(true);
             arena.WorldCamera.backgroundColor = manorBackground;
             gateArmed = true;
@@ -376,6 +493,9 @@ namespace SlashDemo
             }
             ActiveMap = null;
             Portal = null;
+            tribulation = null;
+            tribulationMarker = null;
+            TribulationCleared = false;
             treatmentMarker = null;
             pillStallMarker = treasureStallMarker = null;
             ascension = null;

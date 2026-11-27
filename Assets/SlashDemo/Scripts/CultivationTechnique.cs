@@ -168,6 +168,12 @@ namespace SlashDemo
             AddStacks(now, realm, 1);
         }
 
+        internal void GrantStacks(float now, CultivationRealm realm, int count)
+        {
+            ExpireStacks(now);
+            AddStacks(now, realm, count);
+        }
+
         void AddStacks(float now, CultivationRealm realm, int count)
         {
             if (realm >= CultivationRealm.QiRefining)
