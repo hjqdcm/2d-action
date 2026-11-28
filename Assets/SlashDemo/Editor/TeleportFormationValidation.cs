@@ -150,7 +150,7 @@ namespace SlashDemo.Editor
                         Check(travel.Current == destination && travel.ActiveMap != oldMap && !oldMap.gameObject.activeSelf,
                             "Direct map travel retained old map.");
                         Check(!portal.gameObject.activeInHierarchy, "Old portal survived travel.");
-                        Check(destination == TravelDestination.Market
+                        Check(destination is TravelDestination.Market or TravelDestination.ScriptureLibrary
                             ? travel.Portal != null && travel.Portal.transform.IsChildOf(travel.ActiveMap.transform)
                             : travel.Portal == null, "Travel created an incorrect arrival portal.");
                         Check(arena.Player == player && player.Health == health, "Travel changed character or health.");

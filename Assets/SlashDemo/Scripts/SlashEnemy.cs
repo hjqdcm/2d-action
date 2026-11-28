@@ -11,6 +11,7 @@ namespace SlashDemo
         public int maxHealth = 60;
         public float moveSpeed = 1.9f;
         double treasureSlowUntil;
+        double stunnedUntil;
         float treasureSlow;
         internal float EffectiveMoveSpeed => moveSpeed * (Time.timeAsDouble < treasureSlowUntil ? 1 - treasureSlow : 1);
         internal void ApplyTreasureSlow(float amount)
@@ -26,9 +27,17 @@ namespace SlashDemo
         public bool Alive => Health > 0;
         internal bool CanTakeHit => Alive && (apeCombat == null || !apeCombat.IsAirborne)
             && finalBoss?.IsTransitionInvulnerable != true;
-        public bool IsChasing => Alive && !trainingDummy && (bearCombat?.IsChasing ?? snakeCombat?.IsChasing
+        internal bool IsStunned => Time.timeAsDouble < stunnedUntil;
+        public bool IsChasing => Alive && !trainingDummy && !IsStunned && (bearCombat?.IsChasing ?? snakeCombat?.IsChasing
             ?? apeCombat?.IsChasing ?? cultivator?.IsChasing ?? finalBoss?.IsChasing ?? phase == Phase.Chase);
         public float Radius => GetComponent<CircleCollider2D>().radius;
+
+        internal void Stun(float duration)
+        {
+            if (!Alive) return;
+            stunnedUntil = System.Math.Max(stunnedUntil, Time.timeAsDouble + duration);
+            body.linearVelocity = Vector2.zero;
+        }
 
         enum Phase { Chase, Windup, Recover, Dead }
         Phase phase;
@@ -120,13 +129,14 @@ namespace SlashDemo
                 if (t >= 1) Destroy(gameObject);
                 return;
             }
-            timer -= Time.deltaTime;
             flash = Mathf.Max(0, flash - Time.deltaTime);
             for (int i = 0; i < sprites.Length; i++)
             {
                 sprites[i].color = flash > 0 ? Color.white : colors[i];
                 sprites[i].sortingOrder = i;
             }
+            if (IsStunned) return;
+            timer -= Time.deltaTime;
             if (bearCombat != null) { bearCombat.Tick(Time.deltaTime); return; }
             if (snakeCombat != null) { snakeCombat.Tick(Time.deltaTime); return; }
             if (apeCombat != null) { apeCombat.Tick(Time.deltaTime); return; }
@@ -171,7 +181,7 @@ namespace SlashDemo
 
         void FixedUpdate()
         {
-            if (!Alive || arena == null || arena.Paused) { body.linearVelocity = Vector2.zero; return; }
+            if (!Alive || IsStunned || arena == null || arena.Paused) { body.linearVelocity = Vector2.zero; return; }
             if (bearCombat != null) { bearCombat.FixedTick(Vector2.zero); return; }
             if (cultivator != null) { cultivator.FixedTick(Time.fixedDeltaTime); return; }
             if (finalBoss != null) { finalBoss.FixedTick(Time.fixedDeltaTime); return; }

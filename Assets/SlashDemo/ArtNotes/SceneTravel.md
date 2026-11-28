@@ -3,8 +3,12 @@
 使用内置 image_gen 工具生成 / 编辑，无 CLI。三张图均为 1536 × 1024，参考坐标沿用左上角原点，世界尺寸 48 × 32。
 
 - 升仙台：`../Resources/SlashDemo/AscensionPlatform-v1.png`，选用用户要求的朴素版，源 `exec-fe38b701-c6a7-45ad-8831-1275cc405443.png`。
-- 山野：`../Resources/SlashDemo/Wilderness-v1.png`，选用减少花草后的朴素版，源 `exec-2d33b52b-b7bf-4a7f-be3a-d5e29e2faf27.png`。
+- 山野使用 `../Resources/SlashDemo/Wilderness-v2.png`，基于原来的朴素版降噪，源图为 `exec-8145961e-876b-446d-8b67-441d4e76f5d3.png`。
 - 医庐：`../Resources/SlashDemo/HealingLodge-open-v1.png`，基于原医庐仅修改门的开合，源 `exec-5220e060-9d8e-4bf6-84df-ac0b925b7442.png`。原始闭门图保留在生成目录。
+
+山野降噪提示
+
+> 对原山野地图轻度降噪，重点减少中央空地、石径和岩石暗部的颗粒。保留 1536 × 1024 画幅、45° 视角、道路与河岸的位置，以及岩壁轮廓、颜色和光线。
 
 医庐最终编辑提示词：
 

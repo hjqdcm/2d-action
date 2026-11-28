@@ -124,7 +124,7 @@ namespace SlashDemo
         float alchemyCardWidth;
         static readonly string[] CharacterPageNames = { "功法", "属性", "物品" };
         GUIStyle small, health, damage, status, travelTitle, travelButton;
-        GUIStyle routeTitle, routeBalanceValue, pricedButtonTitle;
+        GUIStyle routeTitle, routeBalanceValue, pricedButtonTitle, scriptureResetLabel;
         const string SpiritStoneIcon = "SlashDemo/SpiritStoneIcon";
         const string FortunePointIcon = "SlashDemo/FortunePointIcon";
         const string SpiritStoneDescription = "修仙界通用货币，常用于交易丹药、法宝等修炼物资。";
@@ -193,6 +193,7 @@ namespace SlashDemo
             routeTitle = new GUIStyle(travelTitle) { alignment = TextAnchor.MiddleLeft };
             routeBalanceValue = new GUIStyle(travelTitle) { fontSize = 34 };
             pricedButtonTitle = new GUIStyle(status) { fontSize = 18, fontStyle = FontStyle.Bold };
+            scriptureResetLabel = new GUIStyle(travelTitle) { fontSize = 23, alignment = TextAnchor.MiddleRight, wordWrap = false };
             travelButton = new GUIStyle(GUI.skin.button) { font = font, fontSize = 20 };
             travelButton.normal.textColor = Ink;
             codexBody = new GUIStyle(small) { fontSize = 17, wordWrap = true };
@@ -386,7 +387,7 @@ namespace SlashDemo
             {
                 var prompt = new Rect(width / 2 - 175, height / 2 - 25, 350, 50);
                 DrawFrame(prompt);
-                Label(prompt, "F查看功法图鉴", status, Ink);
+                Label(prompt, arena.Travel?.Current == TravelDestination.ScriptureLibrary ? "F  参阅功法" : "F查看功法图鉴", status, Ink);
             }
             if (arena.Codex != null && arena.Codex.ShowAlchemyPrompt)
             {
@@ -417,6 +418,7 @@ namespace SlashDemo
             }
             if (DefeatPanelVisible) DrawDefeatPanel(width, height);
             else if (arena.Codex != null && arena.Codex.IsAlchemyOpen) DrawAlchemyCodex(width, height);
+            else if (arena.Codex != null && arena.Codex.IsScriptureOpen) DrawScriptureLibrary(width, height);
             else if (arena.Codex != null && arena.Codex.IsOpen) DrawTechniqueCodex(width, height);
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsWardrobeOpen) DrawWardrobe(width, height);
             else if (arena.CharacterPanel != null && arena.CharacterPanel.IsOpen) DrawCharacterPanel(width, height);
@@ -788,11 +790,16 @@ namespace SlashDemo
         bool DrawPricedButton(Rect button, string title, string cost, string icon = null)
         {
             bool pressed = GUI.Button(button, GUIContent.none, travelButton);
-            Label(new Rect(button.x, button.y + 4, button.width, 24), title, pricedButtonTitle, Ink);
-            var price = new Rect(button.x, button.y + 27, button.width, 22);
-            if (icon == null) Label(price, cost, status, Ink);
-            else DrawResourceAmount(price, icon, cost, status, Ink, 22);
+            DrawPricedButtonContents(button, title, cost, icon, Ink);
             return pressed;
+        }
+
+        void DrawPricedButtonContents(Rect button, string title, string cost, string icon, Color textColor)
+        {
+            Label(new Rect(button.x, button.y + 4, button.width, 24), title, pricedButtonTitle, textColor);
+            var price = new Rect(button.x, button.y + 27, button.width, 22);
+            if (icon == null) Label(price, cost, status, textColor);
+            else DrawResourceAmount(price, icon, cost, status, textColor, 22);
         }
 
         void DrawCharacterAttributes(Rect panel)
@@ -823,11 +830,11 @@ namespace SlashDemo
             attributeScroll = GUI.BeginScrollView(viewport, attributeScroll, content);
             float chargeTime = (player.heavyAttack?.chargeTime ?? new SlashTuningSettings.HeavyAttackSettings().chargeTime)
                 * (1 - player.AlchemyReduction(AlchemyStat.ChargeReduction))
-                / (player.HasIronSword ? player.IronChargeSpeed : 1);
+                / player.HeavyChargeSpeed;
             var row = new Rect(0, headingHeight, columnWidth, rowHeight);
             Label(new Rect(row.x + 12, 0, row.width - 24, headingHeight), "生存与机动", codexHeading, Ink);
             DrawAttributeRow(ref row, "最大生命", player.EffectiveMaxHealth.ToString());
-            float ironReduction = player.IronBodyActive ? player.IronSword.bodyDamageReduction : 0;
+            float ironReduction = player.IronBodyActive ? player.IronBodyDamageReduction : 0;
             DrawAttributeRow(ref row, "受到伤害减免", $"{(1 - (1 - ironReduction) * (1 - player.AlchemyDamageReduction)):P0}");
             DrawAttributeRow(ref row, "受到的治疗量加成", $"+{player.AlchemyBonus(AlchemyStat.Healing):P0}");
             DrawAttributeRow(ref row, "受到的持续伤害减免", $"{player.AlchemyReduction(AlchemyStat.DotReduction):P0}");
@@ -844,7 +851,7 @@ namespace SlashDemo
             DrawAttributeRow(ref row, "造成的伤害加成", $"+{player.AlchemyDamageBonus:P0}");
             float normalDamage = (1 + player.ComboDamageBonus) * (1 + player.AlchemyBonus(AlchemyStat.NormalDamage)) - 1;
             DrawAttributeRow(ref row, "普攻伤害加成", $"+{normalDamage * 100:0.#}%");
-            DrawAttributeRow(ref row, "普攻攻速加成", $"+{(player.NormalAttackSpeedMultiplier - 1) * 100:0.#}%");
+            DrawAttributeRow(ref row, "普攻攻速加成", $"{(player.NormalAttackSpeedMultiplier - 1) * 100:+0.#;-0.#;0}%");
             DrawAttributeRow(ref row, "普攻判定距离加成", $"+{player.AlchemyBonus(AlchemyStat.NormalReach):P0}");
             DrawAttributeRow(ref row, "重击伤害加成", $"+{player.AlchemyBonus(AlchemyStat.HeavyDamage):P0}");
             DrawAttributeRow(ref row, "剑气伤害加成", $"+{player.AlchemyBonus(AlchemyStat.WaveDamage):P0}");
@@ -936,6 +943,60 @@ namespace SlashDemo
             Box(new Rect(panel.x + 252, panel.y + 140, 1, panel.height - 168), Bronze);
             DrawTechniqueDetails(new Rect(panel.x + 275, panel.y + 140, panel.width - 303, panel.height - 168),
                 technique, ref techniqueScroll);
+        }
+
+        void DrawScriptureLibrary(float width, float height)
+        {
+            int previousDepth = GUI.depth;
+            GUI.depth = -30;
+            var panel = DrawPaperModal(width, height);
+            var player = arena.Player;
+            var study = arena.Resources.Scripture;
+            Label(new Rect(panel.x + 28, panel.y + 20, 260, 37), "藏经阁", routeTitle, Ink);
+            Label(new Rect(panel.x + 28, panel.y + 58, 440, 24), player.Technique.name + " · " + player.RealmDisplayName, codexBody, Jade);
+            Label(new Rect(panel.x + 28, panel.y + 89, 580, 26), "每境界二选一，改选已选分支消耗 1 次重置。", codexBody, Ink);
+            var closeButton = new Rect(panel.xMax - 151, panel.y + 24, 123, 36);
+            const float resetLabelWidth = 320;
+            var resets = new Rect(closeButton.x - 18 - resetLabelWidth, closeButton.y, resetLabelWidth, closeButton.height);
+            Label(resets, $"剩余重置次数 {study.Resets}", scriptureResetLabel, Jade);
+            if (GUI.Button(closeButton, "关闭 Esc", travelButton))
+            {
+                arena.Codex.Close();
+                GUI.depth = previousDepth;
+                return;
+            }
+
+            const float rowHeight = 133, nameWidth = 116, gap = 14;
+            float optionWidth = (panel.width - 56 - nameWidth - gap) / 2;
+            for (int i = 0; i <= (int)CultivationRealm.NascentSoul; i++)
+            {
+                var realm = (CultivationRealm)i;
+                bool unlocked = realm <= player.Realm;
+                float y = panel.y + 138 + i * rowHeight;
+                Label(new Rect(panel.x + 28, y + 20, nameWidth - 9, 31), SlashPlayer.GetRealmName(realm),
+                    travelTitle, realm == player.Realm ? Jade : Ink);
+                if (!unlocked)
+                    Label(new Rect(panel.x + 28, y + 54, nameWidth - 9, 26), "未达境界", status, Muted);
+                for (int option = 0; option < 2; option++)
+                {
+                    float x = panel.x + 28 + nameWidth + option * (optionWidth + gap);
+                    var card = new Rect(x, y, optionWidth, 117);
+                    var art = ScriptureStudy.Option(player.Technique, realm, option);
+                    bool selected = study.Selected(player.Technique, realm) == art.Art;
+                    Box(card, selected ? new Color(.77f, .83f, .70f) : new Color(.94f, .89f, .75f, .72f));
+                    Outline(card, selected ? Jade : Bronze, selected ? 2 : 1);
+                    Label(new Rect(x + 13, y + 5, 60, 31), art.Name, routeTitle, unlocked ? Ink : Muted);
+                    Label(new Rect(x + 13, y + 33, optionWidth - 26, 42), art.Description, codexBody, unlocked ? Ink : Muted);
+                    bool wasEnabled = GUI.enabled;
+                    GUI.enabled = wasEnabled && study.CanChoose(player.Technique, player.Realm, realm, option);
+                    string caption = selected ? "已选" : !unlocked ? "待突破"
+                        : study.Selected(player.Technique, realm) != ScriptureArt.None ? "改选" : "选修";
+                    bool pressed = GUI.Button(new Rect(card.xMax - 126, card.yMax - 40, 113, 32), caption, travelButton);
+                    GUI.enabled = wasEnabled;
+                    if (pressed) arena.Codex.ChooseScripture(realm, option);
+                }
+            }
+            GUI.depth = previousDepth;
         }
 
         void DrawTechniqueCodex(float width, float height)
@@ -1255,7 +1316,8 @@ namespace SlashDemo
             if (canContinue)
             {
                 Label(new Rect(panel.x, panel.y + 119, panel.width, 28), "回复最大气血的 50%，至多回满", status, Ink);
-                Label(new Rect(panel.x, panel.y + 148, panel.width, 28), "下一战对手气血与伤害再提升 10%", status, Ink);
+                Label(new Rect(panel.x, panel.y + 148, panel.width, 28),
+                    $"下一战对手气血与伤害再提升 {(AscensionChallenge.RoundMultiplier - 1) * 100:0}%", status, Ink);
                 if (GUI.Button(new Rect(panel.x + 38, panel.y + 189, 232, 50), "继续挑战", travelButton))
                     travel.ResolveChallenge(true);
                 else if (GUI.Button(new Rect(panel.x + 290, panel.y + 189, 232, 50), "结束挑战 · 领取法宝", travelButton))
@@ -1310,11 +1372,59 @@ namespace SlashDemo
             int previousDepth = GUI.depth;
             GUI.depth = -30;
             var panel = DrawPaperModal(width, height);
-            DrawResourceBalance(new Rect(panel.x + 28, panel.y + 22, 330, 68), SpiritStoneIcon, arena.Resources.SpiritStones);
-            if (GUI.Button(new Rect(panel.xMax - 212, panel.y + 24, 184, 42), "关闭 F / Esc", travelButton))
-                arena.Travel.CloseShop();
-            // TODO: Display the selected stall's goods once the shop catalog is available.
+            var travel = arena.Travel;
+            var stall = travel.OpenStall;
+            Label(new Rect(panel.x + 28, panel.y + 25, 280, 46), stall.SellsTreasures ? "法宝摊" : "丹药摊", routeTitle, Ink);
+            DrawResourceBalance(new Rect(panel.xMax - 442, panel.y + 22, 216, 54), SpiritStoneIcon, arena.Resources.SpiritStones);
+            bool close = GUI.Button(new Rect(panel.xMax - 212, panel.y + 28, 184, 42), "关闭 F / Esc", travelButton);
+
+            const float margin = 28, gap = 16, cardHeight = 242;
+            float cardWidth = (panel.width - 2 * margin - gap) * .5f;
+            var offers = stall.Offers;
+            for (int i = 0; i < offers.Count; i++)
+            {
+                var offer = offers[i];
+                var item = offer.Item;
+                var color = AlchemyNameColors[(int)item.Quality];
+                var card = new Rect(panel.x + margin + i % 2 * (cardWidth + gap),
+                    panel.y + 102 + i / 2 * (cardHeight + gap), cardWidth, cardHeight);
+                Box(card, new Color(.14f, .20f, .21f));
+                Outline(card, new Color(color.r, color.g, color.b, .65f));
+                if (Event.current.type == EventType.Repaint)
+                    DrawHudIcon(new Rect(card.x + 19, card.y + 22, 82, 82), item.IconResource);
+                Label(new Rect(card.x + 12, card.y + 107, 96, 24), AlchemyQualityNames[(int)item.Quality], status, color);
+                Label(new Rect(card.x + 122, card.y + 20, card.width - 140, 32), item.Name, codexHeading, color);
+                Label(new Rect(card.x + 122, card.y + 62, card.width - 140, 110), item.Effect, alchemyDescription, Color.white);
+                if (item.CombatDurationSeconds > 0)
+                    Label(new Rect(card.x + 122, card.y + 175, 192, 24), $"持续 {item.CombatDurationSeconds} 秒战斗时间", codexBody, color);
+                if (DrawShopPriceButton(new Rect(card.xMax - 170, card.yMax - 67, 152, 54),
+                    offer.Sold ? "已售出" : "购买", offer.Price, !offer.Sold))
+                    travel.TryBuyShopOffer(i);
+            }
+
+            if (DrawShopPriceButton(new Rect(panel.xMax - margin - 216, panel.yMax - 86, 216, 56),
+                "刷新商品", stall.RefreshPrice, dark: true))
+                travel.TryRefreshShop();
+            if (close) travel.CloseShop();
             GUI.depth = previousDepth;
+        }
+
+        bool DrawShopPriceButton(Rect button, string title, long price, bool available = true, bool dark = false)
+        {
+            bool enabled = GUI.enabled;
+            bool canUse = enabled && available && price <= arena.Resources.SpiritStones;
+            GUI.enabled = canUse;
+            bool clicked = GUI.Button(button, GUIContent.none, GUIStyle.none);
+            GUI.enabled = enabled;
+
+            var fill = dark ? new Color(.43f, .41f, .36f) : new Color(.97f, .91f, .77f);
+            if (!canUse) fill = Color.Lerp(fill, dark ? Color.black : Muted, .2f);
+            else if (button.Contains(Event.current.mousePosition)) fill = Color.Lerp(fill, dark ? Color.white : Bronze, .15f);
+            Box(button, fill);
+            Outline(button, dark ? new Color(.30f, .28f, .24f) : Bronze);
+            DrawPricedButtonContents(button, title, price.ToString(), SpiritStoneIcon,
+                dark ? new Color(.99f, .96f, .86f) : Ink);
+            return clicked;
         }
 
         void DrawTravelSelection(float width, float height)
@@ -1322,12 +1432,14 @@ namespace SlashDemo
             int previousDepth = GUI.depth;
             GUI.depth = -30;
             Box(new Rect(0, 0, width, height), new Color(0.08f, 0.12f, 0.10f, 0.65f));
-            const float margin = 30, cardWidth = 270, gap = 15;
+            const float margin = 30, maxCardWidth = 270, gap = 15;
             var travel = arena.Travel;
             int choiceCount = 0;
             foreach (var choice in TravelMaps.Choices)
                 if (travel.ShowsDestination(choice.destination)) choiceCount++;
-            float panelWidth = margin * 2 + cardWidth * choiceCount + gap * (choiceCount - 1);
+            float fixedWidth = margin * 2 + gap * (choiceCount - 1);
+            float cardWidth = Mathf.Min(maxCardWidth, (width - 48 - fixedWidth) / choiceCount);
+            float panelWidth = fixedWidth + cardWidth * choiceCount;
             const float panelHeight = 460;
             var panel = new Rect((width - panelWidth) / 2, (height - panelHeight) / 2, panelWidth, panelHeight);
             // Give the choice panel a legible backing while the two HUD frames stay translucent.
@@ -1355,17 +1467,20 @@ namespace SlashDemo
                 if (!travel.ShowsDestination(choice.destination)) continue;
                 var card = new Rect(panel.x + margin + i++ * (cardWidth + gap), panel.y + 96, cardWidth, 250);
                 DrawFrame(card);
+                float contentWidth = card.width - 24;
                 var thumbnail = Resources.Load<Texture2D>(choice.resource);
                 if (thumbnail != null)
-                    GUI.DrawTexture(new Rect(card.x + 12, card.y + 12, 246, 164), thumbnail, ScaleMode.ScaleToFit);
+                    GUI.DrawTexture(new Rect(card.x + 12, card.y + 12, contentWidth, 164), thumbnail, ScaleMode.ScaleToFit);
                 bool usesServiceVisit = SceneTravel.UsesServiceVisit(choice.destination);
+                bool realmLocked = choice.destination == TravelDestination.ScriptureLibrary && !travel.CanVisitScriptureLibrary;
                 string cost = usesServiceVisit ? "共用次数 1" : SceneTravel.FortuneCost(choice.destination).ToString();
                 if (choice.destination == TravelDestination.Tribulation && !resources.TribulationUnlocked)
                     cost = $"累计消耗 {resources.TribulationFortuneSpent}/{GameResources.TribulationUnlockSpend}";
+                if (realmLocked) cost = "突破境界后可再入";
                 bool previousEnabled = GUI.enabled;
                 GUI.enabled = previousEnabled && travel.CanSelectDestination(choice.destination);
-                bool selected = DrawPricedButton(new Rect(card.x + 12, card.y + 184, 246, 54), choice.title, cost,
-                    usesServiceVisit ? null : FortunePointIcon);
+                bool selected = DrawPricedButton(new Rect(card.x + 12, card.y + 184, contentWidth, 54), choice.title, cost,
+                    usesServiceVisit || realmLocked ? null : FortunePointIcon);
                 GUI.enabled = previousEnabled;
                 if (selected)
                 {

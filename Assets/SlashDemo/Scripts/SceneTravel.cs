@@ -20,6 +20,9 @@ namespace SlashDemo
         Transform tribulationMarker;
         Transform treatmentMarker;
         Transform pillStallMarker, treasureStallMarker;
+        readonly MarketStall pillStall = new MarketStall(sellsTreasures: false);
+        readonly MarketStall treasureStall = new MarketStall(sellsTreasures: true);
+        Transform scriptureDeskMarker;
         readonly List<(SlashEnemy enemy, bool active)> manorEnemies = new List<(SlashEnemy, bool)>();
         public TravelDestination Current { get; private set; } = TravelDestination.Manor;
         public TravelMapEnvironment ActiveMap { get; private set; }
@@ -41,10 +44,15 @@ namespace SlashDemo
         public bool ShowTreatmentPrompt => treatmentMarker != null && arena.Player.IsAlive && !arena.InputBlocked
             && (arena.Tuning == null || !arena.Tuning.IsOpen)
             && Vector2.Distance(arena.Player.transform.position, treatmentMarker.position) <= 1.35f;
-        public bool IsShopOpen { get; private set; }
+        internal MarketStall OpenStall { get; private set; }
+        public bool IsShopOpen => OpenStall != null;
         public bool ShowShopPrompt => Current == TravelDestination.Market && arena.Player.IsAlive && !arena.InputBlocked
             && (arena.Tuning == null || !arena.Tuning.IsOpen)
-            && (NearStall(pillStallMarker) || NearStall(treasureStallMarker));
+            && (NearInteractionMarker(pillStallMarker) || NearInteractionMarker(treasureStallMarker));
+        internal bool NearScriptureDesk => Current == TravelDestination.ScriptureLibrary && arena.Player.IsAlive
+            && NearInteractionMarker(scriptureDeskMarker);
+        internal bool CanVisitScriptureLibrary => !arena.Resources.LastScriptureLibraryRealm.HasValue
+            || arena.Player.Realm > arena.Resources.LastScriptureLibraryRealm.Value;
         public const int TreatmentCost = 0;
         public const int TreatmentHealPercent = 50;
         const int AscensionRefundRound = 3;
@@ -91,7 +99,7 @@ namespace SlashDemo
             // Finish the current encounter before exhaustion sends the player onward.
             if (!arena.InputBlocked && arena.Player.IsAlive && (arena.Tuning == null || !arena.Tuning.IsOpen)
                 && arena.Resources.FortunePoints == 0 && !arena.Resources.FinalBattleEnteredOnExhaustion
-                && (Current == TravelDestination.Manor || (Portal != null
+                && (Current == TravelDestination.Manor || (Portal != null && Current != TravelDestination.ScriptureLibrary
                     && (Current != TravelDestination.Tribulation || TribulationCleared))))
             {
                 if (!EnterDestination(TravelDestination.FinalBattle))
@@ -188,7 +196,7 @@ namespace SlashDemo
 
         void SpawnTribulationPortal()
         {
-            if (Portal == null) Portal = TeleportFormation.Spawn(ActiveMap, ActiveMap.Definition.Entry, 1.1f);
+            if (Portal == null) Portal = TeleportFormation.Spawn(ActiveMap, ActiveMap.Definition.Entry, clearanceRadius: 1.1f);
         }
 
         void FinishTribulation(bool survived)
@@ -204,16 +212,29 @@ namespace SlashDemo
             SpawnTribulationPortal();
         }
 
-        bool NearStall(Transform marker) => marker != null
+        bool NearInteractionMarker(Transform marker) => marker != null
             && Vector2.Distance(arena.Player.transform.position, marker.position) <= 1.35f;
 
         bool TryOpenShop()
         {
             if (!ShowShopPrompt) return false;
-            IsShopOpen = true;
+            OpenStall = NearInteractionMarker(pillStallMarker) ? pillStall : treasureStall;
             PauseForModal();
             return true;
         }
+
+        internal bool TryBuyShopOffer(int index)
+        {
+            var stall = OpenStall;
+            if (stall == null || !arena.Player.IsAlive || arena.Defeated
+                || !stall.TryBuy(index, arena.Resources, out var item)) return false;
+
+            CollectAlchemy(item, stall.SellsTreasures);
+            return true;
+        }
+
+        internal bool TryRefreshShop() => IsShopOpen && arena.Player.IsAlive && !arena.Defeated
+            && OpenStall.TryRefresh(arena.Resources);
 
         internal void CloseShop()
         {
@@ -226,7 +247,7 @@ namespace SlashDemo
             if (!IsTreatmentOpen || Current != TravelDestination.HealingLodge || !player.IsAlive || arena.Defeated) return;
 
             // On the courtyard paving just below the treatment room steps.
-            Portal = TeleportFormation.Spawn(ActiveMap, ActiveMap.Definition.Ground(965, 574), 1.8f);
+            Portal = TeleportFormation.Spawn(ActiveMap, ActiveMap.Definition.Ground(965, 574), clearanceRadius: 1.8f);
             if (heal) player.Heal(Mathf.CeilToInt(player.EffectiveMaxHealth * (TreatmentHealPercent / 100f)));
             Destroy(treatmentMarker.gameObject);
             treatmentMarker = null;
@@ -277,12 +298,17 @@ namespace SlashDemo
             if (!lootChoices.TryPeek(out var options) || index < 0 || index >= options.Length
                 || !arena.Player.IsAlive || arena.Defeated) return false;
 
-            arena.Resources.CollectLoot(options[index], isTreasure: Current == TravelDestination.AscensionPlatform);
-            if (Current == TravelDestination.AscensionPlatform) arena.Player.AcquireTreasure(options[index]);
+            CollectAlchemy(options[index], isTreasure: Current == TravelDestination.AscensionPlatform);
             if (Current == TravelDestination.Wilderness) arena.Resources.RefillPotionSlots();
             lootChoices.Dequeue();
             if (!IsLootChoiceOpen) CloseModal();
             return true;
+        }
+
+        void CollectAlchemy(AlchemyEntry item, bool isTreasure)
+        {
+            arena.Resources.CollectLoot(item, isTreasure);
+            if (isTreasure) arena.Player.AcquireTreasure(item);
         }
 
         public void ResolveChallenge(bool continueChallenge)
@@ -299,6 +325,7 @@ namespace SlashDemo
             }
             else
             {
+                ActiveMap.ReleaseCombatGate();
                 Portal = TeleportFormation.Spawn(ActiveMap, ascension.Opponent.transform.position);
                 IsChallengeDecisionOpen = false;
                 DefeatedChallenger = null;
@@ -324,6 +351,7 @@ namespace SlashDemo
             if (ascension == null || Portal != null || HasModal || opponent == null || ascension.Opponent != opponent || !opponent.Alive)
                 return false;
 
+            ActiveMap.ReleaseCombatGate();
             Portal = TeleportFormation.Spawn(ActiveMap, arena.Player.transform.position);
             ascension.RemoveOpponent(arena);
             arena.Effects.Clear();
@@ -341,6 +369,7 @@ namespace SlashDemo
         {
             TravelDestination.Wilderness => 1,
             TravelDestination.AscensionPlatform => 4,
+            TravelDestination.ScriptureLibrary => 2,
             _ => 0
         };
 
@@ -358,6 +387,7 @@ namespace SlashDemo
         public bool CanSelectDestination(TravelDestination destination) => destination != TravelDestination.Manor
             && ShowsDestination(destination) && arena.Resources.FortunePoints >= FortuneCost(destination)
             && (destination != TravelDestination.Tribulation || arena.Resources.TribulationUnlocked)
+            && (destination != TravelDestination.ScriptureLibrary || CanVisitScriptureLibrary)
             && (!UsesServiceVisit(destination) || arena.Resources.ServiceVisits > 0);
 
         public void SelectDestination(TravelDestination destination)
@@ -419,14 +449,25 @@ namespace SlashDemo
             }
             if (destination == TravelDestination.Market)
             {
+                pillStall.BeginVisit();
+                treasureStall.BeginVisit();
                 var position = TravelMaps.MarketPortal;
-                Portal = TeleportFormation.Spawn(map, map.Definition.Ground(position.x, position.y), .9f);
+                Portal = TeleportFormation.Spawn(map, map.Definition.Ground(position.x, position.y), clearanceRadius: .9f);
                 pillStallMarker = DemoArt.InteractionLight("丹药摊光球", map.transform, map.Definition.Ground(421, 305), 1210, roundCore: true);
                 treasureStallMarker = DemoArt.InteractionLight("法器摊光球", map.transform, map.Definition.Ground(1130, 612), 1210, roundCore: true);
+            }
+            if (destination == TravelDestination.ScriptureLibrary)
+            {
+                var desk = TravelMaps.ScriptureDesk;
+                scriptureDeskMarker = DemoArt.InteractionLight("藏经阁抄经桌光点", map.transform,
+                    map.Definition.Ground(desk.x, desk.y), 1210, roundCore: true);
+                var exit = TravelMaps.ScripturePortal;
+                Portal = TeleportFormation.Spawn(map, map.Definition.Ground(exit.x, exit.y), clearanceRadius: .9f);
             }
             if (ascension != null) ascension.SpawnNext(arena, map);
             var resources = arena.Resources;
             resources.TryChangeFortunePoints(-FortuneCost(destination));
+            if (destination == TravelDestination.ScriptureLibrary) resources.LastScriptureLibraryRealm = arena.Player.Realm;
             if (UsesServiceVisit(destination)) resources.UseServiceVisit();
             if (destination == TravelDestination.FinalBattle && resources.FortunePoints == 0)
                 resources.FinalBattleEnteredOnExhaustion = true;
@@ -441,7 +482,7 @@ namespace SlashDemo
             IsChallengeDecisionOpen = false;
             IsTribulationDecisionOpen = false;
             IsTreatmentOpen = false;
-            IsShopOpen = false;
+            OpenStall = null;
             lootChoices.Clear();
             LootSpiritStones = 0;
             DefeatedChallenger = null;
@@ -498,6 +539,7 @@ namespace SlashDemo
             TribulationCleared = false;
             treatmentMarker = null;
             pillStallMarker = treasureStallMarker = null;
+            scriptureDeskMarker = null;
             ascension = null;
         }
     }

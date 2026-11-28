@@ -12,10 +12,11 @@ namespace SlashDemo
         int consumedFrame = -1;
         public bool IsOpen { get; private set; }
         public bool IsAlchemyOpen { get; private set; }
+        public bool IsScriptureOpen => IsOpen && arena.Travel.Current == TravelDestination.ScriptureLibrary;
         public AlchemyCodexPage AlchemyPage { get; private set; }
         public bool ShowsPills => AlchemyPage == AlchemyCodexPage.Pills;
         public bool ConsumedInputThisFrame => consumedFrame == Time.frameCount;
-        public bool NearTable => NearFurniture("Tea table");
+        public bool NearTable => NearFurniture("Tea table") || (arena?.Travel?.NearScriptureDesk ?? false);
 
         bool NearFurniture(string furniture)
         {
@@ -26,7 +27,7 @@ namespace SlashDemo
             Vector2 nearest = new Vector2(Mathf.Clamp(p.x, bounds.xMin, bounds.xMax), Mathf.Clamp(p.y, bounds.yMin, bounds.yMax));
             return Vector2.Distance(p, nearest) <= 1.35f;
         }
-        public bool ShowPrompt => NearTable && !arena.Paused && !arena.Defeated
+        public bool ShowPrompt => NearTable && !arena.InputBlocked
             && (arena.Tuning == null || !arena.Tuning.IsOpen);
         public bool ShowAlchemyPrompt => NearFurniture("Alchemy furnace") && !arena.InputBlocked
             && (arena.Tuning == null || !arena.Tuning.IsOpen);
@@ -82,8 +83,17 @@ namespace SlashDemo
 
         public bool Equip(TechniqueDefinition technique)
         {
-            if (!IsOpen || IsAlchemyOpen || !NearTable) return false;
+            if (!IsOpen || IsAlchemyOpen || IsScriptureOpen || !NearTable) return false;
             return arena.Player.EquipTechnique(technique, true);
+        }
+
+        public bool ChooseScripture(CultivationRealm realm, int option)
+        {
+            if (!IsScriptureOpen || !NearTable) return false;
+            var player = arena.Player;
+            if (!arena.Resources.Scripture.TryChoose(player.Technique, player.Realm, realm, option)) return false;
+            player.ApplyScripture();
+            return true;
         }
     }
 }

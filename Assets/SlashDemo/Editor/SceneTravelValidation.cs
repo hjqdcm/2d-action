@@ -20,7 +20,7 @@ namespace SlashDemo.Editor
         static Keyboard keyboard;
         static KeyboardState? queuedKeys;
         static MouseState? queuedMouse;
-        static CultivationRealm OutboundRealm => Destination.destination == TravelDestination.Tribulation
+        static CultivationRealm OutboundRealm => Destination.destination is TravelDestination.Tribulation or TravelDestination.ScriptureLibrary
             ? CultivationRealm.QiRefining : (CultivationRealm)(choice % (int)CultivationRealm.NascentSoul + 1);
         static TravelMapDefinition Destination => choice < TravelMaps.Choices.Length ? TravelMaps.Choices[choice]
             : TravelMaps.Get(TravelDestination.FinalBattle);
@@ -319,13 +319,73 @@ namespace SlashDemo.Editor
                                 "The market must start with one portal and no enemies.");
                             var marker = TravelMaps.MarketPortal;
                             Check(Vector2.Distance(travel.Portal.transform.position, definition.Ground(marker.x, marker.y)) < .01f,
-                                "The market portal did not fit at the foot of the entrance steps.");
+                                "The market portal did not fit at the entrance steps.");
                             original.Teleport(definition.Entry);
                             Check(travel.ShowPortalPrompt, "The market arrival point is out of reach of its portal.");
                             QueueKeys(new KeyboardState(Key.F));
                             Advance(30);
                             break;
                         }
+                        if (travel.Current == TravelDestination.ScriptureLibrary)
+                        {
+                            Check(arena.Enemies.Count == 0 && travel.Portal != null && !arena.Codex.ShowPrompt,
+                                "The library must start with a portal, no enemies, and no desk prompt from the entrance.");
+                            var exitPoint = TravelMaps.ScripturePortal;
+                            Check(Vector2.Distance(travel.Portal.transform.position,
+                                travel.ActiveMap.Definition.Ground(exitPoint.x, exitPoint.y)) < .01f,
+                                "The library portal did not fit at the threshold.");
+                            var desk = TravelMaps.ScriptureDesk;
+                            original.Teleport(travel.ActiveMap.Definition.Ground(desk.x, desk.y));
+                            Check(arena.Codex.ShowPrompt, "The library desk did not show its interaction prompt.");
+                            QueueKeys(new KeyboardState(Key.F));
+                            Advance(66);
+                            break;
+                        }
+                        QueueKeys(new KeyboardState(Key.Escape));
+                        Advance(9);
+                        break;
+                    case 66:
+                        Check(arena.Codex.IsScriptureOpen && arena.Paused,
+                            "F at the library desk did not open the scripture choices.");
+                        original.EquipTechnique(TechniqueCatalog.FlowingCloud);
+                        Check(!arena.Codex.ChooseScripture(CultivationRealm.FoundationEstablishment, 0)
+                            && arena.Codex.ChooseScripture(CultivationRealm.QiRefining, 0)
+                            && !arena.Codex.ChooseScripture(CultivationRealm.QiRefining, 1),
+                            "Scripture selection ignored the realm or reset requirement.");
+                        original.FillTechniqueStacksForDebug();
+                        Check(original.ComboStackTimeLeft > 2.9f, "The selected scripture did not extend Flowing Cloud stacks.");
+                        original.SetRealm(CultivationRealm.FoundationEstablishment);
+                        Check(arena.Codex.ChooseScripture(CultivationRealm.QiRefining, 1)
+                            && !arena.Codex.ChooseScripture(CultivationRealm.QiRefining, 0),
+                            "The breakthrough did not grant exactly one scripture reset.");
+                        original.SetRealm(CultivationRealm.QiRefining);
+                        QueueKeys(new KeyboardState(Key.Escape));
+                        Advance(67);
+                        break;
+                    case 67:
+                        Check(!arena.Codex.IsOpen && !arena.Paused, "Escape did not close the library's codex.");
+                        original.Teleport(travel.Portal.transform.position);
+                        QueueKeys(new KeyboardState());
+                        Advance(68);
+                        break;
+                    case 68:
+                        Check(travel.TryOpenPortal(), "The library portal did not open the travel picker.");
+                        Check(travel.ShowsDestination(TravelDestination.ScriptureLibrary)
+                            && !travel.CanSelectDestination(TravelDestination.ScriptureLibrary),
+                            "The library did not lock repeat visits in the same realm.");
+                        travel.SelectDestination(TravelDestination.ScriptureLibrary);
+                        Check(travel.IsSelectionOpen && arena.Resources.FortunePoints == expectedFortune,
+                            "A rejected visit changed the balance or closed the picker.");
+                        original.SetRealm(CultivationRealm.FoundationEstablishment);
+                        Check(travel.CanSelectDestination(TravelDestination.ScriptureLibrary),
+                            "The next realm did not unlock the library.");
+                        travel.SelectDestination(TravelDestination.ScriptureLibrary);
+                        expectedFortune -= 2;
+                        Check(travel.Current == TravelDestination.ScriptureLibrary && !travel.IsSelectionOpen
+                            && arena.Resources.FortunePoints == expectedFortune
+                            && !travel.CanSelectDestination(TravelDestination.ScriptureLibrary),
+                            "The visit after a breakthrough did not charge two points and lock the new realm.");
+                        Debug.Log("SCRIPTURE_LIBRARY_PASS: entry charge, desk interaction, realm lock and next-realm reentry.");
                         QueueKeys(new KeyboardState(Key.Escape));
                         Advance(9);
                         break;
@@ -2191,7 +2251,7 @@ namespace SlashDemo.Editor
             switch (map.Definition.destination)
             {
                 case TravelDestination.AscensionPlatform:
-                    route = new[] { entry, new Vector2(755, 735), new Vector2(755, 500), new Vector2(755, 350) };
+                    route = new[] { entry, new Vector2(755, 500), new Vector2(755, 350) };
                     break;
                 case TravelDestination.Wilderness:
                     route = new[] { entry, new Vector2(800, 740), new Vector2(800, 520), new Vector2(800, 270) };
@@ -2215,6 +2275,9 @@ namespace SlashDemo.Editor
                 case TravelDestination.Market:
                     route = new[] { entry, new Vector2(758, 313), new Vector2(421, 305),
                         new Vector2(758, 313), new Vector2(758, 612), new Vector2(1130, 612) };
+                    break;
+                case TravelDestination.ScriptureLibrary:
+                    route = new[] { entry, new Vector2(768, 650), new Vector2(1070, 575), TravelMaps.ScriptureDesk };
                     break;
                 default:
                     route = new[] { entry, new Vector2(1170, 740), new Vector2(1235, 815),

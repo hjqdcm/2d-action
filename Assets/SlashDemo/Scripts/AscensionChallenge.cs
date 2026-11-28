@@ -5,6 +5,7 @@ namespace SlashDemo
 {
     sealed class AscensionChallenge
     {
+        internal const float RoundMultiplier = 1.2f;
         readonly Texture2D[] art = new Texture2D[AscensionCultivator.PathCount];
         readonly List<AscensionCultivator.Path> remaining = new List<AscensionCultivator.Path>();
         public SlashEnemy Opponent { get; private set; }
@@ -26,7 +27,7 @@ namespace SlashDemo
         {
             int index = Random.Range(0, remaining.Count);
             var path = remaining[index];
-            var next = AscensionCultivator.Spawn(arena, map, path, art[(int)path], Mathf.Pow(1.1f, Round));
+            var next = AscensionCultivator.Spawn(arena, map, path, art[(int)path], Mathf.Pow(RoundMultiplier, Round));
             RemoveOpponent(arena);
             Opponent = next;
             remaining.RemoveAt(index);

@@ -52,11 +52,11 @@ namespace SlashDemo
             public float scarHeavyBonus;
             public SwordScar scar;
             public TreasureAttack treasureAttack;
-            public bool normalAttack, bonusWave, notified;
+            public bool normalAttack, bonusWave, notified, swordTideHealing;
             public Transform root;
             public LineRenderer outer, core;
             public Vector2 position, direction;
-            public float traveled, age;
+            public float traveled, age, delay, stunDuration;
             public SlashTuningSettings.HeavyAttackSettings settings;
             public readonly HashSet<SlashEnemy> hit = new HashSet<SlashEnemy>();
         }
@@ -400,9 +400,9 @@ namespace SlashDemo
                         enemy.transform.position, enemy.Radius)) continue;
                 ring.hit.Add(enemy);
                 Vector2 direction = (Vector2)enemy.transform.position - ring.origin;
-                ring.owner.DealHit(enemy, ring.damage, direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right,
+                bool landed = ring.owner.DealHit(enemy, ring.damage, direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right,
                     ring.knockback, true, treasureAttack: ring.treasureAttack, baseDamage: ring.baseDamage);
-                if (!ring.notified) { ring.notified = true; ring.onFirstHit?.Invoke(); }
+                if (landed && !ring.notified) { ring.notified = true; ring.onFirstHit?.Invoke(); }
                 HitStop(0.033f);
             }
             ring.previousAge = ring.age;
@@ -569,7 +569,8 @@ namespace SlashDemo
         internal void LaunchAlchemySwordWave(Vector2 position, Vector2 direction, SlashTuningSettings.HeavyAttackSettings settings,
             SlashPlayer normalAttackOwner = null, SlashPlayer heavyOwner = null, float scarHeavyBonus = 0,
             SlashTuningSettings.IronSwordSettings scarSettings = null, bool scarExplodes = false, SlashPlayer attacker = null,
-            TreasureAttack treasureAttack = null, bool bonusWave = false)
+            TreasureAttack treasureAttack = null, bool bonusWave = false, bool swordTideHealing = false, float delay = 0,
+            float stunDuration = 0)
         {
             var root = new GameObject("Charged sword wave").transform;
             root.SetParent(transform, false);
@@ -577,7 +578,8 @@ namespace SlashDemo
                 direction = direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right,
                 settings = settings.Clone(), normalAttackOwner = normalAttackOwner, normalAttack = normalAttackOwner != null,
                 heavyOwner = heavyOwner, scarHeavyBonus = scarHeavyBonus, attacker = attacker ?? normalAttackOwner ?? heavyOwner,
-                treasureAttack = treasureAttack, bonusWave = bonusWave };
+                treasureAttack = treasureAttack, bonusWave = bonusWave, swordTideHealing = swordTideHealing,
+                delay = delay, stunDuration = stunDuration };
             if (wave.attacker != null) wave.settings.distance *= 1 + wave.attacker.AlchemyBonus(AlchemyStat.WaveDistance);
             if (treasureAttack?.FullIron == true && heavyOwner.HasTreasure(TreasureTrigger.EarlyScarBurst))
                 foreach (var scar in swordScars)
@@ -594,6 +596,7 @@ namespace SlashDemo
             wave.core.widthMultiplier = SwordWaveCoreThickness;
             waves.Add(wave);
             DrawSwordWave(wave);
+            if (delay > 0) root.gameObject.SetActive(false);
         }
 
         void DrawSwordWave(SwordWave wave)
@@ -624,9 +627,18 @@ namespace SlashDemo
             {
                 var wave = waves[i];
                 if (wave.root == null) { waves.RemoveAt(i); continue; }
-                if (dt > 0)
+                float waveDelta = dt;
+                if (wave.delay > 0)
                 {
-                    wave.age += dt;
+                    wave.delay -= dt;
+                    if (wave.delay > 0) continue;
+                    waveDelta = -wave.delay;
+                    wave.delay = 0;
+                    wave.root.gameObject.SetActive(true);
+                }
+                if (waveDelta > 0)
+                {
+                    wave.age += waveDelta;
                     float step = Mathf.Max(0, SwordMotion.WaveTravel(wave.age, wave.settings.speed, wave.settings.distance) - wave.traveled);
                     Vector2 next = wave.position + wave.direction * step;
                     Physics2D.OverlapCircle((wave.position + next) * 0.5f,
@@ -642,17 +654,25 @@ namespace SlashDemo
                         if (wave.heavyOwner != null && wave.scarHeavyBonus > 0
                             && IsOnSwordScar(wave.heavyOwner, enemy.transform.position, enemy.Radius))
                             damage = Mathf.RoundToInt(damage * (1 + wave.scarHeavyBonus));
+                        bool landed = true;
                         if (wave.attacker != null)
                         {
+                            int health = enemy.Health;
                             var kind = wave.normalAttack ? PlayerAttackKind.SwordTide
                                 : wave.bonusWave ? PlayerAttackKind.Secondary : PlayerAttackKind.Heavy;
-                            wave.attacker.DealHit(enemy, damage, wave.direction, wave.settings.knockback, kind == PlayerAttackKind.Heavy,
+                            landed = wave.attacker.DealHit(enemy, damage, wave.direction, wave.settings.knockback, kind == PlayerAttackKind.Heavy,
                                 kind, direct: kind == PlayerAttackKind.Heavy,
                                 castBonus: wave.attacker.AlchemyBonus(AlchemyStat.WaveDamage),
                                 treasureAttack: wave.treasureAttack, baseDamage: wave.settings.damage);
+                            if (wave.swordTideHealing)
+                            {
+                                int recovery = Mathf.RoundToInt((health - enemy.Health) * .10f);
+                                if (recovery > 0) wave.attacker.Heal(recovery);
+                            }
                         }
                         else enemy.TakeHit(damage, wave.direction, wave.settings.knockback, !wave.normalAttack);
-                        if (!wave.notified)
+                        if (landed && wave.stunDuration > 0) enemy.Stun(wave.stunDuration);
+                        if (landed && !wave.notified)
                         {
                             wave.notified = true;
                             if (wave.normalAttackOwner != null) wave.normalAttackOwner.OnSwordTideHit();

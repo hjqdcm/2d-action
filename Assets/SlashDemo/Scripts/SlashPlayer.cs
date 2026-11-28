@@ -116,7 +116,10 @@ namespace SlashDemo
         public int LastReleasedGangQi { get; private set; }
         public bool IronBodyActive => HasIronSword && ironBodyLeft > 0;
         public float IronBodyTimeLeft => IronBodyActive ? ironBodyLeft : 0;
-        public float IronChargeSpeed => IronSword.ChargeSpeed(Realm, IronBodyActive);
+        public float IronChargeSpeed => IronSword.ChargeSpeed(Realm, IronBodyActive) * IronScriptureChargeRate;
+        float IronScriptureChargeRate => HasScripture(ScriptureArt.IronCharge) ? 1.15f : 1;
+        internal float IronBodyDamageReduction => Mathf.Min(.95f,
+            IronSword.bodyDamageReduction + (HasScripture(ScriptureArt.IronGuard) ? .10f : 0));
         public SlashTuningSettings.FlowingCloudSettings FlowingCloud { get; private set; } = new SlashTuningSettings.FlowingCloudSettings();
         readonly FlowingCloudCombo techniqueCombo = new FlowingCloudCombo();
         readonly FlowingCloudRebuildReward rebuildReward = new FlowingCloudRebuildReward();
@@ -124,13 +127,16 @@ namespace SlashDemo
         public int ComboStacks => techniqueCombo.Stacks;
         public float ComboStackTimeLeft => techniqueCombo.StackTimeLeft(Time.time);
         public float ComboDamageBonus => HasFlowingCloud ? techniqueCombo.DamageMultiplier(Realm) - 1 : 0;
-        public float NormalAttackSpeedMultiplier => (HasFlowingCloud ? techniqueCombo.AttackSpeedMultiplier(Realm) : 1)
+        float NormalAttackSpeedBeforeSeal => (HasFlowingCloud ? techniqueCombo.AttackSpeedMultiplier(Realm) : 1)
             * (1 + AlchemyBonus(AlchemyStat.AttackSpeed));
+        public float NormalAttackSpeedMultiplier => NormalAttackSpeedBeforeSeal * SealSlowRate;
         public float NormalAttackMoveSpeedMultiplier => AttackMoveMultiplier
             * (HasFlowingCloud ? techniqueCombo.AttackMoveSpeedMultiplier(Realm) : 1);
-        internal float WalkingSpeed => moveSpeed * (1 + AlchemyBonus(AlchemyStat.Move))
-            * ((arena?.Travel?.ChallengeSlowRemaining ?? 0) > 0
-            ? AscensionCultivator.SealSlowMultiplier : 1);
+        float SealSlowRemaining => arena?.Travel?.ChallengeSlowRemaining ?? 0;
+        float SealSlowRate => SealSlowRemaining > 0 ? AscensionCultivator.SealSlowMultiplier : 1;
+        internal float WalkingSpeed => moveSpeed * (1 + AlchemyBonus(AlchemyStat.Move)) * SealSlowRate
+            * (ComboStacks >= FlowingCloud.maxStacks && HasScripture(ScriptureArt.CloudMovement) ? 1.10f : 1);
+        internal float HeavyChargeSpeed => (HasIronSword ? IronChargeSpeed : 1) * SealSlowRate;
         readonly PillEffects pillEffects = new PillEffects();
         readonly TreasureEffects treasureEffects = new TreasureEffects();
         TreasureAttack swingTreasureAttack;
@@ -183,14 +189,22 @@ namespace SlashDemo
         }
         internal IReadOnlyDictionary<AlchemyEntry, double> ActivePills => pillEffects.Active;
 
+        bool HasScripture(ScriptureArt art) => arena?.Resources.Scripture.Has(Technique, Realm, art) == true;
+
+        internal void ApplyScripture()
+        {
+            techniqueCombo.StackDuration = HasScripture(ScriptureArt.CloudDuration) ? 3 : FlowingCloudRules.StackDuration;
+            techniqueCombo.ScriptureAttackSpeed = HasScripture(ScriptureArt.CloudAttackSpeed) ? .03f : 0;
+        }
+
         public void CollectBuffs(CombatBuffBar buffs)
         {
             buffs.Clear();
             if (!IsAlive) return;
-            float sealSlow = arena?.Travel?.ChallengeSlowRemaining ?? 0;
+            float sealSlow = SealSlowRemaining;
             if (sealSlow > 0)
                 buffs.AddOrUpdate(new CombatBuffView("ascension-seal-slow", "符缚", 1,
-                    description: "移速降低 35%，与普攻移速倍率相乘。减速期间不会叠加符印。",
+                    description: "移速、普攻速度和重击蓄力速度降低 30%。减速期间不会叠加符印。",
                     timeLeft: sealSlow, duration: AscensionCultivator.SealSlowDuration));
             if (GangQiStacks > 0)
                 buffs.AddOrUpdate(new CombatBuffView("iron-sword-gangqi", "罡气", GangQiStacks,
@@ -201,7 +215,7 @@ namespace SlashDemo
             if (IronBodyActive)
                 buffs.AddOrUpdate(new CombatBuffView("iron-sword-body", "剑罡护体", 1,
                     iconResource: "SlashDemo/IronSwordActiveIcon", description:
-                    "蓄力不被受击打断，受到伤害减少 " + (IronSword.bodyDamageReduction * 100).ToString("0")
+                    "蓄力不被受击打断，受到伤害减少 " + (IronBodyDamageReduction * 100).ToString("0")
                     + "%，蓄力速度提升 " + (IronSword.bodyChargeBonus * 100).ToString("0")
                     + "%，重击伤害提升 " + (IronSword.bodyHeavyBonus * 100).ToString("0") + "%。",
                     timeLeft: ironBodyLeft, duration: IronSword.bodyDuration));
@@ -210,10 +224,11 @@ namespace SlashDemo
                 string effects = "每层叠浪使普攻伤害提高" + (FlowingCloud.stackBonus * 100).ToString("0.#")
                     + "%、普攻移速提高" + (FlowingCloudRules.AttackMoveSpeedPerStack * 100).ToString("0.#") + "%";
                 if (Realm >= CultivationRealm.FoundationEstablishment)
-                    effects += "、普攻攻速提升" + (FlowingCloud.attackSpeedPerStack * 100).ToString("0.#") + "%";
+                    effects += "、普攻攻速提升" + (techniqueCombo.AttackSpeedPerStack * 100).ToString("0.#") + "%";
                 effects += "，叠满5层时，额外提升" + (FlowingCloudRules.FullStackDamageBonus * 100).ToString("0.#") + "%的普攻伤害";
+                if (HasScripture(ScriptureArt.CloudMovement)) effects += "，满层时移速额外提高10%";
                 buffs.AddOrUpdate(new CombatBuffView("flowing-cloud-stacks", "叠浪", ComboStacks,
-                    "SlashDemo/FlowingCloudBuffIcon", effects, ComboStackTimeLeft, FlowingCloudRules.StackDuration));
+                    "SlashDemo/FlowingCloudBuffIcon", effects, ComboStackTimeLeft, techniqueCombo.StackDuration));
             }
             foreach (var pill in ActivePills)
             {
@@ -356,7 +371,8 @@ namespace SlashDemo
             dashCooldownLeft = Mathf.Max(0, dashCooldownLeft - dt);
             invulnerability = Mathf.Max(0, invulnerability - dt);
             flash = Mathf.Max(0, flash - dt);
-            comboRecoveryLeft = Mathf.Max(0, comboRecoveryLeft - dt);
+            float sealRate = SealSlowRate;
+            comboRecoveryLeft = Mathf.Max(0, comboRecoveryLeft - dt * sealRate);
             techniqueCooldownLeft = Mathf.Max(0, techniqueCooldownLeft - dt);
             ironCooldownLeft = Mathf.Max(0, ironCooldownLeft - dt);
             ironBodyLeft = Mathf.Max(0, ironBodyLeft - dt);
@@ -420,7 +436,8 @@ namespace SlashDemo
                     if (IsAttacking && equipment.Ready)
                     {
                         float previousAge = attackAge;
-                        attackAge += dt;
+                        float strikeRate = IsTechniqueActive ? 1 : sealRate;
+                        attackAge += dt * strikeRate;
                         float start = CurrentStrike.duration * SwordMotion.SwingStart(CurrentStrike);
                         if (!swingSoundPlayed && attackAge >= start)
                         { arena.Effects.PlaySwing(CurrentStrike.action == SwordAction.WideCleave); swingSoundPlayed = true; }
@@ -428,7 +445,7 @@ namespace SlashDemo
                         else
                         {
                             ResolveHits(previousAge, attackAge);
-                            RecordTrail(previousAge, attackAge);
+                            RecordTrail(previousAge, attackAge, strikeRate);
                         }
                         previousAttackOrigin = body.position;
                         if (attackAge >= CurrentStrike.duration && (!IsTechniqueActive || skillRushFinished)
@@ -535,7 +552,9 @@ namespace SlashDemo
             attackAim = direction.sqrMagnitude < 0.001f ? Aim : direction.normalized;
             attackAge = 0;
             activeStrike = ComboIndex == 3
-                ? new Strike(FlowingCloud.pursuitDamage, FlowingCloud.pursuitReach, 210, FlowingCloud.pursuitDuration, FlowingCloud.pursuitKnockback,
+                ? new Strike(FlowingCloud.pursuitDamage,
+                    FlowingCloud.pursuitReach * (HasScripture(ScriptureArt.CloudWhirlwindRange) ? 1.25f : 1),
+                    210, FlowingCloud.pursuitDuration, FlowingCloud.pursuitKnockback,
                     SwordAction.SpinCleave, 0.16f, 0.46f, 0, 0.12f)
                 : strikes[Mathf.Min(ComboIndex, strikes.Length - 1)].Clone();
             swingBaseDamage = activeStrike.damage;
@@ -545,7 +564,7 @@ namespace SlashDemo
             activeStrike.damage = Mathf.RoundToInt(activeStrike.damage * techniqueCombo.DamageMultiplier(Realm));
             // Snapshot existing layers at attack start; speed changes the whole normal swing and recovery.
             // The fourth normal strike shares the modifier; Q's copied third strike does not.
-            normalStrikeSpeed = NormalAttackSpeedMultiplier;
+            normalStrikeSpeed = NormalAttackSpeedBeforeSeal;
             activeStrike.duration /= normalStrikeSpeed;
             techniqueCombo.BeginStrike();
             whirlwindEmitted = false;
@@ -800,6 +819,9 @@ namespace SlashDemo
             if (ironHeavy) chargedSettings.chargeTime *= 1 - treasureEffects.ConsumeChargeReduction();
             chargedIronSettings = IronSword.Clone();
             chargedIronRealm = Realm;
+            if (HasScripture(ScriptureArt.IronScarDuration)) chargedIronSettings.scarDuration += .5f;
+            if (HasScripture(ScriptureArt.IronScarTicks)) chargedIronSettings.scarTickDamageRatio += .05f;
+            if (HasScripture(ScriptureArt.IronMarkedHit)) chargedIronSettings.scarHeavyBonus += ScriptureStudy.IronMarkedHitBonus;
             if (!heavyState.Begin(chargedSettings.chargeTime, chargedSettings.recoveryTime)) return false;
             chargeReadyFeedback = false;
             queued = false;
@@ -822,6 +844,9 @@ namespace SlashDemo
             {
                 LastReleasedGangQi = IronSwordRules.Stacks(ChargeProgress);
                 chargedSettings = chargedIronSettings.Release(chargedSettings, LastReleasedGangQi, chargedIronRealm, IronBodyActive);
+                if (HasScripture(ScriptureArt.IronDamage)) chargedSettings.damage = Mathf.RoundToInt(chargedSettings.damage * 1.15f);
+                if (LastReleasedGangQi >= IronSwordRules.EmpoweredStacks && HasScripture(ScriptureArt.IronWidth))
+                    chargedSettings.width *= 1.20f;
             }
             fullHeavyRelease = heavyState.Ready;
             bool fire = heavyState.Release(ironHeavy);
@@ -855,8 +880,8 @@ namespace SlashDemo
                 handled |= RequestHeavyAttack();
             }
             float chargeSpeed = ironHeavy && IsCharging
-                ? chargedIronSettings.ChargeSpeed(chargedIronRealm, IronBodyActive) : 1;
-            heavyState.Advance(dt * chargeSpeed);
+                ? chargedIronSettings.ChargeSpeed(chargedIronRealm, IronBodyActive) * IronScriptureChargeRate : 1;
+            heavyState.Advance(dt * chargeSpeed * SealSlowRate);
             if (heavyRelease.Active)
             {
                 float previous = heavyRelease.Age;
@@ -897,11 +922,12 @@ namespace SlashDemo
                 && chargedIronRealm >= CultivationRealm.GoldenCore;
             bool crushing = ironHeavy && chargedIronRealm >= CultivationRealm.NascentSoul;
             bool fullIron = ironHeavy && fullHeavyRelease;
+            float stunDuration = fullIron && HasScripture(ScriptureArt.IronStun) ? ScriptureStudy.IronStunDuration : 0;
             var treasureAttack = BeginTreasureAttack(PlayerAttackKind.Heavy, chargedSettings.damage, fullHeavyRelease, fullIron);
             arena.Effects.LaunchAlchemySwordWave(origin, heavyAim, chargedSettings, heavyOwner: ironHeavy ? this : null,
                 scarHeavyBonus: crushing ? chargedIronSettings.scarHeavyBonus : 0,
                 scarSettings: scar ? chargedIronSettings : null, scarExplodes: crushing, attacker: this,
-                treasureAttack: treasureAttack);
+                treasureAttack: treasureAttack, stunDuration: stunDuration);
             arena.Effects.PlaySwing(true);
             TotalSwordWaves++;
             if (fullIron) Ultimate?.RecordQualification();
@@ -953,7 +979,7 @@ namespace SlashDemo
                     IsTechniqueActive ? PlayerAttackKind.Technique : PlayerAttackKind.Normal,
                     treasureAttack: swingTreasureAttack, baseDamage: swingBaseDamage);
                 if (landed && IsTechniqueFinisher) treasureFinisherHit = true;
-                if (!IsTechniqueActive) RegisterTechniqueHit(ComboIndex);
+                if (landed && !IsTechniqueActive) RegisterTechniqueHit(ComboIndex);
                 arena.Effects.HitStop(strike.action == SwordAction.WideCleave ? 0.045f : 0.033f);
                 arena.CameraRig.Shake(strike.action == SwordAction.WideCleave ? .018f : SwordHitShake);
             }
@@ -962,13 +988,22 @@ namespace SlashDemo
         void OnWhirlwindHit()
         {
             RegisterTechniqueHit(3);
+            if (HasScripture(ScriptureArt.CloudWhirlwindCooldown))
+                techniqueCooldownLeft = Mathf.Max(0, techniqueCooldownLeft - .5f);
             arena.CameraRig.Shake(SwordHitShake);
             if (Realm >= CultivationRealm.NascentSoul)
             {
                 var wave = heavyAttack.Clone();
                 wave.damage = Mathf.RoundToInt(wave.damage * techniqueCombo.DamageMultiplier(Realm));
-                arena.Effects.LaunchSwordWave(body.position + attackAim * 0.4f, attackAim, wave, this);
+                Vector2 origin = body.position + attackAim * 0.4f;
+                arena.Effects.LaunchAlchemySwordWave(origin, attackAim, wave, normalAttackOwner: this,
+                    swordTideHealing: HasScripture(ScriptureArt.CloudWaveHealing));
                 TotalSwordWaves++;
+                if (HasScripture(ScriptureArt.CloudDoubleWave))
+                {
+                    arena.Effects.LaunchAlchemySwordWave(origin, attackAim, wave, normalAttackOwner: this, delay: .14f);
+                    TotalSwordWaves++;
+                }
             }
         }
 
@@ -985,7 +1020,9 @@ namespace SlashDemo
         {
             if (!HasFlowingCloud) return;
             int previous = ComboStacks;
-            if (techniqueCombo.RegisterHit(segment, Time.time, Realm)) ApplyRebuildReward(previous);
+            int last = Realm >= CultivationRealm.GoldenCore ? 3 : 2;
+            int extra = segment == last && HasScripture(ScriptureArt.CloudLastHit) ? 1 : 0;
+            if (techniqueCombo.RegisterHit(segment, Time.time, Realm, extra)) ApplyRebuildReward(previous);
         }
 
         void ApplyRebuildReward(int previous)
@@ -1108,13 +1145,16 @@ namespace SlashDemo
             return bonus > 0 ? Mathf.RoundToInt(damage * (1 + bonus)) : damage;
         }
 
-        enum DamageKind { Hit, Poison, BloodMist, Tribulation }
+        enum DamageKind { Hit, Poison, BloodMist, Tribulation, SpellDamageOverTime }
 
         public bool TakeDamage(int damage, Vector2 direction)
             => ApplyDamage(damage, direction, DamageKind.Hit);
 
         internal bool TakeChallengeDamage(int damage, Vector2 direction, SlashEnemy opponent)
             => ApplyDamage(damage, direction, DamageKind.Hit, opponent);
+
+        internal void TakeChallengeDamageOverTime(int damage, SlashEnemy opponent)
+            => ApplyDamage(damage, Vector2.zero, DamageKind.SpellDamageOverTime, opponent);
 
         public bool TakePoisonDamage(int damage)
             => ApplyDamage(damage, Vector2.zero, DamageKind.Poison);
@@ -1132,13 +1172,15 @@ namespace SlashDemo
             if (!tribulation && (treasureEffects.Invulnerable || IsUltimateActive
                 || (kind == DamageKind.Hit && invulnerability > 0) || IsDashing
                 || (HasFlowingCloud && IsTechniqueActive))) return false;
-            bool mist = kind == DamageKind.BloodMist;
+            bool spellDamageOverTime = kind == DamageKind.SpellDamageOverTime;
+            bool quietDamage = kind == DamageKind.BloodMist || spellDamageOverTime;
             bool protectedCharge = IronBodyActive && IsCharging;
-            if (!tribulation && IronBodyActive)
-                damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1 - IronSword.bodyDamageReduction)));
+            if (!tribulation && !spellDamageOverTime && IronBodyActive)
+                damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1 - IronBodyDamageReduction)));
             if (!tribulation && damage > 0)
             {
-                float damageMultiplier = (1 - AlchemyDamageReduction) * treasureEffects.ConsumeDamageGuard();
+                // Spell damage over time already starts from an impact's damage after mitigation.
+                float damageMultiplier = spellDamageOverTime ? 1 : (1 - AlchemyDamageReduction) * treasureEffects.ConsumeDamageGuard();
                 if (kind != DamageKind.Hit) damageMultiplier *= 1 - AlchemyReduction(AlchemyStat.DotReduction);
                 damage = treasureEffects.AbsorbDamage(Mathf.Max(1, Mathf.RoundToInt(damage * damageMultiplier)));
                 if (damage == 0) return true;
@@ -1150,13 +1192,13 @@ namespace SlashDemo
             bool lethal = !IsAlive;
             if (!lethal && damage > 0)
                 treasureEffects.OnHurt(previousHealth, Health, EffectiveMaxHealth);
-            if (!protectedCharge && (!mist || lethal))
+            if (!protectedCharge && (!quietDamage || lethal))
             {
                 InterruptCombo(lethal ? StackInterruption.Clear : StackInterruption.Preserve);
                 CancelHeavyAttack();
             }
             if (kind == DamageKind.Hit) invulnerability = 0.8f;
-            if (!mist || lethal)
+            if (!quietDamage || lethal)
             {
                 flash = 0.1f;
                 recoil = protectedCharge ? Vector2.zero : direction.normalized * 5;
@@ -1168,7 +1210,7 @@ namespace SlashDemo
                 Teleport(body.position);
                 arena.FinishPotionBattle();
             }
-            if (damage > 0 && (!mist || lethal))
+            if (damage > 0 && (!quietDamage || lethal))
             {
                 Color impactColor = kind == DamageKind.Poison ? new Color(.65f, .86f, .27f) : DemoArt.Red;
                 arena.Effects.DamageImpact(presentation, direction, impactColor, lethal: lethal);
@@ -1230,8 +1272,10 @@ namespace SlashDemo
             {
                 rebuildReward.Clear(); InterruptCombo(); CancelHeavyAttack(); ironBodyLeft = 0;
                 if (arena != null && arena.Effects != null) arena.Effects.ClearSwordScars(this);
+                Realm = next;
+                arena?.Resources.Scripture.RecordRealm(next);
+                ApplyScripture();
             }
-            Realm = next;
         }
 
         public void ResetRealm() => SetRealm(CultivationRealm.QiRefining);
@@ -1247,6 +1291,7 @@ namespace SlashDemo
                 if (arena != null && arena.Effects != null)
                 { arena.Effects.ClearSwordWaves(); arena.Effects.ClearSwordScars(this); }
                 Technique = technique;
+                ApplyScripture();
             }
             if (save) { PlayerPrefs.SetString(TechniqueSaveKey, technique.id); PlayerPrefs.Save(); }
             return true;
@@ -1390,7 +1435,7 @@ namespace SlashDemo
             sprite.transform.localScale = new Vector3(direction.magnitude, width, 1);
         }
 
-        void RecordTrail(float previousAge, float currentAge)
+        void RecordTrail(float previousAge, float currentAge, float strikeRate)
         {
             var s = CurrentStrike;
             if (s.action == SwordAction.SpinCleave) return;
@@ -1401,7 +1446,7 @@ namespace SlashDemo
             for (int i = 0; i <= count; i++)
             {
                 float t = Mathf.Lerp(start, end, i / (float)count);
-                float born = Time.time - (currentAge - t * s.duration);
+                float born = Time.time - (currentAge - t * s.duration) / strikeRate;
                 if (trail.Count > 0 && born <= trail[trail.Count - 1].born + 0.0001f) continue;
                 var pose = SwordMotion.EvaluateAttack(s, t);
                 float rootT = Mathf.InverseLerp(previousAge, currentAge, t * s.duration);

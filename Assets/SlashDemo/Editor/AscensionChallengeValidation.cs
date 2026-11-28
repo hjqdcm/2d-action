@@ -13,7 +13,7 @@ namespace SlashDemo.Editor
     {
         const string Key = "SlashDemo.AscensionChallengeValidation";
         const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
-        static readonly int[] Health = { 660, 528, 495, 572 };
+        static readonly int[] Health = { 858, 686, 644, 744 };
         static readonly float[] Damage = { 1, 1.08f, 1.42f, .84f };
         static readonly float[] Speed = { 3.55f, 4.50f * 1.05f, 3.05f, 3.45f };
         static readonly float[] Reach = { 1.25f, 1.58f, 2.48f, 3.05f };
@@ -24,7 +24,7 @@ namespace SlashDemo.Editor
             new[] { "落星诀", "玄霜带", "三星连落", "引星涡" },
             new[] { "爆炎符", "双生符", "四门封阵", "封路结界" }
         };
-        static readonly int[,] FirstRoundSkillDamage = { { 12, 14, 18 }, { 13, 16, 23 }, { 17, 20, 22 }, { 10, 13, 20 } };
+        static readonly float[,] SkillDamage = { { 1, 1.17f, 1.5f }, { 1, 1.24f, 1.76f }, { 1, 1.18f, 1.28f }, { 1, 1.30f, 1.98f } };
         static readonly bool[] Seen = new bool[4];
         static readonly MethodInfo TickCombat = typeof(AscensionCultivator).GetMethod("Tick", Private);
         static readonly MethodInfo StopCombat = typeof(AscensionCultivator).GetMethod("Stop", Private);
@@ -33,6 +33,7 @@ namespace SlashDemo.Editor
         static readonly MethodInfo FixedPlayer = typeof(SlashPlayer).GetMethod("FixedUpdate", Private);
         static readonly FieldInfo PlayerMove = typeof(SlashPlayer).GetField("move", Private);
         static readonly PropertyInfo SealSlowRemaining = typeof(AscensionCultivator).GetProperty("SealSlowRemaining", Private);
+        static readonly PropertyInfo HeavyChargeSpeed = typeof(SlashPlayer).GetProperty("HeavyChargeSpeed", Private);
         static readonly FieldInfo Cooldowns = typeof(AscensionCultivator).GetField("cooldowns", Private);
         static readonly FieldInfo PrepareTime = typeof(AscensionCultivator).GetField("prepareTime", Private);
         static readonly FieldInfo CastWindup = typeof(AscensionCultivator).GetField("castWindup", Private);
@@ -76,6 +77,14 @@ namespace SlashDemo.Editor
             queue.Invoke(null, new object[] { new Event { type = type, button = 0, mousePosition = click } });
         }
 
+        static int ExpectedDamage(int path, int challengeRound, float skillMultiplier = 1)
+        {
+            float pathBoost = path == (int)AscensionCultivator.Path.Body ? 1.6f : 1.3f;
+            float baseDamage = arena.Tuning.Settings.enemyDamage * Damage[path] * pathBoost;
+            int firstRoundDamage = Mathf.RoundToInt(baseDamage * skillMultiplier);
+            return Mathf.RoundToInt(firstRoundDamage * Mathf.Pow(1.2f, challengeRound - 1));
+        }
+
         static AscensionCultivator CheckOpponent(int expectedRound)
         {
             var travel = arena.Travel;
@@ -89,9 +98,9 @@ namespace SlashDemo.Editor
                 && enemy.transform.Find("Visual/Cultivator art").GetComponent<SpriteRenderer>().sprite.texture.name.EndsWith("Cultivator-v1"),
                 "Cultivator art is missing.");
             var settings = arena.Tuning.Settings;
-            float multiplier = Mathf.Pow(1.1f, expectedRound - 1);
+            float multiplier = Mathf.Pow(1.2f, expectedRound - 1);
             int hp = Mathf.RoundToInt(Mathf.RoundToInt(Health[path] * settings.enemyHealthMultiplier) * multiplier);
-            int damage = Mathf.RoundToInt(Mathf.RoundToInt(settings.enemyDamage * Damage[path]) * multiplier);
+            int damage = ExpectedDamage(path, expectedRound);
             arena.Tuning.ApplyEnemy(enemy);
             Check(enemy.Health == hp && enemy.maxHealth == hp && enemy.damage == damage, "Round strength did not apply or multiplied again on tuning.");
             Check(Mathf.Abs(enemy.moveSpeed - Speed[path] * settings.enemySpeedMultiplier) < .001f, "Round strength modified movement speed.");
@@ -115,6 +124,22 @@ namespace SlashDemo.Editor
             var entry = map.Definition.entry;
             Check(Vector2.Distance(player.transform.position, ManorEnvironment.Ground(entry.x, entry.y) * .75f) < .001f,
                 "The player did not spawn at the scaled platform entrance.");
+            VerifyStairGate(closed: true);
+        }
+
+        static void VerifyStairGate(bool closed)
+        {
+            var map = arena.Travel.ActiveMap;
+            Vector2 entry = map.Definition.Entry;
+            Vector2 stairs = map.Definition.Ground(755, 800);
+            Vector2 path = stairs - entry;
+            float radius = player.GetComponent<CircleCollider2D>().radius;
+            bool blocked = false;
+            Physics2D.SyncTransforms();
+            foreach (var hit in Physics2D.CircleCastAll(entry, radius, path.normalized, path.magnitude))
+                blocked |= !hit.collider.isTrigger && hit.collider.transform.IsChildOf(map.transform)
+                    && hit.collider.GetComponentInParent<SlashEnemy>() == null;
+            Check(blocked == closed, "The stairs must be blocked during the challenge and open after settlement.");
         }
 
         static void VerifyDefense(AscensionCultivator cultivator)
@@ -206,13 +231,17 @@ namespace SlashDemo.Editor
                     ReadyOnly(cultivator, skill);
                     BeginTelegraph(cultivator);
                     string name = SkillNames[path][skill];
-                    int waves = skill != 2 ? 1 : path == 0 ? 2 : path == 2 ? 3 : 1;
+                    bool expanding = path == (int)AscensionCultivator.Path.Spell && skill == 2;
+                    int waves = skill != 2 ? 1 : expanding ? 3 : path == 0 ? 2 : 1;
                     for (int wave = 0; wave < waves; wave++)
                     {
-                        Check(cultivator.CastingSkill == name && cultivator.CastingUltimate == (skill == 2)
-                            && warning.gameObject.activeInHierarchy && !enemy.IsChasing, name + " did not telegraph.");
-                        var lines = Array.FindAll(warning.GetComponentsInChildren<LineRenderer>(), line => line.enabled);
-                        bool expanding = path == (int)AscensionCultivator.Path.Spell && skill == 2;
+                        bool detached = expanding && wave > 0;
+                        var waveWarning = detached ? FindDetachedMeteorWarning(warning.parent) : warning;
+                        Check(waveWarning != null && waveWarning.gameObject.activeInHierarchy, name + " did not telegraph.");
+                        if (!detached)
+                            Check(cultivator.CastingSkill == name && cultivator.CastingUltimate == (skill == 2)
+                                && !enemy.IsChasing, name + " did not enter a casting phase.");
+                        var lines = Array.FindAll(waveWarning.GetComponentsInChildren<LineRenderer>(), line => line.enabled);
                         int outlines = path == 3 && skill == 2 ? 4 : expanding || (path == 1 && skill == 2)
                             || (path == 3 && skill == 1) || (path == 0 && wave == 1) ? 2 : 1;
                         Check(lines.Length == outlines, name + " drew the wrong number of warning outlines.");
@@ -225,9 +254,11 @@ namespace SlashDemo.Editor
                         if (path == 3 && skill == 2) hitPoint = inRange; // Overlapping seals only deal damage once.
                         PlayerInvulnerability.SetValue(player, 0f);
                         int health = player.Health;
-                        float windup = (float)CastWindup.GetValue(cultivator);
+                        float windup = detached ? Mathf.Max(.55f, enemy.windupTime * 1.20f) : (float)CastWindup.GetValue(cultivator);
                         if (expanding)
                         {
+                            bool testOverlap = wave == 2 && pass == 1;
+                            if (testOverlap) ReadyOnly(cultivator, 3);
                             const float LockedTime = .5f;
                             var inner = lines[1];
                             float outerRadius = Vector2.Distance(start, hitPoint);
@@ -260,17 +291,30 @@ namespace SlashDemo.Editor
                             float nearRadius = Vector2.Distance(inner.GetPosition(0), hitPoint);
                             Check((Vector2)first.GetPosition(0) == start
                                 && nearRadius > outerRadius * .98f && nearRadius < outerRadius
-                                && player.Health == health && cultivator.CastingSkill == name,
+                                && player.Health == health && (detached || cultivator.CastingSkill == name),
                                 "The outer circle moved or the strike resolved before contact.");
+                            if (testOverlap)
+                                Check(cultivator.CastingSkill == SkillNames[path][3] && warning.gameObject.activeSelf,
+                                    "The spell cultivator could not start a separate cast while the last meteor was pending.");
                             TickCombat.Invoke(cultivator, new object[] { .02f });
+                            if (wave == 0)
+                                Check(cultivator.CastingSkill == null && !warning.gameObject.activeSelf
+                                    && FindDetachedMeteorWarning(warning.parent) != null,
+                                    "The first meteor did not detach the remaining two strikes.");
+                            if (testOverlap)
+                            {
+                                Check(FindDetachedMeteorWarning(warning.parent) == null
+                                    && cultivator.CastingSkill == SkillNames[path][3] && warning.gameObject.activeSelf,
+                                    "The last detached meteor interfered with the new cast.");
+                                StopCombat.Invoke(cultivator, null);
+                            }
                         }
                         else
                         {
                             player.Teleport(pass == 1 ? hitPoint : ring ? origin : hitPoint + Vector2.up * 10);
                             TickCombat.Invoke(cultivator, new object[] { windup + .01f });
                         }
-                        float multiplier = Mathf.Pow(1.1f, arena.Travel.ChallengeRound - 1);
-                        int expected = pass == 1 ? Mathf.RoundToInt(FirstRoundSkillDamage[path, skill] * multiplier) : 0;
+                        int expected = pass == 1 ? ExpectedDamage(path, arena.Travel.ChallengeRound, SkillDamage[path, skill]) : 0;
                         Check(player.Health == health - expected,
                             $"{name} wave {wave + 1} dealt {health - player.Health} damage, expected {expected}.");
                         if (path == 3 && pass == 1)
@@ -285,6 +329,13 @@ namespace SlashDemo.Editor
             }
             StopCombat.Invoke(cultivator, null);
             Debug.Log("ASCENSION_SKILLS_PASS: " + cultivator.CultivationPath + " (" + string.Join(", ", SkillNames[path]) + ")");
+        }
+
+        static Transform FindDetachedMeteorWarning(Transform groundMarks)
+        {
+            foreach (Transform child in groundMarks)
+                if (child.name == "Detached meteor warning" && child.gameObject.activeSelf) return child;
+            return null;
         }
 
         static void VerifyAttack(AscensionCultivator cultivator)
@@ -328,8 +379,10 @@ namespace SlashDemo.Editor
             player.Teleport(inRange);
             PlayerMove.SetValue(player, Vector2.right);
             FixedPlayer.Invoke(player, null);
-            float slowedSpeed = player.moveSpeed * .65f;
-            Check(Mathf.Abs(body.linearVelocity.x - slowedSpeed) < .001f, "The marks did not slow walking by 35%.");
+            float slowedSpeed = player.moveSpeed * .70f;
+            Check(Mathf.Abs(body.linearVelocity.x - slowedSpeed) < .001f, "The marks did not slow walking by 30%.");
+            float slowedAttack = player.NormalAttackSpeedMultiplier;
+            float slowedCharge = (float)HeavyChargeSpeed.GetValue(player);
             Check(player.RequestAttack(Vector2.left), "Could not start an attack while slowed.");
             float expected = slowedSpeed * player.NormalAttackMoveSpeedMultiplier;
             Check(Mathf.Abs(body.linearVelocity.x - expected) < .001f, "The slow and attack movement were not multiplied at attack start.");
@@ -353,6 +406,10 @@ namespace SlashDemo.Editor
             PlayerMove.SetValue(player, Vector2.right);
             FixedPlayer.Invoke(player, null);
             Check(Mathf.Abs(body.linearVelocity.x - player.moveSpeed) < .001f, "Walking speed did not recover after the slow.");
+            Check(Mathf.Abs(slowedAttack - player.NormalAttackSpeedMultiplier * .70f) < .001f,
+                "The slow did not reduce normal attack speed by 30%.");
+            Check(Mathf.Abs(slowedCharge - (float)HeavyChargeSpeed.GetValue(player) * .70f) < .001f,
+                "The slow did not reduce heavy charge speed by 30%.");
             player.Teleport(inRange);
             Debug.Log("ASCENSION_SEAL_SLOW_PASS: walk and attack multipliers, no stacks during the slow, timed recovery.");
         }
@@ -422,6 +479,7 @@ namespace SlashDemo.Editor
                         Check(cooldowns[i] == remaining[i] * .5f, "The spell passive reduced a cooldown twice.");
                     TickCombat.Invoke(cultivator, new object[] { .56f });
                     Check(!aura.enabled, "The blink aura did not expire.");
+                    VerifyBlinkDamage(cultivator, enemy);
                     break;
                 case AscensionCultivator.Path.Talisman:
                     // VerifyAttack ends with one valid hit, after separately testing a dodge.
@@ -433,6 +491,35 @@ namespace SlashDemo.Editor
                     break;
             }
             Debug.Log("ASCENSION_PASSIVE_PASS: " + cultivator.CultivationPath + " · " + cultivator.PassiveBuff.name);
+        }
+
+        static void VerifyBlinkDamage(AscensionCultivator cultivator, SlashEnemy enemy)
+        {
+            StopCombat.Invoke(cultivator, null);
+            player.Teleport((Vector2)enemy.transform.position + Vector2.right * (enemy.attackRange * .60f));
+            PlayerInvulnerability.SetValue(player, 0f);
+            int health = player.Health;
+            ReadyOnly(cultivator, 0);
+            BeginTelegraph(cultivator);
+            ResolveWindup(cultivator);
+            int impact = health - player.Health;
+            Check(impact == ExpectedDamage((int)AscensionCultivator.Path.Spell, arena.Travel.ChallengeRound),
+                "Blink damage changed the direct hit.");
+            ReadyOnly(cultivator, -1);
+
+            int total = Mathf.RoundToInt(impact * .30f);
+            TickCombat.Invoke(cultivator, new object[] { .49f });
+            Check(player.Health == health - impact, "Blink damage activated before the first half-second elapsed.");
+            for (int tick = 1; tick <= 6; tick++)
+            {
+                TickCombat.Invoke(cultivator, new object[] { tick == 1 ? .02f : .5f });
+                Check(player.Health == health - impact - total * tick / 6,
+                    "Blink damage did not apply the expected share on tick " + tick + ".");
+            }
+            TickCombat.Invoke(cultivator, new object[] { .5f });
+            Check(player.Health == health - impact - total, "Blink damage continued after three seconds.");
+            player.Heal(health - player.Health);
+            StopCombat.Invoke(cultivator, null);
         }
 
         static void VerifyMeleeMovement(AscensionCultivator cultivator, SlashEnemy enemy)
@@ -518,8 +605,7 @@ namespace SlashDemo.Editor
                         for (int i = 0; i < 4; i++) enemy.TakeHit(20, Vector2.right, 0);
                         Check(enemy.Health == before - 40, "The stance did not halve incoming damage.");
                         ResolveWindup(cultivator);
-                        int chargedDamage = Mathf.RoundToInt(Mathf.RoundToInt(arena.Tuning.Settings.enemyDamage * .85f * 1.9f)
-                            * Mathf.Pow(1.1f, round - 1));
+                        int chargedDamage = ExpectedDamage((int)AscensionCultivator.Path.Body, round, .85f * 1.9f);
                         Check(player.Health == health - chargedDamage, "The stance did not discharge its capped charge.");
                         Check((int)LinkedSkill.Invoke(cultivator, new object[] { 3, Vector2.right }) == 1
                             && (int)LinkedSkill.Invoke(cultivator, new object[] { 1, Vector2.right }) == -1,
@@ -739,6 +825,7 @@ namespace SlashDemo.Editor
         static void ClaimSettlementLoot(int wins)
         {
             var travel = arena.Travel;
+            VerifyStairGate(closed: false);
             var assembly = typeof(SlashArena).Assembly;
             var bonusMethod = typeof(SlashPlayer).GetMethod("AlchemyBonus", Private);
             object ultimateDamage = Enum.Parse(assembly.GetType("SlashDemo.AlchemyStat"), "UltimateDamage");
@@ -880,6 +967,7 @@ namespace SlashDemo.Editor
                         else if (round < 4)
                         {
                             arena.Travel.ResolveChallenge(true);
+                            VerifyStairGate(closed: true);
                             Check(!defeated.gameObject.activeSelf && !arena.Paused && player.Health == player.maxHealth,
                                 "Continue retained the defeated opponent, pause or missing health.");
                             round++;

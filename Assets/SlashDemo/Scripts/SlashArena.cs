@@ -24,6 +24,8 @@ namespace SlashDemo
         public bool TribulationUnlocked => TribulationFortuneSpent >= TribulationUnlockSpend;
         internal bool FoundationTribulationCleared { get; set; }
         internal bool BloodSaberDefeated { get; private set; }
+        internal CultivationRealm? LastScriptureLibraryRealm { get; set; }
+        internal ScriptureStudy Scripture { get; } = new ScriptureStudy();
         public int ServiceVisits { get; private set; }
         public bool ServicesUnlocked { get; private set; }
         internal IReadOnlyDictionary<AlchemyEntry, int> Pills => pills;
@@ -122,6 +124,8 @@ namespace SlashDemo
             FortuneSpent = ServiceVisits = 0;
             tribulationSpendingBaseline = 0;
             FoundationTribulationCleared = BloodSaberDefeated = false;
+            LastScriptureLibraryRealm = null;
+            Scripture.Reset();
             ServicesUnlocked = FinalBattleEnteredOnExhaustion = false;
         }
 
@@ -328,10 +332,10 @@ namespace SlashDemo
             foreach (Transform child in actors)
             { child.gameObject.SetActive(false); Destroy(child.gameObject); }
             enemies.Clear();
+            Resources.Reset();
             player = CreatePlayer(actors, ManorEnvironment.SpawnPoint, character: character);
             if (Tuning != null) Tuning.ApplyPlayer(player);
             player.EquipTechnique(equipped);
-            Resources.Reset();
             CameraRig.target = player.transform;
             if (practiceMode)
             {
@@ -391,12 +395,12 @@ namespace SlashDemo
             if (Travel != null) Travel.ReturnHome();
             var defeatedPlayer = player;
             defeatedPlayer.gameObject.SetActive(false);
+            Resources.Reset();
             player = CreatePlayer(actors, ManorEnvironment.SpawnPoint, continuous3D, defeatedPlayer.Character);
             if (Tuning != null) Tuning.ApplyPlayer(player);
             // Death resets progression and possessions unless an explicit retention rule is added.
             player.EquipTechnique(TechniqueCatalog.FlowingCloud, true);
             player.ResetRealm();
-            Resources.Reset();
             CombatTime = 0;
             PotionConfigSlot = 0;
             player.Heal(player.maxHealth);

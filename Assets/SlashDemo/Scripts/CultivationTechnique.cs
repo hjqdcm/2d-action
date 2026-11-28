@@ -53,6 +53,84 @@ namespace SlashDemo
         }
     }
 
+    enum ScriptureArt
+    {
+        None,
+        CloudDuration, CloudLastHit, CloudAttackSpeed, CloudMovement,
+        CloudWhirlwindRange, CloudWhirlwindCooldown, CloudDoubleWave, CloudWaveHealing,
+        IronCharge, IronDamage, IronWidth, IronGuard,
+        IronScarDuration, IronScarTicks, IronStun, IronMarkedHit
+    }
+
+    sealed class ScriptureStudy
+    {
+        internal const float IronStunDuration = .20f, IronMarkedHitBonus = .50f;
+
+        static readonly (ScriptureArt Art, string Name, string Description)[,] Options =
+        {
+            { (ScriptureArt.CloudDuration, "久", "叠浪持续时间由 2 秒延长至 3 秒。"), (ScriptureArt.CloudLastHit, "疾", "普攻最后一段命中时额外叠加 1 层叠浪。") },
+            { (ScriptureArt.CloudAttackSpeed, "厉", "每层叠浪的攻速加成由 5% 提升至 8%。"), (ScriptureArt.CloudMovement, "韧", "叠浪满层时，移速额外提高 10%。") },
+            { (ScriptureArt.CloudWhirlwindRange, "扩", "旋风斩半径提高 25%。"), (ScriptureArt.CloudWhirlwindCooldown, "续", "旋风斩首次命中时，流云疾斩冷却缩短 0.5 秒。") },
+            { (ScriptureArt.CloudDoubleWave, "涌", "旋风斩命中后连续发出两道剑气。"), (ScriptureArt.CloudWaveHealing, "噬", "剑潮剑气命中时，回复该次实际伤害 10% 的生命。") },
+            { (ScriptureArt.IronCharge, "凝", "重击蓄力速度提高 15%。"), (ScriptureArt.IronDamage, "锋", "重击剑气伤害提高 15%。") },
+            { (ScriptureArt.IronWidth, "阔", "至少 5 层罡气时，重击剑气额外加宽 20%。"), (ScriptureArt.IronGuard, "固", "剑罡护体的减伤提高 10 个百分点。") },
+            { (ScriptureArt.IronScarDuration, "留", "剑痕持续时间延长 0.5 秒。"), (ScriptureArt.IronScarTicks, "蚀", "剑痕每跳伤害由重击伤害的 10% 提升至 15%。") },
+            { (ScriptureArt.IronStun, "震", $"满层蓄力的重击剑气命中时，晕眩敌人 {IronStunDuration:0.0} 秒。"),
+              (ScriptureArt.IronMarkedHit, "合", $"重击命中剑痕上的敌人时，伤害加成由 50% 提升至 {50 + IronMarkedHitBonus * 100:0}%。") }
+        };
+
+        const int RealmCount = (int)CultivationRealm.NascentSoul + 1;
+        readonly ScriptureArt[] selected = new ScriptureArt[RealmCount * 2];
+        CultivationRealm highestRealm;
+        internal int Resets { get; private set; }
+
+        static int Row(TechniqueDefinition technique, CultivationRealm realm)
+            => (int)realm + (technique == TechniqueCatalog.IronSword ? RealmCount : 0);
+
+        internal static (ScriptureArt Art, string Name, string Description) Option(
+            TechniqueDefinition technique, CultivationRealm realm, int index) => Options[Row(technique, realm), index];
+
+        internal ScriptureArt Selected(TechniqueDefinition technique, CultivationRealm realm) => selected[Row(technique, realm)];
+
+        internal bool CanChoose(TechniqueDefinition technique, CultivationRealm current, CultivationRealm realm, int index)
+        {
+            if ((int)realm < 0 || realm > CultivationRealm.NascentSoul || realm > current || index < 0 || index > 1) return false;
+            var previous = Selected(technique, realm);
+            return previous != Option(technique, realm, index).Art && (previous == ScriptureArt.None || Resets > 0);
+        }
+
+        internal bool TryChoose(TechniqueDefinition technique, CultivationRealm current, CultivationRealm realm, int index)
+        {
+            if (!CanChoose(technique, current, realm, index)) return false;
+            int row = Row(technique, realm);
+            if (selected[row] != ScriptureArt.None) Resets--;
+            selected[row] = Options[row, index].Art;
+            return true;
+        }
+
+        internal bool Has(TechniqueDefinition technique, CultivationRealm current, ScriptureArt art)
+        {
+            int offset = Row(technique, CultivationRealm.QiRefining);
+            for (int i = 0; i <= (int)current; i++)
+                if (selected[offset + i] == art) return true;
+            return false;
+        }
+
+        internal void RecordRealm(CultivationRealm realm)
+        {
+            if (realm <= highestRealm) return;
+            Resets += (int)realm - (int)highestRealm;
+            highestRealm = realm;
+        }
+
+        internal void Reset()
+        {
+            Array.Clear(selected, 0, selected.Length);
+            highestRealm = CultivationRealm.QiRefining;
+            Resets = 0;
+        }
+    }
+
     public static class IronSwordRules
     {
         public const int MaxStacks = 6, EmpoweredStacks = 5;
@@ -103,6 +181,9 @@ namespace SlashDemo
         public bool StrikeHit { get; private set; }
         public float StackUntil { get; private set; } = float.NegativeInfinity;
         float attackSpeed = FlowingCloudRules.AttackSpeedPerStack, bonus = FlowingCloudRules.StackBonus;
+        internal float StackDuration { get; set; } = FlowingCloudRules.StackDuration;
+        internal float ScriptureAttackSpeed { get; set; }
+        internal float AttackSpeedPerStack => attackSpeed + ScriptureAttackSpeed;
         int maxStacks = FlowingCloudRules.MaxStacks;
         public void Configure(SlashTuningSettings.FlowingCloudSettings settings)
         {
@@ -119,7 +200,7 @@ namespace SlashDemo
         public void RefreshStacks(float now)
         {
             ExpireStacks(now);
-            if (Stacks > 0) StackUntil = now + FlowingCloudRules.StackDuration;
+            if (Stacks > 0) StackUntil = now + StackDuration;
         }
         public int ConsumeStacks(float now)
         {
@@ -142,7 +223,7 @@ namespace SlashDemo
         public void ResetSequence() { StrikeHit = false; }
 
         public float AttackSpeedMultiplier(CultivationRealm realm)
-            => realm >= CultivationRealm.FoundationEstablishment ? 1 + attackSpeed * Stacks : 1;
+            => realm >= CultivationRealm.FoundationEstablishment ? 1 + AttackSpeedPerStack * Stacks : 1;
 
         public float AttackMoveSpeedMultiplier(CultivationRealm realm)
             => realm >= CultivationRealm.QiRefining ? 1 + FlowingCloudRules.AttackMoveSpeedPerStack * Stacks : 1;
@@ -152,12 +233,13 @@ namespace SlashDemo
                 ? 1 + bonus * Math.Min(Stacks, maxStacks)
                     + (Stacks == FlowingCloudRules.MaxStacks ? FlowingCloudRules.FullStackDamageBonus : 0) : 1;
 
-        public bool RegisterHit(int segment, float now, CultivationRealm realm)
+        public bool RegisterHit(int segment, float now, CultivationRealm realm, int extraStacks = 0)
         {
             if (StrikeHit) return false;
             ExpireStacks(now);
             StrikeHit = true;
-            AddStacks(now, realm, segment == 3 && realm >= CultivationRealm.GoldenCore ? 2 : 1);
+            int count = segment == 3 && realm >= CultivationRealm.GoldenCore ? 2 : 1;
+            AddStacks(now, realm, count + extraStacks);
             return true;
         }
 
@@ -179,7 +261,7 @@ namespace SlashDemo
             if (realm >= CultivationRealm.QiRefining)
             {
                 Stacks = Math.Min(Stacks + count, maxStacks);
-                StackUntil = now + FlowingCloudRules.StackDuration;
+                StackUntil = now + StackDuration;
             }
         }
 

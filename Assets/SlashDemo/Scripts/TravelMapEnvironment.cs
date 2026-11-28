@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace SlashDemo
 {
-    public enum TravelDestination { Manor, AscensionPlatform, Wilderness, HealingLodge, Market, FinalBattle, Tribulation }
+    public enum TravelDestination { Manor, AscensionPlatform, Wilderness, HealingLodge, Market, FinalBattle, Tribulation, ScriptureLibrary }
 
     // All coordinates use the artwork's 1536 x 1024 reference, like the manor.
     public sealed class TravelMapDefinition
@@ -27,7 +27,7 @@ namespace SlashDemo
         {
             TravelDestination.AscensionPlatform or TravelDestination.HealingLodge => ManorEnvironment.WorldSize * .75f,
             TravelDestination.Wilderness or TravelDestination.FinalBattle or TravelDestination.Tribulation => new Vector2(36, 24),
-            TravelDestination.Market => new Vector2(27, 18),
+            TravelDestination.Market or TravelDestination.ScriptureLibrary => new Vector2(27, 18),
             _ => ManorEnvironment.WorldSize
         };
         public Vector2 Ground(float x, float y)
@@ -48,8 +48,10 @@ namespace SlashDemo
 
     public static class TravelMaps
     {
-        public static readonly Vector2 MarketPortal = new Vector2(758, 938);
+        public static readonly Vector2 MarketPortal = new Vector2(758, 850);
         public static readonly Vector2 TribulationCenter = new Vector2(765, 455);
+        public static readonly Vector2 ScriptureDesk = new Vector2(1280, 562);
+        public static readonly Vector2 ScripturePortal = new Vector2(768, 924);
 
         static readonly TravelMapDefinition FinalBattle = new TravelMapDefinition(
             TravelDestination.FinalBattle, "关底战场", "SlashDemo/EvilCultivatorArena-v2",
@@ -63,11 +65,11 @@ namespace SlashDemo
 
         public static readonly TravelMapDefinition[] Choices = {
             new TravelMapDefinition(TravelDestination.AscensionPlatform, "升仙台", "SlashDemo/AscensionPlatform-v1",
-                new Vector2(755, 865), new Rect(665, 955, 170, 40),
+                new Vector2(755, 650), new Rect(665, 955, 170, 40),
                 Points(580,150, 995,150, 1235,235, 1315,465, 1160,620, 915,685,
                     860,735, 855,1005, 645,1005, 645,780, 665,695, 405,620,
                     190,480, 225,260, 415,188, 580,150)),
-            new TravelMapDefinition(TravelDestination.Wilderness, "山野", "SlashDemo/Wilderness-v1",
+            new TravelMapDefinition(TravelDestination.Wilderness, "山野", "SlashDemo/Wilderness-v2",
                 new Vector2(810, 865), new Rect(745, 955, 155, 40),
                 Points(300,255, 485,205, 705,175, 735,105, 790,35, 900,35,
                     860,150, 960,180, 1120,215, 1255,300, 1285,440, 1310,560,
@@ -93,7 +95,15 @@ namespace SlashDemo
                     1003,226, 948,207, 877,208, 805,205, 722,211, 654,232, 555,255, 491,278,
                     416,294, 350,324, 255,382, 232,415, 163,449, 138,518, 169,545, 136,603,
                     192,632, 281,634, 323,649, 358,700, 418,739, 470,751, 552,773, 590,817,
-                    584,880, 622,924, 646,1000))
+                    584,880, 622,924, 646,1000)),
+            new TravelMapDefinition(TravelDestination.ScriptureLibrary, "藏经阁", "SlashDemo/SectScriptureLibrary-v1",
+                new Vector2(768, 765), new Rect(705, 986, 126, 20),
+                // Follow the shelf bases and the open threshold onto the stone landing.
+                Points(532,1013, 1003,1013, 1003,832, 1458,832, 1320,305, 216,305,
+                    78,832, 532,832, 532,1013),
+                Points(1186,466, 1216,459, 1227,430, 1341,421, 1360,508, 1256,531, 1243,503, 1201,518),
+                Points(232,305, 273,305, 280,329, 232,337),
+                Points(1264,305, 1309,305, 1319,329, 1274,337))
         };
 
         [Serializable]
@@ -134,6 +144,7 @@ namespace SlashDemo
 
     public sealed class TravelMapEnvironment : MonoBehaviour
     {
+        const float AscensionGateY = 700;
         const float FinalBattleGateY = 898;
         Sprite paint;
         Sprite gateRoof;
@@ -164,7 +175,7 @@ namespace SlashDemo
             {
                 root.material = new Material(shader) { name = definition.title + " surface" };
                 root.material.SetInt("_ManorProtectCount", 0);
-                root.material.SetFloat("_SceneEdgeFade", 0.045f);
+                root.material.SetFloat("_SceneEdgeFade", definition.destination == TravelDestination.ScriptureLibrary ? 0.02f : 0.045f);
                 root.material.SetColor("_SceneEdgeColor", definition.MistColor);
             }
             renderer.sharedMaterial = root.material != null ? root.material : DemoArt.Material;
@@ -173,7 +184,10 @@ namespace SlashDemo
             root.boundary = root.ToGround(definition.boundary);
             edge.points = root.boundary;
             edge.edgeRadius = 0.03f;
-            if (definition.destination == TravelDestination.FinalBattle) root.BuildCombatGate();
+            if (definition.destination == TravelDestination.AscensionPlatform)
+                root.BuildCombatGate(AscensionGateY, "Ascension stairs gate");
+            else if (definition.destination == TravelDestination.FinalBattle)
+                root.BuildCombatGate(FinalBattleGateY, "Final battle gate");
             foreach (var obstacle in definition.obstacles)
             {
                 var collider = new GameObject("Furniture footprint").AddComponent<PolygonCollider2D>();
@@ -191,9 +205,9 @@ namespace SlashDemo
             return root;
         }
 
-        void BuildCombatGate()
+        void BuildCombatGate(float gatePixelY, string gateName)
         {
-            float gateY = Definition.Ground(0, FinalBattleGateY).y;
+            float gateY = Definition.Ground(0, gatePixelY).y;
             var court = new List<Vector2>(boundary.Length);
             var opening = new List<Vector2>(2);
             int count = boundary.Length - (boundary[0] == boundary[boundary.Length - 1] ? 1 : 0);
@@ -212,7 +226,7 @@ namespace SlashDemo
                 if (above) court.Add(b);
             }
             combatBoundary = court.ToArray();
-            combatGate = new GameObject("Final battle gate").AddComponent<EdgeCollider2D>();
+            combatGate = new GameObject(gateName).AddComponent<EdgeCollider2D>();
             combatGate.transform.SetParent(transform, false);
             combatGate.points = opening.ToArray();
             combatGate.edgeRadius = .03f;

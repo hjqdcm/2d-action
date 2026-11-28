@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace SlashDemo
@@ -7,7 +8,8 @@ namespace SlashDemo
         public enum Path { Body, Sword, Spell, Talisman }
         const float SwordMoveMultiplier = 1.05f, SwordTempoMultiplier = .85f;
         const float SealMarkDuration = 6;
-        internal const float SealSlowDuration = 3, SealSlowMultiplier = .65f;
+        internal const float SealSlowDuration = 3, SealSlowMultiplier = .70f;
+        internal const string SealPassiveDescription = "符术命中叠印，三层使玩家移速、普攻速度和重击蓄力速度降低 30%，持续 3 秒。减速期间不叠印，6 秒未命中则消印。";
 
         readonly struct Profile
         {
@@ -29,13 +31,13 @@ namespace SlashDemo
 
         static readonly Profile[] Profiles =
         {
-            new Profile("体修", "BodyCultivator-v1", 660, 3.55f, 1, 1.25f, 1.08f,
+            new Profile("体修", "BodyCultivator-v1", 858, 3.55f, 1, 1.25f, 1.08f,
                 .15f, .64f, .94f, new Color(1, .68f, .33f)),
-            new Profile("剑修", "SwordCultivator-v1", 528, 4.50f * SwordMoveMultiplier, 1.08f, 1.58f, SwordTempoMultiplier,
+            new Profile("剑修", "SwordCultivator-v1", 686, 4.50f * SwordMoveMultiplier, 1.08f, 1.58f, SwordTempoMultiplier,
                 0, .56f * SwordTempoMultiplier, .94f * SwordTempoMultiplier, new Color(.7f, .84f, 1)),
-            new Profile("法修", "SpellCultivator-v1", 495, 3.05f, 1.42f, 2.48f, 1.43f,
+            new Profile("法修", "SpellCultivator-v1", 644, 3.05f, 1.42f, 2.48f, 1.43f,
                 0, .83f, 1.18f, new Color(.74f, .66f, 1)),
-            new Profile("符修", "TalismanCultivator-v1", 572, 3.45f, .84f, 3.05f, 1.33f,
+            new Profile("符修", "TalismanCultivator-v1", 744, 3.45f, .84f, 3.05f, 1.33f,
                 0, .85f, 1.22f, DemoArt.Gold)
         };
 
@@ -207,12 +209,64 @@ namespace SlashDemo
         const float BodyRadius = .36f, PlayerRadius = .29f;
         const float RecoveryPause = .25f;
         const float LandingWarningTime = .5f;
+        const float BlinkDamageFraction = .30f, BlinkDamageInterval = .5f;
+        const int BlinkDamageTicks = 6;
         const float SealWarningTime = .34f;
         const float SlashLaneWidth = .44f;
         const float SidestepSpeed = 1.2f;
         const int Ultimate = 2, Mechanic = 3;
         const float RushSpeed = 20;
         enum Phase { Pursuit, Prepare, Windup, Rush, Recover }
+
+        sealed class MeteorFollowup
+        {
+            public readonly Transform Warning;
+            public readonly LineRenderer Outer, Inner;
+            public readonly Vector2 Origin;
+            public readonly float Range, Windup;
+            public int Wave = 1;
+            public Vector2 Center;
+            public float Radius, Age;
+            public bool Tracking;
+
+            public MeteorFollowup(Transform parent, Vector2 origin, float range, float windup)
+            {
+                Origin = origin;
+                Range = range;
+                Windup = windup;
+                Warning = new GameObject("Detached meteor warning").transform;
+                Warning.SetParent(parent, false);
+                var points = new Vector3[64];
+                float width = .08f * DemoArt.AttackWarningWidthScale;
+                Outer = DemoArt.Line("Landing boundary", Warning, points, DemoArt.AttackWarningColor, width, -70, true);
+                Inner = DemoArt.Line("Landing progress", Warning, points, DemoArt.AttackWarningColor, width, -70, true);
+                Outer.useWorldSpace = Inner.useWorldSpace = true;
+            }
+        }
+
+        struct BlinkDamageOverTime
+        {
+            public readonly int TotalDamage;
+            public float Age;
+
+            public BlinkDamageOverTime(int totalDamage)
+            {
+                TotalDamage = totalDamage;
+                Age = 0;
+            }
+
+            public bool Completed => Age >= BlinkDamageTicks * BlinkDamageInterval;
+
+            public int Advance(float dt)
+            {
+                int previousTick = (int)(Age / BlinkDamageInterval);
+                Age = Mathf.Min(Age + dt, BlinkDamageTicks * BlinkDamageInterval);
+                int nextTick = (int)(Age / BlinkDamageInterval);
+                return (int)((long)TotalDamage * nextTick / BlinkDamageTicks
+                    - (long)TotalDamage * previousTick / BlinkDamageTicks);
+            }
+        }
+
         Phase phase;
         Profile profile;
         float strength, baseDamage, age, castRange, prepareTime, castWindup;
@@ -232,6 +286,8 @@ namespace SlashDemo
         Rigidbody2D body, playerBody;
         readonly LineRenderer[] outlines = new LineRenderer[5];
         readonly Vector3[] circlePoints = new Vector3[64];
+        readonly List<MeteorFollowup> meteorFollowups = new List<MeteorFollowup>();
+        readonly List<BlinkDamageOverTime> blinkDamage = new List<BlinkDamageOverTime>();
         LineRenderer expandingOutline;
         Vector2 expandingCenter;
         float expandingRadius;
@@ -259,10 +315,11 @@ namespace SlashDemo
             Path.Spell => new CombatBuffView("ascension-star-step", "移星", 0,
                 iconResource: "SlashDemo/AscensionStarStepIcon",
                 description: "首次降至半血时闪现拉开距离，并将所有技能的剩余冷却减半。"
+                    + "闪现后，造成伤害会追加相当于该次伤害 30% 的持续伤害，每 0.5 秒结算一次，持续 3 秒。"
                     + (blinkUsed ? "本场已触发。" : "每场触发一次。")),
             _ => new CombatBuffView("ascension-seal-mark", "余符", sealMarks,
                 iconResource: "SlashDemo/AscensionSealMarkIcon",
-                description: "符术命中叠印，三层使玩家移速降低 35%，持续 3 秒。减速期间不叠印，6 秒未命中则消印。",
+                description: SealPassiveDescription,
                 timeLeft: sealMarkTime, duration: sealMarks > 0 ? SealMarkDuration : 0)
         };
         public float DamageReduction => IsCountering ? .5f : profile.DamageReduction;
@@ -366,7 +423,8 @@ namespace SlashDemo
 
         internal void ApplyAttackTuning(SlashTuningSettings settings)
         {
-            baseDamage = settings.enemyDamage * profile.Damage;
+            float damageMultiplier = CultivationPath == Path.Body ? 1.6f : 1.3f;
+            baseDamage = settings.enemyDamage * profile.Damage * damageMultiplier;
             enemy.damage = ScaleRoundValue(baseDamage);
             enemy.windupTime = settings.enemyWindup * profile.Windup;
             enemy.attackRange = settings.enemyRange * profile.Reach * SkillRangeScale;
@@ -459,6 +517,10 @@ namespace SlashDemo
             if (dt <= 0 || arena.Paused) return;
             if (arena.Player == null || !arena.Player.IsAlive) { Stop(); return; }
             skillEffects.Advance(dt);
+            AdvanceBlinkDamage(dt);
+            if (!isActiveAndEnabled || arena.Paused || !arena.Player.IsAlive) return;
+            AdvanceMeteorFollowups(dt);
+            if (!isActiveAndEnabled || arena.Paused || !arena.Player.IsAlive) return;
             if (groundField != null && groundField.Advance(dt) && CultivationPath == Path.Talisman) Navigation.InvalidateRoute();
             SealSlowRemaining = Mathf.Max(0, SealSlowRemaining - dt);
             if (sealMarks > 0)
@@ -497,7 +559,8 @@ namespace SlashDemo
                     AnimateStep(travel, dt, aim);
                     break;
                 case Phase.Recover:
-                    float recovery = skillIndex < 0 ? .38f : skillIndex == Ultimate ? profile.UltimateRecovery : profile.SmallRecovery;
+                    float recovery = skillIndex < 0 ? .38f
+                        : skillIndex == Ultimate && !IsMeteorCast ? profile.UltimateRecovery : profile.SmallRecovery;
                     AnimateStep(travel, dt, delta);
                     castMotion.Contact.Apply(walk, default, age / (recovery * .45f));
                     if (age >= recovery) { phase = Phase.Pursuit; age = 0; }
@@ -569,7 +632,7 @@ namespace SlashDemo
             if (!rushHit && (toPlayer - closest).sqrMagnitude <= contact * contact)
             {
                 float damage = skill.Damage + (rushSlash ? .25f : 0);
-                rushHit = arena.Player.TakeChallengeDamage(ScaleRoundValue(baseDamage * damage), aim, enemy);
+                rushHit = DealChallengeHit(ScaleRoundValue(baseDamage * damage), aim);
                 if (!isActiveAndEnabled) return;
             }
             if (travel > .001f)
@@ -760,8 +823,7 @@ namespace SlashDemo
 
         void AimAttack()
         {
-            float aimTime = IsMeteorCast ? Mathf.Min(castWindup, LandingWarningTime) : castWindup;
-            target = PredictPlayer(Mathf.Min(aimTime * .85f, .48f));
+            target = IsMeteorCast ? PredictMeteorLanding(castWindup) : PredictPlayer(Mathf.Min(castWindup * .85f, .48f));
             if (CultivationPath == Path.Spell && skillIndex == 1 && groundField.Contains(playerBody.position))
                 target = groundField.Center;
             if (CultivationPath == Path.Talisman && skillIndex < Ultimate && groundField.Contains(playerBody.position, 2.2f))
@@ -842,7 +904,7 @@ namespace SlashDemo
                 outlines[i].startWidth = outlines[i].endWidth = (CastingUltimate ? .08f : .045f) * DemoArt.AttackWarningWidthScale;
                 outlines[i].startColor = outlines[i].endColor = DemoArt.AttackWarningColor;
             }
-            if (expandingOutline != null) StyleLandingWarning();
+            if (expandingOutline != null) StyleLandingWarning(outlines[0], expandingOutline, trackingLanding);
             if (IsCountering || IsGroundCast)
             {
                 outlines[0].startColor = outlines[0].endColor = profile.ImpactColor;
@@ -926,15 +988,103 @@ namespace SlashDemo
             // Keep the full dodge window even when a frame crosses the lock point.
             age = lockAge;
             trackingLanding = false;
-            StyleLandingWarning();
+            StyleLandingWarning(outlines[0], expandingOutline, trackingLanding);
         }
 
-        void StyleLandingWarning()
+        static void StyleLandingWarning(LineRenderer outer, LineRenderer inner, bool tracking)
         {
-            outlines[0].startColor = outlines[0].endColor = trackingLanding
+            outer.startColor = outer.endColor = tracking
                 ? new Color(.72f, .57f, 1, .9f) : DemoArt.AttackWarningColor;
-            expandingOutline.startColor = expandingOutline.endColor = trackingLanding
+            inner.startColor = inner.endColor = tracking
                 ? new Color(.84f, .72f, 1, .92f) : new Color(1, .32f, .23f, .92f);
+        }
+
+        Vector2 PredictMeteorLanding(float windup)
+            => PredictPlayer(Mathf.Min(windup, LandingWarningTime) * .85f);
+
+        void BeginMeteorFollowup(MeteorFollowup landing)
+        {
+            landing.Age = 0;
+            landing.Tracking = landing.Windup > LandingWarningTime;
+            landing.Center = PredictMeteorLanding(landing.Windup);
+            landing.Radius = Skills[(int)Path.Spell][Ultimate].Waves[landing.Wave][0].Size * landing.Range;
+            StyleLandingWarning(landing.Outer, landing.Inner, landing.Tracking);
+            DrawCircle(landing.Outer, landing.Center, landing.Radius);
+            DrawCircle(landing.Inner, landing.Center, landing.Radius * .08f);
+        }
+
+        void AdvanceMeteorFollowups(float dt)
+        {
+            var meteor = Skills[(int)Path.Spell][Ultimate];
+            for (int i = meteorFollowups.Count - 1; i >= 0; i--)
+            {
+                var landing = meteorFollowups[i];
+                landing.Age += dt;
+                if (landing.Tracking)
+                {
+                    landing.Center = PredictMeteorLanding(landing.Windup);
+                    DrawCircle(landing.Outer, landing.Center, landing.Radius);
+                    float lockAge = landing.Windup - LandingWarningTime;
+                    if (landing.Age >= lockAge)
+                    {
+                        // Preserve the full fixed warning even when a frame crosses the lock.
+                        landing.Age = lockAge;
+                        landing.Tracking = false;
+                        StyleLandingWarning(landing.Outer, landing.Inner, false);
+                    }
+                }
+
+                float progress = Mathf.Clamp01(landing.Age / landing.Windup);
+                DrawCircle(landing.Inner, landing.Center, landing.Radius * Mathf.Lerp(.08f, 1, progress));
+                if (progress < 1) continue;
+
+                Vector2 delta = landing.Center - landing.Origin;
+                Vector2 direction = delta.sqrMagnitude > .001f ? delta.normalized : Vector2.right;
+                skillEffects.Impact(Shape.Circle, landing.Center, direction, landing.Radius, 0, true);
+                arena.Effects.PlaySwing(true);
+                float hitRadius = landing.Radius + PlayerRadius;
+                if (((Vector2)arena.Player.transform.position - landing.Center).sqrMagnitude <= hitRadius * hitRadius)
+                    DealChallengeHit(ScaleRoundValue(baseDamage * meteor.Damage), direction);
+                // Settling a defeat can disable this cultivator and clear the pending meteors.
+                if (!isActiveAndEnabled || arena.Paused || !arena.Player.IsAlive) return;
+
+                if (++landing.Wave < meteor.Waves.Length) BeginMeteorFollowup(landing);
+                else RemoveMeteorFollowup(i);
+            }
+        }
+
+        void RemoveMeteorFollowup(int index)
+        {
+            var landingWarning = meteorFollowups[index].Warning.gameObject;
+            landingWarning.SetActive(false);
+            Destroy(landingWarning);
+            meteorFollowups.RemoveAt(index);
+        }
+
+        bool DealChallengeHit(int damage, Vector2 direction)
+        {
+            var player = arena.Player;
+            int previousHealth = player.Health;
+            bool landed = player.TakeChallengeDamage(damage, direction, enemy);
+            if (landed && blinkUsed && isActiveAndEnabled && player.IsAlive)
+            {
+                int totalDamage = Mathf.RoundToInt((previousHealth - player.Health) * BlinkDamageFraction);
+                if (totalDamage > 0) blinkDamage.Add(new BlinkDamageOverTime(totalDamage));
+            }
+            return landed;
+        }
+
+        void AdvanceBlinkDamage(float dt)
+        {
+            long damage = 0;
+            for (int i = blinkDamage.Count - 1; i >= 0; i--)
+            {
+                var effect = blinkDamage[i];
+                damage += effect.Advance(dt);
+                if (effect.Completed) blinkDamage.RemoveAt(i);
+                else blinkDamage[i] = effect;
+            }
+            if (damage > 0) arena.Player.TakeChallengeDamageOverTime((int)System.Math.Min(damage, int.MaxValue), enemy);
         }
 
         static Vector3 GroundPoint(Vector2 point) => new Vector3(point.x, point.y, -.025f);
@@ -1017,7 +1167,7 @@ namespace SlashDemo
             {
                 float multiplier = skill.Damage * (1 + .3f * counterHits);
                 Vector2 direction = IsCountering ? player - origin : aim;
-                if (arena.Player.TakeChallengeDamage(ScaleRoundValue(baseDamage * multiplier), direction, enemy)
+                if (DealChallengeHit(ScaleRoundValue(baseDamage * multiplier), direction)
                     && isActiveAndEnabled && CultivationPath == Path.Talisman && SealSlowRemaining <= 0)
                 {
                     skillEffects.FlashPassive(transform.position);
@@ -1037,12 +1187,21 @@ namespace SlashDemo
         void FinishWave()
         {
             age = 0;
+            if (IsMeteorCast)
+            {
+                float windup = Mathf.Max(.55f, enemy.windupTime * skill.FollowupWindup);
+                var followup = new MeteorFollowup(warning.parent, origin, castRange, windup);
+                meteorFollowups.Add(followup);
+                BeginMeteorFollowup(followup);
+                phase = Phase.Recover;
+                return;
+            }
             if (++wave < skill.Waves.Length)
             {
                 phase = Phase.Windup;
                 castWindup = Mathf.Max(IsSwordRush ? .8f : .55f, enemy.windupTime * skill.FollowupWindup);
                 if (IsSwordRush) origin = body.position;
-                if (IsMeteorCast || IsSwordRush) AimAttack();
+                if (IsSwordRush) AimAttack();
                 if (IsSwordRush && cooldowns[0] <= 0 && Mathf.Abs(SideSpeed(PlayerVelocity())) >= SidestepSpeed)
                 {
                     rushSlash = true;
@@ -1055,6 +1214,8 @@ namespace SlashDemo
 
         internal void Stop()
         {
+            blinkDamage.Clear();
+            for (int i = meteorFollowups.Count - 1; i >= 0; i--) RemoveMeteorFollowup(i);
             phase = Phase.Pursuit;
             age = 0;
             skillIndex = -1;

@@ -6,11 +6,9 @@ namespace SlashDemo
 {
     static class AlchemyLoot
     {
-        const int OptionCount = 3;
-
-        public static AlchemyEntry[] RollOptions(IReadOnlyList<AlchemyEntry> catalog)
+        public static AlchemyEntry[] RollOptions(IReadOnlyList<AlchemyEntry> catalog, int count = 3)
         {
-            var options = new AlchemyEntry[OptionCount];
+            var options = new AlchemyEntry[count];
             var pool = new List<AlchemyEntry>();
             for (int i = 0; i < options.Length; i++)
             {
